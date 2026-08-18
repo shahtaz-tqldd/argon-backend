@@ -1,0 +1,7 @@
+Hi {{ recipient_name }},
+
+Your Argon Chatbot email verification code is: {{ otp }}
+
+This code expires in {{ expires_in_minutes }} minutes. If you did not create a Argon Chatbot account, you can ignore this email.
+
+The Argon Chatbot team
