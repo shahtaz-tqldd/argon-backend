@@ -1,12 +1,12 @@
 from django.urls import path
 
-from app.api.v1.views import TourtoiseConfigAPIView, TourtoiseConfigUpdateAPIView
+from app.api.v1.views import ArgonChatbotConfigAPIView, ArgonChatbotConfigUpdateAPIView
 
 
 client_urlpatterns = [
-    path("", TourtoiseConfigAPIView.as_view(), name="tourtoise-config"),
+    path("", ArgonChatbotConfigAPIView.as_view(), name="argon-config"),
 ]
 
 admin_urlpatterns = [
-    path("update/", TourtoiseConfigUpdateAPIView.as_view(), name="tourtoise-config-update"),
+    path("update/", ArgonChatbotConfigUpdateAPIView.as_view(), name="argon-config-update"),
 ]

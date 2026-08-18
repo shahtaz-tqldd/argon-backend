@@ -8,21 +8,21 @@ from accounts.permissions import IsSuperAdmin
 from app.api.v1.serializers import (
     CONFIG_SECTIONS,
     LEGAL_DOCUMENT_TYPES,
-    TourtoiseConfigUpdateSerializer,
+    ArgonChatbotConfigUpdateSerializer,
     serialize_config_sections,
 )
-from app.base.models import TourtoiseConfig
+from app.base.models import ArgonChatbotConfig
 from app.utils.response import APIResponse
 
 
 def get_config():
-    config = TourtoiseConfig.objects.first()
+    config = ArgonChatbotConfig.objects.first()
     if config is None:
-        config = TourtoiseConfig.objects.create()
+        config = ArgonChatbotConfig.objects.create()
     return config
 
 
-class TourtoiseConfigAPIView(GenericAPIView):
+class ArgonChatbotConfigAPIView(GenericAPIView):
     """Return all configuration sections or the sections selected by query param."""
 
     permission_classes = [AllowAny]
@@ -51,12 +51,12 @@ class TourtoiseConfigAPIView(GenericAPIView):
         )
 
 
-class TourtoiseConfigUpdateAPIView(GenericAPIView):
+class ArgonChatbotConfigUpdateAPIView(GenericAPIView):
     """Update the singleton configuration, including multipart logo uploads."""
 
     permission_classes = [IsAuthenticated, IsSuperAdmin]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
-    serializer_class = TourtoiseConfigUpdateSerializer
+    serializer_class = ArgonChatbotConfigUpdateSerializer
 
     @transaction.atomic
     def patch(self, request, *args, **kwargs):

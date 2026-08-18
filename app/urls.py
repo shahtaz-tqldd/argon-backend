@@ -9,19 +9,19 @@ from app.api.v1.urls import client_urlpatterns as config_client_urls
 v1_client_urls = [
     path("config/", include(config_client_urls)),
     path("accounts/", include("accounts.api.v1.client.urls")),
+    path("workspaces/", include("workspace.api.v1.client.urls")),
     path("notifications/", include("notification.api.v1.client.urls")),
 ]
 
 v1_admin_urls = [
     path("config/", include(config_admin_urls)),
     path("accounts/", include("accounts.api.v1.admin.urls")),
-    path("analytics/", include("analytics.api.v1.admin.urls")),
-    path("vector-store/", include("vector_store.api.v1.admin.urls")),
+    # path("analytics/", include("analytics.api.v1.admin.urls")),
+    # path("vector-store/", include("vector_store.api.v1.admin.urls")),
 ]
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("auth/accounts/", include("accounts.api.v1.client.urls")),
     path("api/v1/", include(v1_client_urls)),
     path("api/v1/admin/", include(v1_admin_urls)),
 ]

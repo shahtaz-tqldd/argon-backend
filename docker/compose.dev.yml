@@ -20,7 +20,7 @@ services:
       - ..:/app
       - ../secrets/service-account.json:/app/secrets/service-account.json:ro
     ports:
-      - "${WSGI_PORT:-8000}:8000"
+      - "${WSGI_PORT:-8007}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -51,7 +51,7 @@ services:
     volumes:
       - ..:/app
     ports:
-      - "${ASGI_PORT:-8001}:8001"
+      - "${ASGI_PORT:-8008}:8001"
     depends_on:
       postgres:
         condition: service_healthy
@@ -127,10 +127,10 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-argon_db_password}
       POSTGRES_ADDITIONAL_DATABASES: adk_session_db,${VECTOR_DB_NAME:-argon_vector_db}
     volumes:
-      - postgres_dev_data:/var/lib/postgresql/data
+      - argon_psql_data:/var/lib/postgresql/data
       - ./postgres/init-additional-databases.sh:/docker-entrypoint-initdb.d/10-create-additional-databases.sh:ro
     ports:
-      - "${POSTGRES_FORWARD_PORT:-5433}:5432"
+      - "${POSTGRES_FORWARD_PORT:-5435}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-argon_db_owner} -d ${DB_NAME:-argon_db}"]
       interval: 5s
@@ -145,7 +145,7 @@ services:
     container_name: argon_redis
     image: redis:7-alpine
     ports:
-      - "${REDIS_FORWARD_PORT:-6380}:6379"
+      - "${REDIS_FORWARD_PORT:-6382}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -157,7 +157,7 @@ services:
           - redis
 
 volumes:
-  postgres_dev_data:
+  argon_psql_data:
 
 networks:
   argon-dev:

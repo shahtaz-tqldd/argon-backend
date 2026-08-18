@@ -130,7 +130,6 @@ class User(AbstractBaseUser, PermissionsMixin):
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
-    username = models.SlugField(max_length=50, unique=True, blank=True, null=True)
     phone = models.CharField(
         max_length=50,
         blank=True,
@@ -159,7 +158,7 @@ class UserProfile(models.Model):
         ordering = ["user__created_at"]
 
     def __str__(self):
-        return self.username or self.user.email
+        return self.user.email
 
     @property
     def location(self):

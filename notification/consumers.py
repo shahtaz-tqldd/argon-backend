@@ -1,6 +1,14 @@
+from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
-from notification.services import global_dashboard_group, user_dashboard_group
+from chatbot.models import ChatbotUser
+from notification.services import (
+    chatbot_dashboard_group,
+    global_dashboard_group,
+    user_dashboard_group,
+    workspace_dashboard_group,
+)
+from workspace.models import WorkspaceUser
 
 
 class NotificationConsumer(AsyncJsonWebsocketConsumer):
@@ -10,20 +18,34 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4401)
             return
 
-        self.user_group_name = user_dashboard_group(user.id)
-        self.global_group_name = global_dashboard_group()
-        await self.channel_layer.group_add(self.user_group_name, self.channel_name)
-        await self.channel_layer.group_add(self.global_group_name, self.channel_name)
+        self.group_names = await self.get_group_names(user.id)
+        for group_name in self.group_names:
+            await self.channel_layer.group_add(group_name, self.channel_name)
         await self.accept()
 
     async def disconnect(self, close_code):
-        if hasattr(self, "user_group_name"):
-            await self.channel_layer.group_discard(self.user_group_name, self.channel_name)
-        if hasattr(self, "global_group_name"):
-            await self.channel_layer.group_discard(self.global_group_name, self.channel_name)
+        for group_name in getattr(self, "group_names", []):
+            await self.channel_layer.group_discard(group_name, self.channel_name)
 
     async def notification_created(self, event):
         await self.send_json(event["notification"])
 
-    async def trip_message_created(self, event):
-        await self.send_json(event["payload"])
+    @database_sync_to_async
+    def get_group_names(self, user_id):
+        workspace_ids = WorkspaceUser.objects.filter(
+            user_id=user_id,
+            is_active=True,
+        ).values_list("workspace_id", flat=True)
+        chatbot_ids = ChatbotUser.objects.filter(
+            user_id=user_id,
+            is_active=True,
+            chatbot__workspace__memberships__user_id=user_id,
+            chatbot__workspace__memberships__is_active=True,
+        ).values_list("chatbot_id", flat=True)
+
+        return [
+            global_dashboard_group(),
+            user_dashboard_group(user_id),
+            *(workspace_dashboard_group(item) for item in workspace_ids),
+            *(chatbot_dashboard_group(item) for item in chatbot_ids),
+        ]

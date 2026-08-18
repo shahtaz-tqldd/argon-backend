@@ -5,9 +5,26 @@ from notification.models import Notification, NotificationRead
 
 @admin.register(Notification)
 class NotificationAdmin(admin.ModelAdmin):
-    list_display = ("title", "notification_type", "recipient", "trip", "created_at")
-    list_filter = ("notification_type", "created_at")
-    search_fields = ("title", "message", "recipient__email", "recipient__name")
+    list_display = (
+        "title",
+        "recipient_type",
+        "notification_type",
+        "recipient",
+        "workspace",
+        "chatbot",
+        "target_id",
+        "created_at",
+    )
+    list_filter = ("recipient_type", "notification_type", "created_at")
+    search_fields = (
+        "title",
+        "message",
+        "recipient__email",
+        "recipient__name",
+        "workspace__name",
+        "chatbot__name",
+    )
+    autocomplete_fields = ("recipient", "workspace", "chatbot")
     readonly_fields = ("id", "created_at", "updated_at")
 
 

@@ -4,8 +4,8 @@ from uuid import uuid4
 from django.conf import settings
 from rest_framework import serializers
 
-from app.base.models import TourtoiseConfig
-from app.utils.cloudinary import delete_image, upload_image
+from app.base.models import ArgonChatbotConfig
+from app.services.cloudinary import delete_image, upload_image
 
 
 CONFIG_SECTIONS = {
@@ -30,11 +30,11 @@ CONFIG_SECTIONS = {
 LEGAL_DOCUMENT_TYPES = CONFIG_SECTIONS["legal_document"]
 
 
-class TourtoiseConfigUpdateSerializer(serializers.ModelSerializer):
+class ArgonChatbotConfigUpdateSerializer(serializers.ModelSerializer):
     logo = serializers.ImageField(write_only=True, required=False)
 
     class Meta:
-        model = TourtoiseConfig
+        model = ArgonChatbotConfig
         fields = tuple(
             field
             for section, section_fields in CONFIG_SECTIONS.items()
@@ -76,7 +76,7 @@ class TourtoiseConfigUpdateSerializer(serializers.ModelSerializer):
             upload = upload_image(
                 logo,
                 folder=f"{settings.CLOUDINARY_FOLDER}/config",
-                public_id=f"tourtoise-logo-{uuid4().hex}",
+                public_id=f"ArgonChatbot-logo-{uuid4().hex}",
             )
             validated_data["logo"] = upload["url"]
 

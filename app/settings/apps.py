@@ -15,16 +15,17 @@ THIRD_PARTY_APPS = [
     "channels",
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
-    # "django_filters",
 ]
 
 
 MODULER_APPS = [
     "app.base.apps.BaseConfig",
     "accounts.apps.AccountsConfig",
+    "workspace.apps.WorkspaceConfig",
+    "chatbot.apps.ChatbotConfig",
     "notification.apps.NotificationConfig",
-    "vector_store.apps.VectorStoreConfig",
-    "analytics.apps.AnalyticsConfig",
+    # "vector_store.apps.VectorStoreConfig",
+    # "analytics.apps.AnalyticsConfig",
 ]
 
 INSTALLED_APPS = DJANGO_BASE_APPS + THIRD_PARTY_APPS + MODULER_APPS

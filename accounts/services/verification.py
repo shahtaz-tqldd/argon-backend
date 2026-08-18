@@ -9,7 +9,11 @@ from django.utils import timezone
 
 from accounts.models import EmailVerificationOTP, User
 from accounts.tasks import send_email_verification_otp
-from notification.models import Notification, NotificationType
+from notification.models import (
+    Notification,
+    NotificationRecipientType,
+    NotificationType,
+)
 
 
 class InvalidVerificationOTP(ValueError):
@@ -64,6 +68,7 @@ def complete_email_verification(user):
 
     Notification.objects.get_or_create(
         recipient=user,
+        recipient_type=NotificationRecipientType.USER,
         notification_type=NotificationType.GENERAL,
         title="Welcome to Argon Chatbot!",
         defaults={

@@ -80,7 +80,6 @@ class UserAdmin(BaseUserAdmin):
 class UserProfileAdmin(admin.ModelAdmin):
     list_display = (
         "user",
-        "username",
         "phone",
         "status",
         "timezone",
@@ -89,7 +88,7 @@ class UserProfileAdmin(admin.ModelAdmin):
         "status",
         "timezone",
     )
-    search_fields = ("user__email", "username", "city", "country")
+    search_fields = ("user__email", "city", "country")
     autocomplete_fields = ("user",)
 
 

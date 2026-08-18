@@ -17,7 +17,6 @@ class AccountSerializerSchemaTests(SimpleTestCase):
                 "status",
                 "is_email_verified",
                 "is_active",
-                "username",
                 "phone",
                 "avatar_url",
                 "city",

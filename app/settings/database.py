@@ -32,9 +32,9 @@ def _database_config_from_url(database_url, *, fallback_name, fallback_user, fal
 
 default_db = _database_config_from_url(
     env("DATABASE_URL", ""),
-    fallback_name=env("DB_NAME", "tourtoise_db"),
-    fallback_user=env("DB_USER", "tourtoise_db_owner"),
-    fallback_password=env("DB_PASSWORD", "tourtoise_db_password"),
+    fallback_name=env("DB_NAME", "argon_db"),
+    fallback_user=env("DB_USER", "argon_db_owner"),
+    fallback_password=env("DB_PASSWORD", "argon_db_password"),
     fallback_host=env("DB_HOST", "postgres"),
     fallback_port=env_int("DB_PORT", 5432),
     fallback_ssl=env_bool("DB_SSL_REQUIRE", False),
@@ -42,9 +42,9 @@ default_db = _database_config_from_url(
 
 vector_db = _database_config_from_url(
     env("VECTOR_DB_URL", ""),
-    fallback_name=env("VECTOR_DB_NAME", "tourtoise_vector_db"),
-    fallback_user=env("VECTOR_DB_USER", env("DB_USER", "tourtoise_db_owner")),
-    fallback_password=env("VECTOR_DB_PASSWORD", env("DB_PASSWORD", "tourtoise_db_password")),
+    fallback_name=env("VECTOR_DB_NAME", "argon_vector_db"),
+    fallback_user=env("VECTOR_DB_USER", env("DB_USER", "argon_db_owner")),
+    fallback_password=env("VECTOR_DB_PASSWORD", env("DB_PASSWORD", "argon_db_password")),
     fallback_host=env("VECTOR_DB_HOST", env("DB_HOST", "postgres")),
     fallback_port=env_int("VECTOR_DB_PORT", env_int("DB_PORT", 5432)),
     fallback_ssl=env_bool("VECTOR_DB_SSL_REQUIRE", env_bool("DB_SSL_REQUIRE", False)),
@@ -55,4 +55,4 @@ DATABASES = {
     "vector": vector_db,
 }
 
-DATABASE_ROUTERS = ["app.db_routers.VectorStoreRouter"]
+DATABASE_ROUTERS = ["app.utils.vector_db_routers.VectorStoreRouter"]

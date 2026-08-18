@@ -53,7 +53,7 @@ class BaseImage(models.Model):
 
 class ArgonChatbotConfig(models.Model):
     # Branding
-    title = models.CharField(max_length=200, default="tourtoise")
+    title = models.CharField(max_length=200, default="Argon Chatbot")
     logo = models.URLField(blank=True)
     favicon = models.URLField(blank=True)
     support_email = models.EmailField(blank=True)

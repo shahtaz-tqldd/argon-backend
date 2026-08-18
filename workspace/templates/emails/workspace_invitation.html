@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+  <body>
+    <p>Hello,</p>
+    <p>
+      {{ inviter_name }} invited you to join <strong>{{ workspace_name }}</strong>
+      on Argon Chatbot.
+    </p>
+    <p><a href="{{ invitation_link }}">Register and join the workspace</a></p>
+    <p>Invitation token: <code>{{ token }}</code></p>
+    <p>This invitation expires in {{ expires_in_hours }} hours and can only be used once.</p>
+  </body>
+</html>

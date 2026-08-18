@@ -13,7 +13,7 @@ from accounts.api.v1.admin.serializers import (
 )
 from accounts.models import User
 from accounts.permissions import IsAdmin, IsSuperAdmin
-from app.base.pagination import CustomPagination
+from app.utils.pagination import CustomPagination
 from app.utils.response import APIResponse
 
 
@@ -100,7 +100,6 @@ class AccountListAPIView(GenericAPIView):
             queryset = queryset.filter(
                 Q(email__icontains=search)
                 | Q(name__icontains=search)
-                | Q(profile__username__icontains=search)
                 | Q(profile__phone__icontains=search)
                 | Q(profile__city__icontains=search)
                 | Q(profile__country__icontains=search)

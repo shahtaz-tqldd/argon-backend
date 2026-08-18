@@ -10,7 +10,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.choices import AccountStatus
 from accounts.models import UserProfile
-from app.utils.cloudinary import delete_image, upload_image
+from app.services.cloudinary import delete_image, upload_image
 
 User = get_user_model()
 
@@ -54,12 +54,6 @@ class AdminLoginSerializer(serializers.Serializer):
 
 
 class AdminDetailsSerializer(serializers.ModelSerializer):
-    username = serializers.SlugField(
-        source="profile.username",
-        read_only=True,
-        allow_null=True,
-        default=None,
-    )
     phone = serializers.CharField(
         source="profile.phone",
         read_only=True,
@@ -87,7 +81,6 @@ class AdminDetailsSerializer(serializers.ModelSerializer):
             "phone",
             "status",
             "provider",
-            "username",
             "avatar_url",
             "is_active",
             "is_staff",
@@ -188,12 +181,6 @@ class AccountListFilterSerializer(serializers.Serializer):
 
 
 class AccountListSerializer(serializers.ModelSerializer):
-    username = serializers.SlugField(
-        source="profile.username",
-        read_only=True,
-        allow_null=True,
-        default=None,
-    )
     phone = serializers.CharField(
         source="profile.phone",
         read_only=True,
@@ -226,7 +213,6 @@ class AccountListSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "email",
-            "username",
             "name",
             "phone",
             "avatar_url",

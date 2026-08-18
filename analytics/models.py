@@ -6,22 +6,14 @@ from analytics.validators import validate_ai_usage_metadata
 
 
 class AIUsage(BaseMinModel):
-    user = models.ForeignKey(
-        "accounts.User",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="ai_usages",
-        db_index=True,
-    )
-
-    trip = models.ForeignKey(
-        "trips.Trip",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="ai_usages",
-    )
+    # user = models.ForeignKey(
+    #     "accounts.User",
+    #     null=True,
+    #     blank=True,
+    #     on_delete=models.SET_NULL,
+    #     related_name="ai_usages",
+    #     db_index=True,
+    # )
 
     usage_type = models.CharField(
         max_length=30,

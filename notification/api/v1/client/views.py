@@ -5,20 +5,32 @@ from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
 
-from app.base.pagination import CustomPagination
+from app.utils.pagination import CustomPagination
 from app.utils.response import APIResponse
-from notification.models import Notification, NotificationRead, NotificationType
+from notification.models import (
+    Notification,
+    NotificationRead,
+    NotificationRecipientType,
+)
 from notification.api.v1.client.serializers import NotificationSerializer
-from trips.models import Trip
 
 
 class NotificationPaginationMixin:
     pagination_class = CustomPagination
 
-    def paginate_notifications(self, queryset, unread_count=0, message="Notifications fetched successfully."):
+    def paginate_notifications(
+        self,
+        queryset,
+        unread_count=0,
+        message="Notifications fetched successfully.",
+    ):
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, self.request, view=self)
-        serializer = NotificationSerializer(page, many=True, context={"request": self.request})
+        serializer = NotificationSerializer(
+            page,
+            many=True,
+            context={"request": self.request},
+        )
         return APIResponse.success(
             data=serializer.data,
             meta={
@@ -42,10 +54,30 @@ class NotificationQuerysetMixin:
         )
         return (
             Notification.objects.filter(
-                Q(recipient=self.request.user)
-                | Q(notification_type=NotificationType.GLOBAL, recipient__isnull=True)
+                Q(
+                    recipient_type=NotificationRecipientType.USER,
+                    recipient=self.request.user,
+                )
+                | Q(
+                    recipient_type=NotificationRecipientType.GLOBAL,
+                    recipient__isnull=True,
+                    target_id__isnull=True,
+                )
+                | Q(
+                    recipient_type=NotificationRecipientType.WORKSPACE,
+                    workspace__memberships__user=self.request.user,
+                    workspace__memberships__is_active=True,
+                )
+                | Q(
+                    recipient_type=NotificationRecipientType.CHATBOT,
+                    chatbot__memberships__user=self.request.user,
+                    chatbot__memberships__is_active=True,
+                    chatbot__workspace__memberships__user=self.request.user,
+                    chatbot__workspace__memberships__is_active=True,
+                )
             )
-            .select_related("trip")
+            .select_related("recipient", "workspace", "chatbot")
+            .distinct()
             .annotate(
                 is_read=Exists(read_receipts),
                 read_at=Subquery(read_receipts.values("read_at")[:1]),
@@ -53,24 +85,23 @@ class NotificationQuerysetMixin:
             .order_by("-created_at")
         )
 
-    def get_scoped_notifications(self):
-        queryset = self.get_user_notifications()
-        trip_id = self.request.query_params.get("trip_id")
-
-        if trip_id:
-            trip = get_object_or_404(Trip, pk=trip_id, user=self.request.user)
-            queryset = queryset.filter(
-                notification_type=NotificationType.TRIP,
-                trip=trip,
-            )
-
-        return queryset
-
     def apply_filters(self, queryset, include_unread_filter=True):
         params = self.request.query_params
-        notification_type = params.get("type")
+        recipient_type = params.get("recipient_type")
+        if recipient_type:
+            queryset = queryset.filter(recipient_type=recipient_type)
+
+        notification_type = params.get("notification_type") or params.get("type")
         if notification_type:
             queryset = queryset.filter(notification_type=notification_type)
+
+        workspace_id = params.get("workspace_id")
+        if workspace_id:
+            queryset = queryset.filter(workspace_id=workspace_id)
+
+        chatbot_id = params.get("chatbot_id")
+        if chatbot_id:
+            queryset = queryset.filter(chatbot_id=chatbot_id)
 
         unread_only = params.get("unread_only", "").lower() in {"1", "true", "yes"}
         if include_unread_filter and unread_only:
@@ -87,10 +118,10 @@ class NotificationListAPIView(
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        scoped_queryset = self.get_scoped_notifications()
-        filtered_queryset = self.apply_filters(scoped_queryset)
+        queryset = self.get_user_notifications()
+        filtered_queryset = self.apply_filters(queryset)
         unread_count = self.apply_filters(
-            scoped_queryset,
+            queryset,
             include_unread_filter=False,
         ).filter(is_read=False).count()
         return self.paginate_notifications(filtered_queryset, unread_count=unread_count)
@@ -101,7 +132,7 @@ class NotificationReadAPIView(NotificationQuerysetMixin, GenericAPIView):
 
     def patch(self, request, *args, **kwargs):
         notification = get_object_or_404(
-            self.get_scoped_notifications(),
+            self.get_user_notifications(),
             pk=kwargs["notification_id"],
         )
         read, _ = NotificationRead.objects.get_or_create(
@@ -123,9 +154,15 @@ class NotificationReadAllAPIView(NotificationQuerysetMixin, GenericAPIView):
     permission_classes = [IsAuthenticated]
 
     def patch(self, request, *args, **kwargs):
-        notifications = self.apply_filters(self.get_scoped_notifications()).filter(is_read=False)
+        notifications = self.apply_filters(self.get_user_notifications()).filter(
+            is_read=False
+        )
         receipts = [
-            NotificationRead(notification=notification, user=request.user, created_by=request.user)
+            NotificationRead(
+                notification=notification,
+                user=request.user,
+                created_by=request.user,
+            )
             for notification in notifications
         ]
         NotificationRead.objects.bulk_create(receipts, ignore_conflicts=True)

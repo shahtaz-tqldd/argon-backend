@@ -1,41 +1,43 @@
 import json
 
+from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
-from notification.services import create_global_notification, create_trip_notification
-from trips.models import Trip
+from chatbot.models import Chatbot
+from notification.models import NotificationRecipientType, NotificationType
+from notification.services import create_notification
+from workspace.models import Workspace
 
 
 class Command(BaseCommand):
-    help = "Create a demo global or trip notification and emit it over the notification socket."
-
-    # python manage.py create_demo_notification --type global
-    # python manage.py create_demo_notification \
-    # --type trip \
-    # --trip-id <trip_id>
-
+    help = "Create and emit a demo notification."
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--type",
-            choices=["global", "trip"],
-            default="global",
-            help="Notification type to create. Defaults to global.",
+            "--recipient-type",
+            choices=NotificationRecipientType.values,
+            default=NotificationRecipientType.GLOBAL,
+            help="Audience type. Defaults to global.",
         )
         parser.add_argument(
-            "--trip-id",
-            help="Trip id for trip notifications.",
+            "--notification-type",
+            choices=NotificationType.values,
+            default=NotificationType.NOTIFY,
+            help="Notification event type. Defaults to notify.",
         )
         parser.add_argument(
-            "--title",
-            default="Demo notification",
-            help="Notification title.",
+            "--recipient-id",
+            help="User UUID. Required when --recipient-type=user.",
         )
         parser.add_argument(
-            "--message",
-            default="This is a demo notification.",
-            help="Notification message.",
+            "--target-id",
+            help=(
+                "Workspace, chatbot, or chat-session UUID. Required for those "
+                "recipient types."
+            ),
         )
+        parser.add_argument("--title", default="Demo notification")
+        parser.add_argument("--message", default="This is a demo notification.")
         parser.add_argument(
             "--metadata",
             default="{}",
@@ -44,39 +46,70 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         metadata = self.parse_metadata(options["metadata"])
-        notification_type = options["type"]
+        recipient_type = options["recipient_type"]
+        recipient = self.get_recipient(recipient_type, options.get("recipient_id"))
+        target_id = options.get("target_id")
+        scope_targets = self.get_scope_targets(recipient_type, target_id)
 
-        if notification_type == "global":
-            notification = create_global_notification(
-                title=options["title"],
-                message=options["message"],
-                metadata=metadata,
-            )
-            self.stdout.write(
-                self.style.SUCCESS(f"Created global demo notification {notification.id}.")
-            )
-            return
-
-        trip_id = options.get("trip_id")
-        if not trip_id:
-            raise CommandError("--trip-id is required when --type=trip.")
-
-        trip = Trip.objects.select_related("user").filter(pk=trip_id).first()
-        if trip is None:
-            raise CommandError(f"Trip not found: {trip_id}")
-
-        notification = create_trip_notification(
-            recipient=trip.user,
-            trip=trip,
+        notification = create_notification(
+            recipient_type=recipient_type,
+            notification_type=options["notification_type"],
+            recipient=recipient,
             title=options["title"],
             message=options["message"],
             metadata=metadata,
+            **scope_targets,
         )
         self.stdout.write(
             self.style.SUCCESS(
-                f"Created trip demo notification {notification.id} for trip {trip.id}."
+                f"Created {recipient_type} demo notification {notification.id}."
             )
         )
+
+    def get_recipient(self, recipient_type, recipient_id):
+        if recipient_type != NotificationRecipientType.USER:
+            if recipient_id:
+                raise CommandError(
+                    "--recipient-id can only be used with --recipient-type=user."
+                )
+            return None
+
+        if not recipient_id:
+            raise CommandError("--recipient-id is required when --recipient-type=user.")
+
+        user = get_user_model().objects.filter(pk=recipient_id).first()
+        if user is None:
+            raise CommandError(f"User not found: {recipient_id}")
+        return user
+
+    def get_scope_targets(self, recipient_type, target_id):
+        if recipient_type == NotificationRecipientType.WORKSPACE:
+            if not target_id:
+                raise CommandError("--target-id is required for workspace.")
+            workspace = Workspace.objects.filter(pk=target_id).first()
+            if workspace is None:
+                raise CommandError(f"Workspace not found: {target_id}")
+            return {"workspace": workspace}
+
+        if recipient_type == NotificationRecipientType.CHATBOT:
+            if not target_id:
+                raise CommandError("--target-id is required for chatbot.")
+            chatbot = Chatbot.objects.filter(pk=target_id).first()
+            if chatbot is None:
+                raise CommandError(f"Chatbot not found: {target_id}")
+            return {"chatbot": chatbot}
+
+        if recipient_type == NotificationRecipientType.CHAT_SESSION:
+            if not target_id:
+                raise CommandError("--target-id is required for chat_session.")
+            return {"target_id": target_id}
+
+        if target_id:
+            raise CommandError(
+                "--target-id can only be used with workspace, chatbot, or "
+                "chat_session."
+            )
+        return {}
 
     def parse_metadata(self, raw_metadata):
         try:
@@ -86,5 +119,4 @@ class Command(BaseCommand):
 
         if not isinstance(metadata, dict):
             raise CommandError("--metadata must be a JSON object.")
-
         return metadata

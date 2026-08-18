@@ -5,7 +5,6 @@ from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.db import IntegrityError, transaction
 from django.utils import timezone
-from django.utils.text import slugify
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -15,6 +14,7 @@ from accounts.services.firebase import (
     FirebaseVerificationError,
     verify_firebase_id_token,
 )
+from accounts.services.onboarding import provision_direct_signup
 from accounts.services.password import (
     resolve_password_reset_user,
     send_user_password_reset_email,
@@ -26,7 +26,7 @@ from accounts.services.verification import (
     verify_email_otp,
 )
 from app.base.validators import validate_timezone_name
-from app.utils.cloudinary import delete_image, upload_image
+from app.services.cloudinary import delete_image, upload_image
 
 User = get_user_model()
 
@@ -44,27 +44,7 @@ def build_auth_token_payload(user):
     }
 
 
-def build_unique_username_from_email(email):
-    local_part = email.split("@", 1)[0]
-    base_username = slugify(local_part)[:50].strip("-") or "user"
-    username = base_username
-    suffix = 1
-
-    while UserProfile.objects.filter(username=username).exists():
-        suffix_text = f"-{suffix}"
-        username = f"{base_username[: 50 - len(suffix_text)]}{suffix_text}"
-        suffix += 1
-
-    return username
-
-
 class UserSerializer(serializers.ModelSerializer):
-    username = serializers.SlugField(
-        source="profile.username",
-        read_only=True,
-        allow_null=True,
-        default=None,
-    )
     phone = serializers.CharField(
         source="profile.phone",
         read_only=True,
@@ -101,7 +81,6 @@ class UserSerializer(serializers.ModelSerializer):
             "status",
             "is_email_verified",
             "is_active",
-            "username",
             "phone",
             "avatar_url",
             "city",
@@ -115,12 +94,6 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class UserUpdateSerializer(serializers.ModelSerializer):
-    username = serializers.SlugField(
-        required=False,
-        allow_blank=True,
-        allow_null=True,
-        max_length=50,
-    )
     phone = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -147,7 +120,6 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         model = User
         fields = (
             "name",
-            "username",
             "phone",
             "country",
             "city",
@@ -156,15 +128,6 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             "clear_profile_picture",
             "avatar_url",
         )
-
-    def validate_username(self, value):
-        if not value:
-            return None
-
-        profile = get_or_create_profile(self.instance)
-        if UserProfile.objects.filter(username=value).exclude(pk=profile.pk).exists():
-            raise serializers.ValidationError("This username is already taken.")
-        return value
 
     def validate(self, attrs):
         if attrs.get("profile_picture") and attrs.get("clear_profile_picture"):
@@ -187,7 +150,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         if name_changed:
             instance.name = validated_data.pop("name")
 
-        profile_fields = {"username", "phone", "country", "city", "timezone"}
+        profile_fields = {"phone", "country", "city", "timezone"}
         changed_profile_fields = []
         for field in profile_fields.intersection(validated_data):
             setattr(profile, field, validated_data[field])
@@ -220,12 +183,6 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 class RegisterSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(max_length=254)
     name = serializers.CharField(required=False, allow_blank=True, max_length=50)
-    username = serializers.SlugField(
-        required=False,
-        allow_blank=True,
-        allow_null=True,
-        max_length=50,
-    )
     phone = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -241,7 +198,6 @@ class RegisterSerializer(serializers.ModelSerializer):
         fields = (
             "email",
             "name",
-            "username",
             "phone",
             "password",
             "confirm_password",
@@ -252,13 +208,6 @@ class RegisterSerializer(serializers.ModelSerializer):
         if User.objects.filter(email__iexact=email).exists():
             raise serializers.ValidationError("A user with this email already exists.")
         return email
-
-    def validate_username(self, value):
-        if not value:
-            return None
-        if UserProfile.objects.filter(username=value).exists():
-            raise serializers.ValidationError("This username is already taken.")
-        return value
 
     def validate(self, attrs):
         if attrs["password"] != attrs["confirm_password"]:
@@ -272,7 +221,6 @@ class RegisterSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        username = validated_data.pop("username", None)
         phone = validated_data.pop("phone", None)
         validated_data.pop("confirm_password")
         password = validated_data.pop("password")
@@ -285,17 +233,13 @@ class RegisterSerializer(serializers.ModelSerializer):
                     **validated_data,
                 )
                 profile = get_or_create_profile(user)
-                profile.username = username
                 profile.phone = phone
-                profile.save(update_fields=["username", "phone"])
+                profile.save(update_fields=["phone"])
+                provision_direct_signup(user)
         except IntegrityError as exc:
             if User.objects.filter(email__iexact=validated_data["email"]).exists():
                 raise serializers.ValidationError(
                     {"email": "A user with this email already exists."}
-                ) from exc
-            if username and UserProfile.objects.filter(username=username).exists():
-                raise serializers.ValidationError(
-                    {"username": "This username is already taken."}
                 ) from exc
             raise serializers.ValidationError(
                 {"non_field_errors": "Could not create user. Please try again."}
@@ -445,6 +389,7 @@ class GoogleLoginSerializer(serializers.Serializer):
     def save(self, **kwargs):
         email = self.validated_data["email"]
         firebase_uid = self.validated_data["firebase_uid"]
+        is_new_user = False
 
         try:
             with transaction.atomic():
@@ -461,6 +406,7 @@ class GoogleLoginSerializer(serializers.Serializer):
                     )
 
                 if user is None:
+                    is_new_user = True
                     user = User.objects.create_user(
                         email=email,
                         password=None,
@@ -475,7 +421,6 @@ class GoogleLoginSerializer(serializers.Serializer):
                         is_email_verified=self.validated_data["email_verified"],
                     )
                     profile = get_or_create_profile(user)
-                    profile.username = build_unique_username_from_email(email)
                 else:
                     profile = get_or_create_profile(user)
                     if profile.status == AccountStatus.SUSPENDED:
@@ -500,9 +445,6 @@ class GoogleLoginSerializer(serializers.Serializer):
                     user.is_email_verified = (
                         user.is_email_verified or self.validated_data["email_verified"]
                     )
-                    if not profile.username:
-                        profile.username = build_unique_username_from_email(email)
-
                 phone_number = self.validated_data.get("phone_number")
                 if phone_number is not None:
                     profile.phone = phone_number or None
@@ -525,7 +467,9 @@ class GoogleLoginSerializer(serializers.Serializer):
                         "updated_at",
                     ]
                 )
-                profile.save(update_fields=["username", "phone", "avatar_url"])
+                profile.save(update_fields=["phone", "avatar_url"])
+                if is_new_user:
+                    provision_direct_signup(user)
         except IntegrityError as exc:
             raise serializers.ValidationError(
                 {"error": "Could not complete Google login. Please try again."}

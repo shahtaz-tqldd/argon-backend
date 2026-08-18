@@ -13,7 +13,7 @@ THUMBNAIL_WIDTH = 600
 
 def _get_client():
     try:
-        import cloudinary
+        import app.services.cloudinary as cloudinary
         import cloudinary.uploader
     except ImportError as exc:
         raise serializers.ValidationError(

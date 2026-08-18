@@ -3,19 +3,11 @@ import uuid
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVector, SearchVectorField
 from django.db import models
+from app.base.models import BaseMinModel
 from pgvector.django import HnswIndex, VectorField
 
 
-class VectorDocument(models.Model):
-    class SourceType(models.TextChoices):
-        DESTINATION = "destination", "Destination"
-        ATTRACTION = "attraction", "Attraction"
-        ACTIVITY = "activity", "Activity"
-        CUISINE = "cuisine", "Cuisine"
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    source_type = models.CharField(max_length=20, choices=SourceType.choices)
-    source_id = models.UUIDField()
+class VectorDocument(BaseMinModel):
     content = models.TextField()
     metadata = models.JSONField(default=dict, blank=True)
     embedding = VectorField(dimensions=1536)
@@ -24,12 +16,10 @@ class VectorDocument(models.Model):
         output_field=SearchVectorField(),
         db_persist=True,
     )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "vector_documents"
-        ordering = ["source_type", "source_id", "created_at"]
+        ordering = ["created_at"]
         indexes = [
             models.Index(fields=["source_type", "source_id"]),
             GinIndex(fields=["metadata"]),
@@ -46,5 +36,5 @@ class VectorDocument(models.Model):
             ),
         ]
 
-    def __str__(self):
-        return f"{self.source_type}:{self.source_id}"
+    # def __str__(self):
+    #     return f"{self.source_type}:{self.source_id}"

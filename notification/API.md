@@ -2,44 +2,67 @@
 
 Base path: `/api/v1/notifications/`
 
-All REST endpoints require the regular authenticated bearer token:
+All REST endpoints require an authenticated bearer token.
 
-```http
-Authorization: Bearer <access_token>
-```
+## Data model
 
-## List Notifications
+`recipient_type` answers who receives the notification:
+
+| Value | Address field | Availability |
+| --- | --- | --- |
+| `global` | none | Available now; visible to every authenticated user |
+| `user` | `recipient` (internal user FK) | Available now; visible only to that user |
+| `workspace` | `workspace_id` | Visible to active workspace members |
+| `chatbot` | `chatbot_id` | Visible to users assigned to the chatbot |
+| `chat_session` | `target_id` | Storage and realtime group ready; membership lookup is pending the chat-session model |
+
+`notification_type` answers what happened:
+
+- `general`
+- `update`
+- `maintenance`
+- `notify`
+- `new_message`
+- `session_started`
+- `session_ended`
+- `ai_notification`
+
+Global notifications normally use `update`, `maintenance`, or `notify`.
+Chat-session notifications normally use `new_message`, `session_started`,
+`session_ended`, or `ai_notification`. These pairings are conventions rather
+than database constraints, so other valid event types are not rejected.
+
+Workspace and chatbot recipients are foreign keys. Only chat-session references
+remain UUIDs until that domain model exists.
+
+## List notifications
 
 ```http
 GET /api/v1/notifications/
+Authorization: Bearer <access_token>
 ```
 
-Returns paginated notifications for the authenticated user. By default this includes:
+This returns global, direct-user, workspace, and chatbot notifications visible
+to the authenticated user. Chat-session visibility will be connected when that
+domain model exists.
 
-- general notifications for the user
-- trip notifications for the user
-- global notifications for all users
+Query parameters:
 
-Query params:
+| Param | Description |
+| --- | --- |
+| `page` | Page number |
+| `page_size` | Page size, up to the configured pagination maximum |
+| `recipient_type` | Filter by `global` or `user` |
+| `notification_type` | Filter by a notification event type |
+| `type` | Backward-compatible alias for `notification_type` |
+| `workspace_id` | Restrict results to an accessible workspace |
+| `chatbot_id` | Restrict results to an assigned chatbot |
+| `unread_only` | `true`, `1`, or `yes` returns only unread items |
 
-| Param | Required | Description |
-| --- | --- | --- |
-| `page` | No | Page number. |
-| `page_size` | No | Page size, max `100`. |
-| `trip_id` | No | When provided, returns only trip notifications for that trip. The trip must belong to the authenticated user. |
-| `type` | No | Filter by `general`, `trip`, or `global`. |
-| `unread_only` | No | Use `true`, `1`, or `yes` to return only unread notifications. |
-
-Dashboard example:
-
-```http
-GET /api/v1/notifications/?page=1&page_size=20
-```
-
-Trip page example:
+Example:
 
 ```http
-GET /api/v1/notifications/?trip_id=9c81f9fa-6ed1-4c98-8db0-7844033958d1
+GET /api/v1/notifications/?recipient_type=global&notification_type=maintenance&unread_only=true
 ```
 
 Response:
@@ -50,185 +73,106 @@ Response:
   "success": true,
   "message": "Notifications fetched successfully.",
   "meta": {
-    "count": 42,
+    "count": 1,
     "page": 1,
     "page_size": 20,
-    "num_pages": 3,
-    "next": "http://localhost:8000/api/v1/notifications/?page=2",
+    "num_pages": 1,
+    "next": null,
     "previous": null,
-    "unread_count": 7
+    "unread_count": 1
   },
   "data": [
     {
       "id": "3af8f742-4ac4-4f65-912f-2c0c238d2928",
-      "notification_type": "trip",
-      "title": "Trip itinerary updated",
-      "message": "Your itinerary has new recommendations.",
-      "metadata": {
-        "source": "planning_agent"
-      },
-      "trip_id": "9c81f9fa-6ed1-4c98-8db0-7844033958d1",
+      "recipient_type": "global",
+      "notification_type": "maintenance",
+      "title": "Scheduled maintenance",
+      "message": "The service will be unavailable for 10 minutes.",
+      "metadata": {},
+      "workspace_id": null,
+      "chatbot_id": null,
+      "target_id": null,
       "is_read": false,
       "read_at": null,
-      "created_at": "2026-07-15T13:42:00Z"
+      "created_at": "2026-08-18T13:42:00Z"
     }
   ]
 }
 ```
 
-`meta.unread_count` follows the current list scope. If `trip_id` is sent, it is the unread count for that trip. If only `type` is sent, it is the unread count for that type. The `unread_only` param does not change the count.
+`meta.unread_count` follows the `recipient_type` and notification-type
+filters. The `unread_only` flag does not change the count.
 
-## Mark One Notification Read
+## Mark one notification read
 
 ```http
 PATCH /api/v1/notifications/<notification_id>/read/
 ```
 
-Optional query params:
+The notification must be visible to the authenticated user.
 
-| Param | Required | Description |
-| --- | --- | --- |
-| `trip_id` | No | Restricts the operation to notifications from that trip scope. |
-
-Response:
-
-```json
-{
-  "status": 200,
-  "success": true,
-  "message": "Notification marked as read.",
-  "data": {
-    "id": "3af8f742-4ac4-4f65-912f-2c0c238d2928",
-    "is_read": true,
-    "read_at": "2026-07-15T14:10:00Z"
-  }
-}
-```
-
-## Mark All Notifications Read
+## Mark all notifications read
 
 ```http
 PATCH /api/v1/notifications/read-all/
 ```
 
-Uses the same filters as the list endpoint.
-
-Examples:
-
-```http
-PATCH /api/v1/notifications/read-all/
-PATCH /api/v1/notifications/read-all/?trip_id=9c81f9fa-6ed1-4c98-8db0-7844033958d1
-PATCH /api/v1/notifications/read-all/?type=global
-```
-
-Response:
-
-```json
-{
-  "status": 200,
-  "success": true,
-  "message": "Notifications marked as read.",
-  "data": {
-    "marked_read_count": 7
-  }
-}
-```
+This accepts the same filters as the list endpoint.
 
 ## Realtime WebSocket
-
-Socket endpoint:
 
 ```text
 ws://<host>/ws/notifications/?token=<access_token>
 ```
 
-This receives all realtime notifications visible to the authenticated user:
+An authenticated connection subscribes to:
 
-- general notifications for the user
-- trip notifications for the user
-- global notifications for all users
+- `notifications.global`
+- `notifications.user.<user_id>`
+- `notifications.workspace.<workspace_id>` for active memberships
+- `notifications.chatbot.<chatbot_id>` for active assignments
 
-Socket event payload:
+Events use the same shape as a serialized REST notification. Chat-session
+consumers will use `notifications.chat_session.<chat_session_id>`.
 
-```json
-{
-  "id": "3af8f742-4ac4-4f65-912f-2c0c238d2928",
-  "notification_type": "trip",
-  "title": "Trip itinerary updated",
-  "message": "Your itinerary has new recommendations.",
-  "metadata": {
-    "source": "planning_agent"
-  },
-  "trip_id": "9c81f9fa-6ed1-4c98-8db0-7844033958d1",
-  "is_read": false,
-  "read_at": null,
-  "created_at": "2026-07-15T13:42:00Z"
-}
-```
-
-The dashboard can append every event it receives. A trip page can check whether `trip_id` matches the active trip before appending it to the trip notification list.
-
-## Creating Notifications From Services
-
-Use these helpers from any service, task, or view:
+## Creating notifications in application code
 
 ```python
+from notification.models import NotificationType
 from notification.services import (
-    create_general_notification,
+    create_chat_session_notification,
     create_global_notification,
-    create_trip_notification,
-)
-
-create_general_notification(
-    recipient=user,
-    title="Welcome back",
-    message="Your account is ready.",
-    metadata={"source": "accounts"},
-)
-
-create_trip_notification(
-    recipient=trip.user,
-    trip=trip,
-    title="Trip itinerary updated",
-    message="Your itinerary has new recommendations.",
-    metadata={"source": "planning_agent"},
+    create_user_notification,
 )
 
 create_global_notification(
+    notification_type=NotificationType.MAINTENANCE,
     title="Scheduled maintenance",
-    message="Tourtoise will be unavailable for maintenance tonight.",
-    metadata={"severity": "info"},
+)
+
+create_user_notification(
+    recipient=user,
+    title="Welcome",
+)
+
+create_chat_session_notification(
+    chat_session_id=session_id,
+    notification_type=NotificationType.NEW_MESSAGE,
+    title="New message",
 )
 ```
 
-Each helper stores the notification and emits the realtime socket event.
+`create_workspace_notification` and `create_chatbot_notification` follow the
+same pattern and accept `workspace` and `chatbot` model instances.
 
-## Demo Notification Command
-
-Create a global notification:
-
-```bash
-env/bin/python manage.py create_demo_notification \
-  --type global \
-  --title "Demo global notification" \
-  --message "This notification goes to every dashboard socket."
-```
-
-Create a trip notification:
+## Demo command
 
 ```bash
-env/bin/python manage.py create_demo_notification \
-  --type trip \
-  --trip-id 9c81f9fa-6ed1-4c98-8db0-7844033958d1 \
-  --title "Demo trip notification" \
-  --message "This notification includes a trip_id in the socket payload."
+python manage.py create_demo_notification \
+  --recipient-type global \
+  --notification-type maintenance \
+  --title "Scheduled maintenance"
 ```
 
-Add custom metadata:
-
-```bash
-env/bin/python manage.py create_demo_notification \
-  --type trip \
-  --trip-id 9c81f9fa-6ed1-4c98-8db0-7844033958d1 \
-  --metadata '{"source":"manual_demo","severity":"info"}'
-```
+For a user notification, pass `--recipient-type user --recipient-id <uuid>`.
+For workspace, chatbot, or chat-session notifications, pass `--target-id <uuid>`.
