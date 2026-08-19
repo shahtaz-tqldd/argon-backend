@@ -13,7 +13,7 @@ from accounts.choices import (
     AccountStatus,
 )
 from app.base.models import BaseMinModel
-from app.base.validators import validate_timezone_name
+from app.utils.validators import validate_timezone_name
 
 phone_regex = RegexValidator(
     regex=r"^\+?\d{6,15}$",

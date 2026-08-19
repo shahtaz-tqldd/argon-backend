@@ -25,7 +25,7 @@ from accounts.services.verification import (
     issue_email_verification_otp,
     verify_email_otp,
 )
-from app.base.validators import validate_timezone_name
+from app.utils.validators import validate_timezone_name
 from app.services.cloudinary import delete_image, upload_image
 
 User = get_user_model()

@@ -10,6 +10,7 @@ v1_client_urls = [
     path("config/", include(config_client_urls)),
     path("accounts/", include("accounts.api.v1.client.urls")),
     path("workspaces/", include("workspace.api.v1.client.urls")),
+    path("chatbots/", include("chatbot.api.v1.client.urls")),
     path("notifications/", include("notification.api.v1.client.urls")),
 ]
 

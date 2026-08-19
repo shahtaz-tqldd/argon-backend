@@ -1,0 +1,5 @@
+{{ inviter_name }} invited you to join the {{ chatbot_name }} chatbot in {{ workspace_name }} on Argon Chatbot.
+
+Accept the invitation: {{ invitation_link }}
+
+This invitation expires in {{ expires_in_hours }} hours.

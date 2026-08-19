@@ -1,8 +1,11 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
+from django.utils.text import slugify
 
 from app.base.models import BaseModel, BaseMinModel
+from app.utils.validators import validate_timezone_name
 from workspace.models import WorkspaceUser
 
 from chatbot.utils.choices import ChatbotRoleTypes, ChatbotStatusTypes
@@ -22,7 +25,7 @@ class Chatbot(BaseModel):
     )
     name = models.CharField(max_length=120)
     description = models.TextField(blank=True)
-    slug = models.SlugField()
+    slug = models.SlugField(max_length=140, unique=True, blank=True, editable=False)
     instructions = models.TextField(blank=True)
     logo = models.URLField(blank=True)
 
@@ -31,7 +34,8 @@ class Chatbot(BaseModel):
         choices=ChatbotStatusTypes.choices,
         default=ChatbotStatusTypes.DRAFT,
     )
-    is_active = models.BooleanField(default=True, db_index=True)
+
+    is_deleted = models.BooleanField(default=False, db_index=True)
 
     class Meta:
         ordering = ["workspace__name", "name"]
@@ -43,7 +47,7 @@ class Chatbot(BaseModel):
         ]
         indexes = [
             models.Index(
-                fields=["workspace", "is_active"],
+                fields=["workspace", "is_deleted"],
                 name="chatbot_workspace_active_idx",
             ),
             models.Index(
@@ -55,13 +59,27 @@ class Chatbot(BaseModel):
     def __str__(self):
         return self.name
 
+    def generate_unique_slug(self):
+        base_slug = slugify(self.name)[:120].strip("-") or "chatbot"
+        queryset = type(self).objects.all()
+        if self.pk:
+            queryset = queryset.exclude(pk=self.pk)
+
+        candidate = base_slug
+        suffix = 2
+        while queryset.filter(slug=candidate).exists():
+            suffix_text = f"-{suffix}"
+            candidate = f"{base_slug[: 140 - len(suffix_text)]}{suffix_text}"
+            suffix += 1
+        return candidate
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = self.generate_unique_slug()
+        super().save(*args, **kwargs)
+
 
 class ChatbotSettings(BaseModel):
-    # This model originally used Django's BigAutoField. Keep that database type
-    # while inheriting BaseModel's audit fields; PostgreSQL cannot directly cast
-    # existing bigint primary-key values to UUIDs.
-    id = models.BigAutoField(primary_key=True)
-
     chatbot = models.OneToOneField(
         Chatbot,
         related_name="settings",
@@ -72,6 +90,13 @@ class ChatbotSettings(BaseModel):
     fallback_message = models.TextField(blank=True)
 
     language = models.CharField(max_length=20, default="en")
+    timezone = models.CharField(
+        max_length=64,
+        default="UTC",
+        validators=[validate_timezone_name],
+        help_text="IANA timezone for localized activity, for example Asia/Dhaka.",
+    )
+    
     ai_enabled = models.BooleanField(default=True)
 
     # chatbot features
@@ -227,3 +252,45 @@ class ChatbotUser(BaseMinModel):
 
     def __str__(self):
         return f"{self.user} in {self.chatbot} ({self.get_role_display()})"
+
+
+class ChatbotInvitation(BaseModel):
+    chatbot = models.ForeignKey(
+        Chatbot,
+        on_delete=models.CASCADE,
+        related_name="invitations",
+    )
+    email = models.EmailField()
+    token_hash = models.CharField(max_length=64, unique=True, editable=False)
+    expires_at = models.DateTimeField()
+    accepted_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["chatbot", "email"],
+                name="unique_chatbot_invitation_email",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["chatbot", "expires_at"],
+                name="chatbot_invite_expiry_idx",
+            ),
+        ]
+
+    @property
+    def is_expired(self):
+        return self.expires_at <= timezone.now()
+
+    @property
+    def is_accepted(self):
+        return self.accepted_at is not None
+
+    def save(self, *args, **kwargs):
+        self.email = self.email.strip().casefold()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Invitation for {self.email} to {self.chatbot}"

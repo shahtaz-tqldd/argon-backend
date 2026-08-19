@@ -48,5 +48,19 @@ def validate_widget_settings(value):
 
 def validate_other_settings(value):
     if not isinstance(value, dict):
-        raise ValidationError("Widget settings must be a JSON object.")
+        raise ValidationError("Other settings must be a JSON object.")
 
+
+def validate_unique_chatbot_name(*, workspace, name, chatbot_id=None):
+    from chatbot.models import Chatbot
+
+    queryset = Chatbot.objects.filter(
+        workspace=workspace,
+        name__iexact=name.strip(),
+    )
+    if chatbot_id is not None:
+        queryset = queryset.exclude(pk=chatbot_id)
+    if queryset.exists():
+        raise ValidationError(
+            "A chatbot with this name already exists in the workspace."
+        )

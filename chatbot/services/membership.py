@@ -2,7 +2,8 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
 from chatbot.models import Chatbot, ChatbotUser
-from chatbot.utils.choices import ChatbotRoleTypes
+from chatbot.utils.choices import ChatbotRoleTypes, ChatbotStatusTypes
+from chatbot.utils.validation import validate_unique_chatbot_name
 from workspace.models import WorkspaceUser
 
 
@@ -27,23 +28,32 @@ def create_chatbot(
     created_by,
     description="",
     instructions="",
+    logo="",
+    status=ChatbotStatusTypes.DRAFT,
 ):
     _require_active_workspace_user(workspace, created_by)
     if not workspace.is_active:
         raise ValidationError("Cannot create a chatbot in an inactive workspace.")
+
+    name = name.strip()
+    if not name:
+        raise ValidationError("Chatbot name is required.")
+    validate_unique_chatbot_name(workspace=workspace, name=name)
 
     chatbot = Chatbot.objects.create(
         workspace=workspace,
         name=name,
         description=description,
         instructions=instructions,
+        logo=logo,
+        status=status,
         created_by=created_by,
+        is_deleted=False,
     )
     ChatbotUser.objects.create(
         chatbot=chatbot,
         user=created_by,
         role=ChatbotRoleTypes.ADMIN,
-        created_by=created_by,
     )
     return chatbot
 
@@ -71,10 +81,7 @@ def assign_user_to_chatbot(
     membership, created = ChatbotUser.objects.get_or_create(
         chatbot=chatbot,
         user=user,
-        defaults={
-            "role": role,
-            "created_by": assigned_by,
-        },
+        defaults={"role": role},
     )
     if not created:
         if not (
@@ -83,9 +90,6 @@ def assign_user_to_chatbot(
         ):
             membership.role = role
         membership.is_active = True
-        membership.updated_by = assigned_by
         membership.full_clean()
-        membership.save(
-            update_fields=["role", "is_active", "updated_by", "updated_at"]
-        )
+        membership.save(update_fields=["role", "is_active", "updated_at"])
     return membership
