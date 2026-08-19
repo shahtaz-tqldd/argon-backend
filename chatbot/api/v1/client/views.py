@@ -48,7 +48,6 @@ class ChatbotObjectMixin:
         if self._chatbot is None:
             self._chatbot = get_object_or_404(
                 Chatbot.objects.select_related("workspace").filter(
-                    is_active=True,
                     is_deleted=False,
                     workspace__is_active=True,
                 ),
@@ -71,7 +70,6 @@ class ChatbotListCreateView(GenericAPIView):
                 workspace__memberships__user=self.request.user,
                 workspace__memberships__is_active=True,
                 workspace__is_active=True,
-                is_active=True,
                 is_deleted=False,
             )
             .distinct()
@@ -143,13 +141,11 @@ class ChatbotDetailView(ChatbotObjectMixin, GenericAPIView):
     def delete(self, request, *args, **kwargs):
         chatbot = self.get_chatbot()
         chatbot.is_deleted = True
-        chatbot.is_active = False
         chatbot.status = ChatbotStatusTypes.DISABLED
         chatbot.updated_by = request.user
         chatbot.save(
             update_fields=[
                 "is_deleted",
-                "is_active",
                 "status",
                 "updated_by",
                 "updated_at",

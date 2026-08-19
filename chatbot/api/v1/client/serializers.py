@@ -71,7 +71,6 @@ class ChatbotSerializer(serializers.ModelSerializer):
             "status",
             "member_count",
             "current_user_role",
-            "is_active",
             "created_at",
             "updated_at",
         )
@@ -80,7 +79,6 @@ class ChatbotSerializer(serializers.ModelSerializer):
             "slug",
             "member_count",
             "current_user_role",
-            "is_active",
             "created_at",
             "updated_at",
         )
