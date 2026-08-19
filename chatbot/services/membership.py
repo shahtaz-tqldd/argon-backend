@@ -1,7 +1,8 @@
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
-from chatbot.models import Chatbot, ChatbotRole, ChatbotUser
+from chatbot.models import Chatbot, ChatbotUser
+from chatbot.utils.choices import ChatbotRoleTypes
 from workspace.models import WorkspaceUser
 
 
@@ -41,7 +42,7 @@ def create_chatbot(
     ChatbotUser.objects.create(
         chatbot=chatbot,
         user=created_by,
-        role=ChatbotRole.ADMIN,
+        role=ChatbotRoleTypes.ADMIN,
         created_by=created_by,
     )
     return chatbot
@@ -53,7 +54,7 @@ def assign_user_to_chatbot(
     chatbot,
     user,
     assigned_by,
-    role=ChatbotRole.MEMBER,
+    role=ChatbotRoleTypes.MEMBER,
 ):
     """
     Assign a workspace member to a chatbot.
@@ -66,7 +67,7 @@ def assign_user_to_chatbot(
     _require_active_workspace_user(chatbot.workspace, assigned_by)
     _require_active_workspace_user(chatbot.workspace, user)
 
-    role = ChatbotRole(role)
+    role = ChatbotRoleTypes(role)
     membership, created = ChatbotUser.objects.get_or_create(
         chatbot=chatbot,
         user=user,
@@ -77,8 +78,8 @@ def assign_user_to_chatbot(
     )
     if not created:
         if not (
-            membership.role == ChatbotRole.ADMIN
-            and role == ChatbotRole.MEMBER
+            membership.role == ChatbotRoleTypes.ADMIN
+            and role == ChatbotRoleTypes.MEMBER
         ):
             membership.role = role
         membership.is_active = True
