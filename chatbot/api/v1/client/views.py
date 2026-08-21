@@ -1,19 +1,28 @@
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import serializers as drf_serializers
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny
 
+from app.utils.pagination import CustomPagination
+from app.utils.permission import IsChatbotUser
 from app.utils.response import APIResponse
 from chatbot.api.v1.client.serializers import (
     AcceptChatbotInvitationSerializer,
+    ChatbotCreateSerializer,
+    ChatbotDeleteSerializer,
+    ChatbotDetailSerializer,
     ChatbotInvitationSerializer,
+    ChatbotListSerializer,
+    ChatbotMemberQuerySerializer,
     ChatbotMemberSerializer,
-    ChatbotSerializer,
+    ChatbotQuerySerializer,
+    ChatbotShortDetailSerializer,
+    ChatbotUpdateSerializer,
     InviteChatbotMemberSerializer,
 )
 from chatbot.models import Chatbot, ChatbotUser
-from chatbot.permissions import IsChatbotUser
 from chatbot.utils.choices import ChatbotStatusTypes
 
 
@@ -46,20 +55,67 @@ class ChatbotObjectMixin:
 
     def get_chatbot(self):
         if self._chatbot is None:
+            query_serializer = ChatbotQuerySerializer(
+                data=self.request.query_params,
+            )
+            query_serializer.is_valid(raise_exception=True)
             self._chatbot = get_object_or_404(
                 Chatbot.objects.select_related("workspace").filter(
                     is_deleted=False,
                     workspace__is_active=True,
                 ),
-                slug=self.kwargs["chatbot_slug"],
+                slug=query_serializer.validated_data["chatbot"],
             )
             self.check_object_permissions(self.request, self._chatbot)
         return self._chatbot
 
 
-class ChatbotListCreateView(GenericAPIView):
+class PaginatedListMixin:
+    pagination_class = CustomPagination
+
+    def paginated_response(self, queryset, *, message):
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(queryset, self.request, view=self)
+        serializer = self.get_serializer(page, many=True)
+        return APIResponse.success(
+            data=serializer.data,
+            meta={
+                "count": paginator.page.paginator.count,
+                "page": paginator.page.number,
+                "page_size": paginator.get_page_size(self.request),
+                "num_pages": paginator.page.paginator.num_pages,
+                "next": paginator.get_next_link(),
+                "previous": paginator.get_previous_link(),
+            },
+            message=message,
+        )
+
+
+class ChatbotMemberObjectMixin(ChatbotObjectMixin):
+    _chatbot_member = None
+
+    def get_chatbot_member(self):
+        if self._chatbot_member is None:
+            query_serializer = ChatbotMemberQuerySerializer(
+                data=self.request.query_params,
+            )
+            query_serializer.is_valid(raise_exception=True)
+            self._chatbot_member = get_object_or_404(
+                ChatbotUser.objects.select_related("chatbot", "user"),
+                chatbot=self.get_chatbot(),
+                user__email__iexact=(
+                    query_serializer.validated_data["member_email"]
+                ),
+                user__is_active=True,
+                is_active=True,
+            )
+            self.check_object_permissions(self.request, self._chatbot_member)
+        return self._chatbot_member
+
+
+class ChatbotListView(PaginatedListMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
-    serializer_class = ChatbotSerializer
+    serializer_class = ChatbotListSerializer
 
     def get_queryset(self):
         return (
@@ -77,11 +133,15 @@ class ChatbotListCreateView(GenericAPIView):
         )
 
     def get(self, request, *args, **kwargs):
-        serializer = self.get_serializer(self.get_queryset(), many=True)
-        return APIResponse.success(
-            data=serializer.data,
+        return self.paginated_response(
+            self.get_queryset(),
             message="Chatbots fetched successfully.",
         )
+
+
+class ChatbotCreateView(GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    serializer_class = ChatbotCreateSerializer
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -106,13 +166,29 @@ class ChatbotListCreateView(GenericAPIView):
 
 class ChatbotDetailView(ChatbotObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
-    serializer_class = ChatbotSerializer
+    serializer_class = ChatbotDetailSerializer
 
     def get(self, request, *args, **kwargs):
         return APIResponse.success(
             data=self.get_serializer(self.get_chatbot()).data,
             message="Chatbot fetched successfully.",
         )
+
+
+class ChatbotShortDetailView(ChatbotObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    serializer_class = ChatbotShortDetailSerializer
+
+    def get(self, request, *args, **kwargs):
+        return APIResponse.success(
+            data=self.get_serializer(self.get_chatbot()).data,
+            message="Chatbot fetched successfully.",
+        )
+
+
+class ChatbotUpdateView(ChatbotObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    serializer_class = ChatbotUpdateSerializer
 
     def _update(self, request, *, partial):
         chatbot = self.get_chatbot()
@@ -138,6 +214,11 @@ class ChatbotDetailView(ChatbotObjectMixin, GenericAPIView):
     def patch(self, request, *args, **kwargs):
         return self._update(request, partial=True)
 
+
+class ChatbotDeleteView(ChatbotObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    serializer_class = ChatbotDeleteSerializer
+
     def delete(self, request, *args, **kwargs):
         chatbot = self.get_chatbot()
         chatbot.is_deleted = True
@@ -156,7 +237,11 @@ class ChatbotDetailView(ChatbotObjectMixin, GenericAPIView):
         )
 
 
-class ChatbotMemberListView(ChatbotObjectMixin, GenericAPIView):
+class ChatbotMemberListView(
+    ChatbotObjectMixin,
+    PaginatedListMixin,
+    GenericAPIView,
+):
     permission_classes = [IsChatbotUser]
     serializer_class = ChatbotMemberSerializer
 
@@ -166,9 +251,37 @@ class ChatbotMemberListView(ChatbotObjectMixin, GenericAPIView):
             is_active=True,
             user__is_active=True,
         ).select_related("user")
-        return APIResponse.success(
-            data=self.get_serializer(memberships, many=True).data,
+        return self.paginated_response(
+            memberships,
             message="Chatbot members fetched successfully.",
+        )
+
+
+class ChatbotMemberDetailView(ChatbotMemberObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    serializer_class = ChatbotMemberSerializer
+
+    def get(self, request, *args, **kwargs):
+        return APIResponse.success(
+            data=self.get_serializer(self.get_chatbot_member()).data,
+            message="Chatbot member fetched successfully.",
+        )
+
+
+class RemoveChatbotMemberView(ChatbotMemberObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    serializer_class = ChatbotMemberSerializer
+
+    @transaction.atomic
+    def delete(self, request, *args, **kwargs):
+        membership = self.get_chatbot_member()
+        member = membership.user
+        membership.delete()
+        member.is_orphan = True
+        member.save(update_fields=["is_orphan", "updated_at"])
+        return APIResponse.success(
+            data={"member_email": member.email},
+            message="Chatbot member removed successfully.",
         )
 
 
@@ -183,7 +296,11 @@ class InviteChatbotMemberView(ChatbotObjectMixin, GenericAPIView):
         return context
 
     def post(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
+        serializer_data = request.data
+        member_email = request.query_params.get("member_email")
+        if member_email is not None:
+            serializer_data = {"email": member_email}
+        serializer = self.get_serializer(data=serializer_data)
         if not serializer.is_valid():
             return validation_error_response(
                 serializer.errors,
@@ -224,7 +341,7 @@ class AcceptChatbotInvitationView(GenericAPIView):
             )
         return APIResponse.success(
             data={
-                "chatbot": ChatbotSerializer(
+                "chatbot": ChatbotDetailSerializer(
                     membership.chatbot,
                     context={"request": request},
                 ).data,

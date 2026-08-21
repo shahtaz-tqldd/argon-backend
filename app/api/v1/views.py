@@ -4,7 +4,7 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
-from accounts.permissions import IsSuperAdmin
+from app.utils.permission import IsSuperAdmin
 from app.api.v1.serializers import (
     CONFIG_SECTIONS,
     LEGAL_DOCUMENT_TYPES,

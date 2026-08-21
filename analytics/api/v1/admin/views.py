@@ -9,7 +9,7 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
 
 from accounts.models import User
-from accounts.permissions import IsSuperAdmin
+from app.utils.permission import IsSuperAdmin
 from analytics.api.v1.admin.serializers import (
     AIUsageQuerySerializer,
     UserGrowthQuerySerializer,

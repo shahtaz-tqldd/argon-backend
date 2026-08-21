@@ -89,6 +89,11 @@ class User(AbstractBaseUser, PermissionsMixin):
         blank=True, verbose_name=_("Google access token")
     )
     is_active = models.BooleanField(default=True, verbose_name=_("Active"))
+    is_orphan = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name=_("Orphaned chatbot user"),
+    )
     is_staff = models.BooleanField(default=False, verbose_name=_("Staff status"))
     deleted_at = models.DateTimeField(
         null=True, blank=True, db_index=True, verbose_name=_("Deleted at")

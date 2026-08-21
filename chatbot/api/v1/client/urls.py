@@ -1,28 +1,47 @@
-from django.urls import path
+from django.urls import include, path
 
 from chatbot.api.v1.client import views
 
-
-urlpatterns = [
-    path("", views.ChatbotListCreateView.as_view(), name="chatbot-list-create"),
+# chatbot
+chatbot = [
+    path("create/", views.ChatbotCreateView.as_view(), name="chatbot-create"),
+    path("list/", views.ChatbotListView.as_view(), name="chatbot-list"),
+    path("details/", views.ChatbotDetailView.as_view(), name="chatbot-detail"),
     path(
-        "invitations/accept/",
+        "short-details/",
+        views.ChatbotShortDetailView.as_view(),
+        name="chatbot-short-detail",
+    ),
+    path("update/", views.ChatbotUpdateView.as_view(), name="chatbot-update"),
+    path("delete/", views.ChatbotDeleteView.as_view(), name="chatbot-delete"),
+]
+
+# chatbot team
+chatbot_team = [
+    path("list/", views.ChatbotMemberListView.as_view(), name="chatbot-members"),
+    path(
+        "details/",
+        views.ChatbotMemberDetailView.as_view(),
+        name="chatbot-member-details",
+    ),
+    path(
+        "invite/",
+        views.InviteChatbotMemberView.as_view(),
+        name="invite-chatbot-member",
+    ),
+    path(
+        "accept-invite/",
         views.AcceptChatbotInvitationView.as_view(),
         name="accept-chatbot-invitation",
     ),
     path(
-        "<slug:chatbot_slug>/",
-        views.ChatbotDetailView.as_view(),
-        name="chatbot-detail",
+        "remove-member/",
+        views.RemoveChatbotMemberView.as_view(),
+        name="remove-chatbot-member",
     ),
-    path(
-        "<slug:chatbot_slug>/members/",
-        views.ChatbotMemberListView.as_view(),
-        name="chatbot-members",
-    ),
-    path(
-        "<slug:chatbot_slug>/invitations/",
-        views.InviteChatbotMemberView.as_view(),
-        name="invite-chatbot-member",
-    ),
+]
+
+urlpatterns = [
+    path("team/", include(chatbot_team)),
+    path("", include(chatbot)),
 ]

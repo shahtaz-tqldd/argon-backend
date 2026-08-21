@@ -3,7 +3,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
 
-from accounts.permissions import IsSuperAdmin
+from app.utils.permission import IsSuperAdmin
 from app.utils.pagination import CustomPagination
 from vector_store.services.vectorize import DestinationVectorService
 from app.utils.response import APIResponse

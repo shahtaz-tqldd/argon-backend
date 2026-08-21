@@ -12,7 +12,7 @@ from accounts.api.v1.admin.serializers import (
     UpdateAdminPasswordSerializer,
 )
 from accounts.models import User
-from accounts.permissions import IsAdmin, IsSuperAdmin
+from app.utils.permission import IsAdmin, IsSuperAdmin
 from app.utils.pagination import CustomPagination
 from app.utils.response import APIResponse
 

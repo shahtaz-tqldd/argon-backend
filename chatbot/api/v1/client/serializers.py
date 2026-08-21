@@ -18,6 +18,17 @@ from workspace.models import Workspace, WorkspaceUser
 User = get_user_model()
 
 
+class ChatbotQuerySerializer(serializers.Serializer):
+    chatbot = serializers.SlugField()
+
+
+class ChatbotMemberQuerySerializer(ChatbotQuerySerializer):
+    member_email = serializers.EmailField(max_length=254)
+
+    def validate_member_email(self, value):
+        return User.objects.normalize_email(value).strip().casefold()
+
+
 class ChatbotWorkspaceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Workspace
@@ -46,7 +57,7 @@ class WorkspaceReferenceField(serializers.RelatedField):
         return ChatbotWorkspaceSerializer(value).data
 
 
-class ChatbotSerializer(serializers.ModelSerializer):
+class ChatbotBaseSerializer(serializers.ModelSerializer):
     workspace = WorkspaceReferenceField(
         queryset=Workspace.objects.filter(is_active=True),
         required=False,
@@ -180,6 +191,38 @@ class ChatbotSerializer(serializers.ModelSerializer):
         update_fields = [*validated_data.keys(), "updated_by", "updated_at"]
         instance.save(update_fields=update_fields)
         return instance
+
+
+class ChatbotListSerializer(ChatbotBaseSerializer):
+    """Serialize chatbots returned by the list endpoint."""
+
+
+class ChatbotCreateSerializer(ChatbotBaseSerializer):
+    """Validate and serialize chatbot creation."""
+
+
+class ChatbotDetailSerializer(ChatbotBaseSerializer):
+    """Serialize the complete details of a chatbot."""
+
+
+class ChatbotShortDetailSerializer(ChatbotBaseSerializer):
+    """Serialize the short-detail endpoint.
+
+    This currently preserves the existing response contract. Its dedicated class
+    allows the short representation to evolve without affecting other endpoints.
+    """
+
+
+class ChatbotUpdateSerializer(ChatbotBaseSerializer):
+    """Validate and serialize chatbot updates."""
+
+
+class ChatbotDeleteSerializer(serializers.Serializer):
+    """Represent the body-less chatbot delete operation."""
+
+
+class ChatbotSerializer(ChatbotDetailSerializer):
+    """Backward-compatible alias for the original public serializer."""
 
 
 class ChatbotMemberUserSerializer(serializers.ModelSerializer):

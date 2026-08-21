@@ -4,12 +4,13 @@ from django.shortcuts import get_object_or_404
 from rest_framework import serializers as drf_serializers
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny
 
 from accounts.api.v1.client.serializers import (
     UserSerializer,
     build_auth_token_payload,
 )
+from app.utils.permission import IsWorkspaceUser
 from app.utils.response import APIResponse
 from workspace.api.v1.client.serializers import (
     AcceptWorkspaceInvitationSerializer,
@@ -45,7 +46,7 @@ def validation_error_response(errors, fallback):
 
 
 class WorkspaceDetailView(GenericAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsWorkspaceUser]
     serializer_class = WorkspaceSerializer
 
     def get_object(self):
@@ -63,12 +64,16 @@ class WorkspaceDetailView(GenericAPIView):
         )
         workspace_slug = self.kwargs.get("workspace_slug")
         if workspace_slug:
-            return get_object_or_404(queryset, slug=workspace_slug)
-        workspace = queryset.filter(owner=self.request.user).order_by("created_at").first()
-        if workspace is None:
-            workspace = queryset.order_by("created_at").first()
-        if workspace is None:
-            raise Http404
+            workspace = get_object_or_404(queryset, slug=workspace_slug)
+        else:
+            workspace = queryset.filter(owner=self.request.user).order_by(
+                "created_at"
+            ).first()
+            if workspace is None:
+                workspace = queryset.order_by("created_at").first()
+            if workspace is None:
+                raise Http404
+        self.check_object_permissions(self.request, workspace)
         return workspace
 
     def get(self, request, *args, **kwargs):
@@ -102,17 +107,21 @@ class WorkspaceDetailView(GenericAPIView):
 
 
 class InviteWorkspaceMemberView(GenericAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsWorkspaceUser]
     serializer_class = InviteWorkspaceMemberSerializer
 
     def get_workspace(self):
         queryset = Workspace.objects.select_related("owner").filter(is_active=True)
         workspace_slug = self.kwargs.get("workspace_slug")
         if workspace_slug:
-            return get_object_or_404(queryset, slug=workspace_slug)
-        workspace = queryset.filter(owner=self.request.user).order_by("created_at").first()
-        if workspace is None:
-            raise Http404
+            workspace = get_object_or_404(queryset, slug=workspace_slug)
+        else:
+            workspace = queryset.filter(owner=self.request.user).order_by(
+                "created_at"
+            ).first()
+            if workspace is None:
+                raise Http404
+        self.check_object_permissions(self.request, workspace)
         return workspace
 
     def get_serializer_context(self):
