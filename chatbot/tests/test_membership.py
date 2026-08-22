@@ -2,8 +2,9 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.test import TestCase
 
-from chatbot.models import ChatbotRole, ChatbotUser
+from chatbot.models import ChatbotUser, ChatbotWidgetSettings
 from chatbot.services import assign_user_to_chatbot, create_chatbot
+from chatbot.utils.choices import ChatbotRoleTypes
 from workspace.services import add_workspace_user, ensure_personal_workspace
 
 User = get_user_model()
@@ -50,7 +51,10 @@ class ChatbotMembershipTests(TestCase):
             chatbot=chatbot,
             user=self.owner,
         )
-        self.assertEqual(membership.role, ChatbotRole.ADMIN)
+        self.assertEqual(membership.role, ChatbotRoleTypes.ADMIN)
+        self.assertTrue(
+            ChatbotWidgetSettings.objects.filter(chatbot=chatbot).exists()
+        )
 
     def test_workspace_member_can_assign_another_workspace_member(self):
         chatbot = create_chatbot(

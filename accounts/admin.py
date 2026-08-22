@@ -14,6 +14,7 @@ class UserAdmin(BaseUserAdmin):
         "account_status",
         "is_email_verified",
         "is_active",
+        "last_active",
         "deleted_at",
         "is_staff",
         "is_superuser",
@@ -26,7 +27,14 @@ class UserAdmin(BaseUserAdmin):
         "is_email_verified",
     )
     search_fields = ("email", "name", "profile__phone", "firebase_uid")
-    readonly_fields = ("id", "created_at", "updated_at", "last_login", "deleted_at")
+    readonly_fields = (
+        "id",
+        "created_at",
+        "updated_at",
+        "last_login",
+        "last_active",
+        "deleted_at",
+    )
 
     fieldsets = (
         ("Credentials", {"fields": ("email", "password")}),
@@ -57,7 +65,15 @@ class UserAdmin(BaseUserAdmin):
         ),
         (
             "Important dates",
-            {"fields": ("last_login", "deleted_at", "created_at", "updated_at")},
+            {
+                "fields": (
+                    "last_login",
+                    "last_active",
+                    "deleted_at",
+                    "created_at",
+                    "updated_at",
+                )
+            },
         ),
     )
 

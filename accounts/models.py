@@ -95,6 +95,12 @@ class User(AbstractBaseUser, PermissionsMixin):
         verbose_name=_("Orphaned chatbot user"),
     )
     is_staff = models.BooleanField(default=False, verbose_name=_("Staff status"))
+    last_active = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name=_("Last active"),
+    )
     deleted_at = models.DateTimeField(
         null=True, blank=True, db_index=True, verbose_name=_("Deleted at")
     )

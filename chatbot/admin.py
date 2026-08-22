@@ -1,6 +1,12 @@
 from django.contrib import admin
 
-from chatbot.models import Chatbot, ChatbotInvitation, ChatbotUser
+from chatbot.models import (
+    Chatbot,
+    ChatbotAllowedOrigin,
+    ChatbotInvitation,
+    ChatbotUser,
+    ChatbotWidgetSettings,
+)
 
 
 @admin.register(Chatbot)
@@ -9,6 +15,24 @@ class ChatbotAdmin(admin.ModelAdmin):
     list_filter = ("status", "created_at")
     search_fields = ("name", "workspace__name")
     autocomplete_fields = ("workspace",)
+    readonly_fields = ("id", "created_at", "updated_at")
+
+
+@admin.register(ChatbotWidgetSettings)
+class ChatbotWidgetSettingsAdmin(admin.ModelAdmin):
+    list_display = ("chatbot", "is_enabled", "theme", "launcher_position")
+    list_filter = ("is_enabled", "theme", "launcher_position")
+    search_fields = ("chatbot__name", "chatbot__workspace__name", "public_key")
+    autocomplete_fields = ("chatbot",)
+    readonly_fields = ("id", "public_key", "created_at", "updated_at")
+
+
+@admin.register(ChatbotAllowedOrigin)
+class ChatbotAllowedOriginAdmin(admin.ModelAdmin):
+    list_display = ("origin", "chatbot", "is_active", "created_at")
+    list_filter = ("is_active", "created_at")
+    search_fields = ("origin", "chatbot__name")
+    autocomplete_fields = ("chatbot",)
     readonly_fields = ("id", "created_at", "updated_at")
 
 

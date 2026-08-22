@@ -1,7 +1,7 @@
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
-from chatbot.models import Chatbot, ChatbotUser
+from chatbot.models import Chatbot, ChatbotUser, ChatbotWidgetSettings
 from chatbot.utils.choices import ChatbotRoleTypes, ChatbotStatusTypes
 from chatbot.utils.validation import validate_unique_chatbot_name
 from workspace.models import WorkspaceUser
@@ -27,7 +27,15 @@ def create_chatbot(
     name,
     created_by,
     description="",
+    welcome_message="",
+    fallback_message="",
     instructions="",
+    language="en",
+    timezone="UTC",
+    ai_enabled=True,
+    knowledge_base_enabled=True,
+    human_handoff_enabled=True,
+    other_settings=None,
     logo="",
     status=ChatbotStatusTypes.DRAFT,
 ):
@@ -44,11 +52,23 @@ def create_chatbot(
         workspace=workspace,
         name=name,
         description=description,
+        welcome_message=welcome_message,
+        fallback_message=fallback_message,
         instructions=instructions,
+        language=language,
+        timezone=timezone,
+        ai_enabled=ai_enabled,
+        knowledge_base_enabled=knowledge_base_enabled,
+        human_handoff_enabled=human_handoff_enabled,
+        other_settings={} if other_settings is None else other_settings,
         logo=logo,
         status=status,
         created_by=created_by,
         is_deleted=False,
+    )
+    ChatbotWidgetSettings.objects.create(
+        chatbot=chatbot,
+        created_by=created_by,
     )
     ChatbotUser.objects.create(
         chatbot=chatbot,

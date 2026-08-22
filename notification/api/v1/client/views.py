@@ -72,8 +72,8 @@ class NotificationQuerysetMixin:
                     recipient_type=NotificationRecipientType.CHATBOT,
                     chatbot__memberships__user=self.request.user,
                     chatbot__memberships__is_active=True,
-                    chatbot__workspace__memberships__user=self.request.user,
-                    chatbot__workspace__memberships__is_active=True,
+                    chatbot__is_deleted=False,
+                    chatbot__workspace__is_active=True,
                 )
             )
             .select_related("recipient", "workspace", "chatbot")

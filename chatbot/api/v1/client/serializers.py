@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
@@ -12,6 +13,11 @@ from chatbot.services.invitations import (
     issue_chatbot_invitation,
 )
 from chatbot.services.membership import create_chatbot
+from chatbot.utils.choices import ChatbotPermissionTypes
+from chatbot.utils.permissions import (
+    default_chatbot_user_permissions,
+    normalize_chatbot_permission_codes,
+)
 from chatbot.utils.validation import validate_unique_chatbot_name
 from workspace.models import Workspace, WorkspaceUser
 
@@ -77,7 +83,15 @@ class ChatbotBaseSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "slug",
+            "welcome_message",
+            "fallback_message",
             "instructions",
+            "language",
+            "timezone",
+            "ai_enabled",
+            "knowledge_base_enabled",
+            "human_handoff_enabled",
+            "other_settings",
             "logo",
             "status",
             "member_count",
@@ -226,19 +240,66 @@ class ChatbotSerializer(ChatbotDetailSerializer):
 
 
 class ChatbotMemberUserSerializer(serializers.ModelSerializer):
+    avatar = serializers.URLField(
+        source="profile.avatar_url",
+        read_only=True,
+        default="",
+    )
+
     class Meta:
         model = User
-        fields = ("id", "email", "name")
+        fields = ("email", "name", "avatar")
         read_only_fields = fields
 
 
-class ChatbotMemberSerializer(serializers.ModelSerializer):
+class ChatbotMemberListSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
     user = ChatbotMemberUserSerializer(read_only=True)
+    role = serializers.CharField(read_only=True)
+    permissions = serializers.ListField(
+        child=serializers.CharField(),
+        read_only=True,
+    )
+    all_permissions = serializers.BooleanField(read_only=True)
+    is_active = serializers.BooleanField(read_only=True)
+    last_active = serializers.DateTimeField(
+        source="user.last_active",
+        read_only=True,
+    )
+    last_login = serializers.DateTimeField(
+        source="user.last_login",
+        read_only=True,
+    )
+    invited_at = serializers.DateTimeField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    updated_at = serializers.DateTimeField(read_only=True)
+
+
+class ChatbotMemberSerializer(ChatbotMemberListSerializer):
+    effective_permissions = serializers.SerializerMethodField()
+
+    def get_effective_permissions(self, obj):
+        return obj.effective_permissions()
+
+
+class ChatbotMemberPermissionUpdateSerializer(serializers.ModelSerializer):
+    permissions = serializers.ListField(
+        child=serializers.ChoiceField(choices=ChatbotPermissionTypes.choices),
+        allow_empty=True,
+    )
 
     class Meta:
         model = ChatbotUser
-        fields = ("id", "user", "role", "is_active", "created_at", "updated_at")
-        read_only_fields = fields
+        fields = ("permissions",)
+
+    def validate_permissions(self, value):
+        try:
+            return normalize_chatbot_permission_codes(
+                self.instance.chatbot,
+                value,
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class ChatbotInvitationSerializer(serializers.ModelSerializer):
@@ -252,6 +313,8 @@ class ChatbotInvitationSerializer(serializers.ModelSerializer):
             "chatbot",
             "chatbot_name",
             "email",
+            "permissions",
+            "invited_at",
             "expires_at",
             "created_at",
         )
@@ -260,15 +323,31 @@ class ChatbotInvitationSerializer(serializers.ModelSerializer):
 
 class InviteChatbotMemberSerializer(serializers.Serializer):
     email = serializers.EmailField(max_length=254)
+    permissions = serializers.ListField(
+        child=serializers.ChoiceField(choices=ChatbotPermissionTypes.choices),
+        allow_empty=True,
+        required=False,
+        default=default_chatbot_user_permissions,
+    )
 
     def validate_email(self, value):
         return User.objects.normalize_email(value).strip().casefold()
+
+    def validate_permissions(self, value):
+        try:
+            return normalize_chatbot_permission_codes(
+                self.context["chatbot"],
+                value,
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
     def create(self, validated_data):
         try:
             return issue_chatbot_invitation(
                 chatbot=self.context["chatbot"],
                 email=validated_data["email"],
+                permissions=validated_data["permissions"],
                 invited_by=self.context["request"].user,
             )
         except InvalidChatbotInvitation as exc:
@@ -276,17 +355,40 @@ class InviteChatbotMemberSerializer(serializers.Serializer):
 
 
 class AcceptChatbotInvitationSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=50)
+    password = serializers.CharField(write_only=True, min_length=8)
+    confirm_password = serializers.CharField(write_only=True)
     token = serializers.CharField(write_only=True)
 
-    def validate_token(self, value):
+    def validate(self, attrs):
+        if attrs["password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError(
+                {"confirm_password": "Passwords do not match."}
+            )
+
         try:
-            get_valid_chatbot_invitation(value)
+            invitation = get_valid_chatbot_invitation(attrs["token"])
         except InvalidChatbotInvitation as exc:
-            raise serializers.ValidationError(str(exc)) from exc
-        return value
+            raise serializers.ValidationError({"token": str(exc)}) from exc
+
+        user = User.objects.filter(
+            email__iexact=invitation.email,
+            is_active=True,
+        ).first()
+        if user is None:
+            raise serializers.ValidationError(
+                {"token": "The invited user account is no longer active."}
+            )
+        user.name = attrs["name"]
+        validate_password(attrs["password"], user)
+        return attrs
 
     def create(self, validated_data):
         try:
-            return accept_chatbot_invitation(token=validated_data["token"])
+            return accept_chatbot_invitation(
+                token=validated_data["token"],
+                name=validated_data["name"],
+                password=validated_data["password"],
+            )
         except InvalidChatbotInvitation as exc:
             raise serializers.ValidationError({"token": str(exc)}) from exc

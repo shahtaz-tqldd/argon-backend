@@ -2,6 +2,13 @@ import secrets
 from urllib.parse import urlsplit
 
 from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
+
+
+validate_hex_color = RegexValidator(
+    regex=r"^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$",
+    message="Enter a hexadecimal color such as #3a86ff or #3a86ffff.",
+)
 
 
 def generate_widget_public_key():

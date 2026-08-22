@@ -93,7 +93,7 @@ class IsWorkspaceUser(BasePermission):
 
 
 class IsChatbotUser(BasePermission):
-    """Allow active chatbot members who are also active workspace members."""
+    """Allow active chatbot members or authorized workspace administrators."""
 
     message = "You are not an active member of this chatbot."
 
@@ -114,14 +114,30 @@ class IsChatbotUser(BasePermission):
             workspace=chatbot.workspace,
             user=request.user,
         )
-        if workspace_role is None:
-            return False
 
-        chatbot_role = _active_membership_role(
-            ChatbotUser,
-            chatbot=chatbot,
-            user=request.user,
+        chatbot_membership = (
+            ChatbotUser.objects.filter(
+                chatbot=chatbot,
+                user=request.user,
+                is_active=True,
+            )
+            .first()
         )
+        chatbot_role = (
+            chatbot_membership.role if chatbot_membership is not None else None
+        )
+
+        if getattr(view, "chatbot_admin_only", False):
+            if not (
+                workspace_role == WorkspaceRole.ADMIN
+                or chatbot_role == ChatbotRoleTypes.ADMIN
+            ):
+                self.message = (
+                    "Only a workspace admin or chatbot admin can perform "
+                    "this action."
+                )
+                return False
+            return True
 
         if request.method == "DELETE":
             if not (
@@ -140,4 +156,19 @@ class IsChatbotUser(BasePermission):
         ):
             return True
 
-        return chatbot_role is not None
+        if chatbot_membership is None:
+            return False
+
+        required_permission = getattr(
+            view,
+            "required_chatbot_permission",
+            None,
+        )
+        if (
+            required_permission is not None
+            and not chatbot_membership.has_permission(required_permission)
+        ):
+            self.message = "You do not have the required chatbot permission."
+            return False
+
+        return True

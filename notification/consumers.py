@@ -39,8 +39,8 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
         chatbot_ids = ChatbotUser.objects.filter(
             user_id=user_id,
             is_active=True,
-            chatbot__workspace__memberships__user_id=user_id,
-            chatbot__workspace__memberships__is_active=True,
+            chatbot__is_deleted=False,
+            chatbot__workspace__is_active=True,
         ).values_list("chatbot_id", flat=True)
 
         return [

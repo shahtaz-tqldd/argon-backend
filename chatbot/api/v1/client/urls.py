@@ -30,6 +30,11 @@ chatbot_team = [
         name="invite-chatbot-member",
     ),
     path(
+        "permissions/",
+        views.ChatbotMemberPermissionView.as_view(),
+        name="chatbot-member-permissions",
+    ),
+    path(
         "accept-invite/",
         views.AcceptChatbotInvitationView.as_view(),
         name="accept-chatbot-invitation",
