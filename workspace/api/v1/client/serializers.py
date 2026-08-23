@@ -1,8 +1,14 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from django.db import transaction
 from rest_framework import serializers
 
-from workspace.models import Workspace, WorkspaceInvitation
+from workspace.models import (
+    Workspace,
+    WorkspaceInvitation,
+    WorkspaceRole,
+    WorkspaceUser,
+)
 from workspace.services.invitations import (
     InvalidWorkspaceInvitation,
     accept_workspace_invitation,
@@ -13,6 +19,17 @@ from workspace.services.invitations import (
 User = get_user_model()
 
 
+class WorkspaceQuerySerializer(serializers.Serializer):
+    workspace = serializers.SlugField()
+
+
+class WorkspaceMemberQuerySerializer(WorkspaceQuerySerializer):
+    member_email = serializers.EmailField(max_length=254)
+
+    def validate_member_email(self, value):
+        return User.objects.normalize_email(value).strip().casefold()
+
+
 class WorkspaceOwnerSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -20,9 +37,10 @@ class WorkspaceOwnerSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class WorkspaceSerializer(serializers.ModelSerializer):
+class WorkspaceBaseSerializer(serializers.ModelSerializer):
     owner = WorkspaceOwnerSerializer(read_only=True)
     member_count = serializers.SerializerMethodField()
+    current_user_role = serializers.SerializerMethodField()
 
     class Meta:
         model = Workspace
@@ -34,6 +52,7 @@ class WorkspaceSerializer(serializers.ModelSerializer):
             "industry",
             "owner",
             "member_count",
+            "current_user_role",
             "is_active",
             "created_at",
             "updated_at",
@@ -43,6 +62,7 @@ class WorkspaceSerializer(serializers.ModelSerializer):
             "slug",
             "owner",
             "member_count",
+            "current_user_role",
             "is_active",
             "created_at",
             "updated_at",
@@ -51,9 +71,119 @@ class WorkspaceSerializer(serializers.ModelSerializer):
     def get_member_count(self, obj):
         return obj.memberships.filter(is_active=True).count()
 
+    def get_current_user_role(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return None
+        return (
+            obj.memberships.filter(
+                user=request.user,
+                is_active=True,
+            )
+            .values_list("role", flat=True)
+            .first()
+        )
+
+    def validate_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("This field is required.")
+        return value
+
+    @transaction.atomic
+    def create(self, validated_data):
+        user = self.context["request"].user
+        workspace = Workspace.objects.create(
+            owner=user,
+            created_by=user,
+            **validated_data,
+        )
+        WorkspaceUser.objects.create(
+            workspace=workspace,
+            user=user,
+            role=WorkspaceRole.ADMIN,
+            created_by=user,
+        )
+        return workspace
+
     def update(self, instance, validated_data):
         instance.updated_by = self.context["request"].user
         return super().update(instance, validated_data)
+
+
+class WorkspaceListSerializer(WorkspaceBaseSerializer):
+    """Serialize workspaces returned by the list endpoint."""
+
+
+class WorkspaceCreateSerializer(WorkspaceBaseSerializer):
+    """Validate and serialize workspace creation."""
+
+
+class WorkspaceDetailSerializer(WorkspaceBaseSerializer):
+    """Serialize complete workspace details."""
+
+
+class WorkspaceUpdateSerializer(WorkspaceBaseSerializer):
+    """Validate and serialize workspace updates."""
+
+
+class WorkspaceDeleteSerializer(serializers.Serializer):
+    """Represent the body-less workspace delete operation."""
+
+
+class WorkspaceSerializer(WorkspaceDetailSerializer):
+    """Backward-compatible alias for the original public serializer."""
+
+
+class WorkspaceMemberUserSerializer(serializers.ModelSerializer):
+    avatar = serializers.URLField(
+        source="profile.avatar_url",
+        read_only=True,
+        default="",
+    )
+
+    class Meta:
+        model = User
+        fields = ("email", "name", "avatar")
+        read_only_fields = fields
+
+
+class WorkspaceMemberListSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
+    user = WorkspaceMemberUserSerializer(read_only=True)
+    role = serializers.CharField(read_only=True)
+    is_active = serializers.BooleanField(read_only=True)
+    last_active = serializers.DateTimeField(
+        source="user.last_active",
+        read_only=True,
+    )
+    last_login = serializers.DateTimeField(
+        source="user.last_login",
+        read_only=True,
+    )
+    invited_at = serializers.DateTimeField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    updated_at = serializers.DateTimeField(read_only=True)
+
+
+class WorkspaceMemberSerializer(WorkspaceMemberListSerializer):
+    """Serialize an active workspace membership."""
+
+
+class WorkspaceMemberRoleUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WorkspaceUser
+        fields = ("role",)
+
+    def validate_role(self, value):
+        if (
+            self.instance.workspace.owner_id == self.instance.user_id
+            and value != WorkspaceRole.ADMIN
+        ):
+            raise serializers.ValidationError(
+                "The workspace owner must remain an admin."
+            )
+        return value
 
 
 class WorkspaceInvitationSerializer(serializers.ModelSerializer):

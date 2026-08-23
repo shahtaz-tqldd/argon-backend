@@ -23,12 +23,16 @@ Workspace admins can call `add_workspace_user` to add or reactivate members.
 
 Client API routes:
 
-- `GET/PATCH /api/v1/workspaces/` gets or owner-updates the current workspace.
-- `GET /api/v1/workspaces/<slug>/` gets workspace information for an active member.
-- `PATCH /api/v1/workspaces/<slug>/` updates workspace information as its owner.
-- `POST /api/v1/workspaces/invitations/` invites to the owner's current workspace.
-- `POST /api/v1/workspaces/<slug>/invitations/` emails a registration invitation.
-- `POST /api/v1/workspaces/invitations/accept/` registers from the emailed token.
+- `POST /api/v1/workspaces/create/` creates a workspace and its owner membership.
+- `GET /api/v1/workspaces/` gets the authenticated owner's or member's workspace.
+- `PUT/PATCH /api/v1/workspaces/update/?workspace=<slug>` owner-updates a workspace.
+- `DELETE /api/v1/workspaces/delete/?workspace=<slug>` soft-deletes a workspace.
+- `GET /api/v1/workspaces/team/list/?workspace=<slug>` lists active and invited members.
+- `GET /api/v1/workspaces/team/details/?workspace=<slug>&member_email=<email>` gets a member.
+- `POST /api/v1/workspaces/team/invite/?workspace=<slug>` emails an invitation.
+- `GET/PATCH /api/v1/workspaces/team/role/?workspace=<slug>&member_email=<email>` manages a member role.
+- `DELETE /api/v1/workspaces/team/remove-member/?workspace=<slug>&member_email=<email>` removes a member.
+- `POST /api/v1/workspaces/team/accept-invite/` registers from an emailed token.
 
 
 ---
