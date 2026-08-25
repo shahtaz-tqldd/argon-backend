@@ -24,9 +24,10 @@ MODULER_APPS = [
     "workspace.apps.WorkspaceConfig",
     "chatbot.apps.ChatbotConfig",
     "subscription.apps.SubscriptionConfig",
-    "promotion.apps.PromotionConfig",
+    "coupon.apps.CouponConfig",
     "notification.apps.NotificationConfig",
-    # "vector_store.apps.VectorStoreConfig",
+    "knowledge.apps.KnowledgeConfig",
+    "vector_store.apps.VectorStoreConfig",
     # "analytics.apps.AnalyticsConfig",
 ]
 

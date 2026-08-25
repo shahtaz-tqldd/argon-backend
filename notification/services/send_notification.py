@@ -196,9 +196,11 @@ def emit_notification(notification):
     if channel_layer is None:
         return
 
+    notification_data = dict(NotificationSerializer(notification).data)
+    notification_data["event"] = notification.notification_type
     payload = {
         "type": "notification.created",
-        "notification": NotificationSerializer(notification).data,
+        "notification": notification_data,
     }
 
     if notification.recipient_type == NotificationRecipientType.GLOBAL:

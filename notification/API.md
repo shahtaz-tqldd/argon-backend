@@ -26,6 +26,7 @@ All REST endpoints require an authenticated bearer token.
 - `session_started`
 - `session_ended`
 - `ai_notification`
+- `training_complete`
 
 Global notifications normally use `update`, `maintenance`, or `notify`.
 Chat-session notifications normally use `new_message`, `session_started`,
@@ -132,8 +133,14 @@ An authenticated connection subscribes to:
 - `notifications.workspace.<workspace_id>` for active memberships
 - `notifications.chatbot.<chatbot_id>` for active assignments
 
-Events use the same shape as a serialized REST notification. Chat-session
-consumers will use `notifications.chat_session.<chat_session_id>`.
+Events use the serialized REST notification shape with an additional top-level
+`event` field that mirrors `notification_type`. Chat-session consumers will use
+`notifications.chat_session.<chat_session_id>`.
+
+Successful knowledge training emits a chatbot notification with
+`event: training_complete` and `notification_type: training_complete`. Its
+metadata includes `knowledge_base_id`, `training_log_id`, `source_type`,
+`training_stage`, and `force_retrain`.
 
 ## Creating notifications in application code
 

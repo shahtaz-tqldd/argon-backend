@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from app.utils.permission import IsSuperAdmin
 from app.utils.pagination import CustomPagination
-from vector_store.services.vectorize import DestinationVectorService
+from vector_store.services.vectorize import KnowledgeVectorService
 from app.utils.response import APIResponse
 from vector_store.api.v1.admin.serializers import (
     VectorRecordBulkDeleteSerializer,
@@ -25,7 +25,9 @@ class VectorRecordListAPIView(GenericAPIView):
     pagination_class = CustomPagination
 
     def get_queryset(self):
-        return VectorDocument.objects.using("vector").order_by("-updated_at")
+        return VectorDocument.objects.select_related(
+            "knowledge_base"
+        ).order_by("-updated_at")
 
     def get(self, request, *args, **kwargs):
         query_serializer = self.get_serializer(data=request.query_params)
@@ -33,15 +35,12 @@ class VectorRecordListAPIView(GenericAPIView):
         filters = query_serializer.validated_data
 
         queryset = self.get_queryset()
-        source_types = filters.get("source_type")
-        if source_types:
-            queryset = queryset.filter(source_type__in=source_types)
-        if destination_id := filters.get("destination_id"):
+        if chatbot_id := filters.get("chatbot_id"):
             queryset = queryset.filter(
-                metadata__destination_id=str(destination_id),
+                knowledge_base__chatbot_id=chatbot_id
             )
-        if source_id := filters.get("source_id"):
-            queryset = queryset.filter(source_id=source_id)
+        if knowledge_base_id := filters.get("knowledge_base_id"):
+            queryset = queryset.filter(knowledge_base_id=knowledge_base_id)
 
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request, view=self)
@@ -76,11 +75,11 @@ class VectorSemanticSearchAPIView(GenericAPIView):
         query_serializer = self.get_serializer(data=data)
         query_serializer.is_valid(raise_exception=True)
         filters = query_serializer.validated_data
-        results = DestinationVectorService().search(
+        results = KnowledgeVectorService().search(
             filters["query"],
             limit=filters["limit"],
-            source_types=filters.get("source_type"),
-            destination_id=filters.get("destination_id"),
+            chatbot_id=filters.get("chatbot_id"),
+            knowledge_base_ids=filters.get("knowledge_base_ids"),
         )
         return APIResponse.success(
             data=VectorSearchResultSerializer(results, many=True).data,
@@ -95,13 +94,13 @@ class VectorRecordDeleteAPIView(GenericAPIView):
     permission_classes = [IsAuthenticated, IsSuperAdmin]
 
     def get_object(self):
-        queryset = VectorDocument.objects.using("vector")
+        queryset = VectorDocument.objects.all()
         return get_object_or_404(queryset, pk=self.kwargs["record_id"])
 
     def delete(self, request, *args, **kwargs):
         record = self.get_object()
         record_id = str(record.id)
-        record.delete(using="vector")
+        record.delete()
         return APIResponse.success(
             data={"id": record_id},
             message="Vector record deleted successfully.",
@@ -125,10 +124,9 @@ class VectorRecordBulkDeleteAPIView(GenericAPIView):
         serializer.is_valid(raise_exception=True)
         record_ids = serializer.validated_data["ids"]
 
-        with transaction.atomic(using="vector"):
+        with transaction.atomic():
             queryset = (
-                VectorDocument.objects.using("vector")
-                .filter(id__in=record_ids)
+                VectorDocument.objects.filter(id__in=record_ids)
                 .select_for_update()
             )
             existing_ids = set(queryset.values_list("id", flat=True))

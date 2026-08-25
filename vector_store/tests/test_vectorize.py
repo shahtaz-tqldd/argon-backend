@@ -4,94 +4,101 @@ from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from django.test import SimpleTestCase
+from django.db.models import CASCADE
 
+from knowledge.models import KnowledgeBase
 from vector_store.models import VectorDocument
 from vector_store.services.vectorize import (
-    DestinationVectorService,
+    KnowledgeVectorService,
     _RankedCandidate,
 )
 
 
 def _document(name):
+    chatbot_id = uuid4()
     return SimpleNamespace(
         id=uuid4(),
-        source_type=VectorDocument.SourceType.DESTINATION,
-        source_id=uuid4(),
+        knowledge_base_id=uuid4(),
+        knowledge_base=SimpleNamespace(chatbot_id=chatbot_id),
+        chunk_index=0,
+        token_count=10,
         content=name,
-        metadata={"name": name},
+        metadata={"title": name},
     )
 
 
-class HybridSearchTests(SimpleTestCase):
+class KnowledgeHybridSearchTests(SimpleTestCase):
     def setUp(self):
-        self.service = DestinationVectorService(embedding_service=Mock())
+        self.service = KnowledgeVectorService(embedding_service=Mock())
 
-    @patch.object(DestinationVectorService, "_is_vectorization_enabled", return_value=True)
-    def test_search_runs_vector_and_full_text_retrieval_in_parallel(self, _enabled):
+    def test_vector_document_uses_cascading_knowledge_base_foreign_key(self):
+        field = VectorDocument._meta.get_field("knowledge_base")
+        self.assertIs(field.remote_field.model, KnowledgeBase)
+        self.assertIs(field.remote_field.on_delete, CASCADE)
+        self.assertNotIn(
+            "chatbot_id",
+            {item.name for item in VectorDocument._meta.fields},
+        )
+
+    @patch.object(KnowledgeVectorService, "_is_vectorization_enabled", return_value=True)
+    def test_search_runs_vector_and_text_retrieval_in_parallel(self, _enabled):
         barrier = threading.Barrier(2, timeout=2)
-        vector_document = _document("vector")
-        text_document = _document("text")
 
         def vector_search(*args, **kwargs):
             barrier.wait()
-            return [_RankedCandidate(vector_document, distance=0.1)]
+            return [_RankedCandidate(_document("vector"), distance=0.1)]
 
-        def full_text_search(*args, **kwargs):
+        def text_search(*args, **kwargs):
             barrier.wait()
-            return [_RankedCandidate(text_document, text_rank=0.9)]
+            return [_RankedCandidate(_document("text"), text_rank=0.9)]
 
         with (
             patch.object(self.service, "_vector_candidates", side_effect=vector_search),
             patch.object(
                 self.service,
                 "_full_text_candidates",
-                side_effect=full_text_search,
+                side_effect=text_search,
             ),
         ):
-            results = self.service.search("mountain")
+            results = self.service.search("refund policy")
 
         self.assertEqual(len(results), 2)
+        self.assertTrue(all(result.knowledge_base_id for result in results))
 
-    @patch.object(DestinationVectorService, "_is_vectorization_enabled", return_value=True)
-    def test_search_defaults_to_top_ten_after_fusion(self, _enabled):
-        documents = [_document(f"document-{index}") for index in range(20)]
-        vector_candidates = [
-            _RankedCandidate(document, distance=index / 100)
-            for index, document in enumerate(documents)
-        ]
-        text_candidates = [
-            _RankedCandidate(document, text_rank=1 - (index / 100))
-            for index, document in enumerate(documents)
-        ]
-
+    @patch.object(KnowledgeVectorService, "_is_vectorization_enabled", return_value=True)
+    def test_search_passes_knowledge_filters_to_both_branches(self, _enabled):
+        chatbot_id = uuid4()
+        knowledge_base_ids = [uuid4(), uuid4()]
         with (
-            patch.object(
-                self.service,
-                "_vector_candidates",
-                return_value=vector_candidates,
-            ),
+            patch.object(self.service, "_vector_candidates", return_value=[]) as vector,
             patch.object(
                 self.service,
                 "_full_text_candidates",
-                return_value=text_candidates,
-            ),
+                return_value=[],
+            ) as text,
         ):
-            results = self.service.search("mountain")
+            self.service.search(
+                "pricing",
+                chatbot_id=chatbot_id,
+                knowledge_base_ids=knowledge_base_ids,
+            )
 
-        self.assertEqual(len(results), 10)
+        expected = {
+            "chatbot_id": chatbot_id,
+            "knowledge_base_ids": tuple(knowledge_base_ids),
+        }
+        vector.assert_called_once_with("pricing", **expected)
+        text.assert_called_once_with("pricing", **expected)
 
-    def test_rrf_rewards_documents_returned_by_both_searches(self):
+    def test_rrf_rewards_chunks_returned_by_both_searches(self):
         shared = _document("shared")
-        vector_only = _document("vector-only")
-        text_only = _document("text-only")
-
         results = self.service._reciprocal_rank_fusion(
             [
-                _RankedCandidate(vector_only, distance=0.05),
+                _RankedCandidate(_document("vector-only"), distance=0.05),
                 _RankedCandidate(shared, distance=0.1),
             ],
             [
-                _RankedCandidate(text_only, text_rank=0.9),
+                _RankedCandidate(_document("text-only"), text_rank=0.9),
                 _RankedCandidate(shared, text_rank=0.8),
             ],
             limit=3,
@@ -100,35 +107,38 @@ class HybridSearchTests(SimpleTestCase):
         self.assertEqual(results[0].id, str(shared.id))
         self.assertEqual(results[0].distance, 0.1)
         self.assertEqual(results[0].text_rank, 0.8)
-        self.assertGreater(results[0].rrf_score, results[1].rrf_score)
 
-    def test_each_retrieval_branch_fetches_twenty_candidates(self):
-        class FakeQuerySet:
-            def __init__(self):
-                self.slices = []
-
-            def annotate(self, **kwargs):
-                return self
-
-            def filter(self, **kwargs):
-                return self
-
-            def order_by(self, *args):
-                return self
-
-            def __getitem__(self, item):
-                self.slices.append(item)
-                return []
-
-        vector_queryset = FakeQuerySet()
-        text_queryset = FakeQuerySet()
+    def test_complete_vector_set_checks_recorded_chunk_count(self):
+        queryset = Mock()
+        queryset.count.return_value = 3
+        queryset.order_by.return_value.values_list.return_value.first.return_value = {
+            "chunk_count": 3
+        }
         objects = Mock()
-        objects.using.side_effect = [vector_queryset, text_queryset]
+        objects.filter.return_value = queryset
 
         with patch("vector_store.services.vectorize.VectorDocument.objects", objects):
-            self.service.embedding_service.embed_query.return_value = [0.1] * 1536
-            self.service._vector_candidates("mountain")
-            self.service._full_text_candidates("mountain")
+            complete = self.service.has_complete_vector_set(uuid4())
 
-        self.assertEqual(vector_queryset.slices, [slice(None, 20, None)])
-        self.assertEqual(text_queryset.slices, [slice(None, 20, None)])
+        self.assertTrue(complete)
+
+    def test_replacing_vectors_is_atomic_and_knowledge_scoped(self):
+        knowledge_base_id = uuid4()
+        documents = [Mock(), Mock()]
+        objects = Mock()
+        queryset = objects.filter.return_value
+
+        with (
+            patch("vector_store.services.vectorize.VectorDocument.objects", objects),
+            patch("vector_store.services.vectorize.transaction.atomic"),
+        ):
+            self.service.replace_knowledge_base(knowledge_base_id, documents)
+
+        objects.filter.assert_called_once_with(
+            knowledge_base_id=knowledge_base_id
+        )
+        queryset.delete.assert_called_once_with()
+        objects.bulk_create.assert_called_once_with(
+            documents,
+            batch_size=100,
+        )

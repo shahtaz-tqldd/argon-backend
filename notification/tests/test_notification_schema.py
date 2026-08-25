@@ -1,13 +1,21 @@
 import uuid
+from unittest.mock import patch
 
+from asgiref.sync import async_to_sync
+from channels.layers import InMemoryChannelLayer
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase
 
 from notification.api.v1.client.serializers import NotificationSerializer
-from notification.models import Notification, NotificationRecipientType
+from notification.models import (
+    Notification,
+    NotificationRecipientType,
+    NotificationType,
+)
 from notification.services import (
     chatbot_dashboard_group,
     chat_session_dashboard_group,
+    emit_notification,
     global_dashboard_group,
     user_dashboard_group,
     workspace_dashboard_group,
@@ -65,6 +73,9 @@ class NotificationSchemaTests(SimpleTestCase):
         with self.assertRaisesMessage(ValidationError, "require target_id"):
             notification.clean()
 
+    def test_training_complete_is_a_supported_event_type(self):
+        self.assertIn("training_complete", NotificationType.values)
+
 
 class NotificationGroupTests(SimpleTestCase):
     def test_groups_are_stable_for_every_recipient_type(self):
@@ -86,4 +97,38 @@ class NotificationGroupTests(SimpleTestCase):
         self.assertEqual(
             chat_session_dashboard_group(target_id),
             f"notifications.chat_session.{target_id}",
+        )
+
+    def test_training_complete_is_emitted_to_the_chatbot_group(self):
+        chatbot_id = uuid.uuid4()
+        channel_layer = InMemoryChannelLayer()
+        channel_name = async_to_sync(channel_layer.new_channel)()
+        async_to_sync(channel_layer.group_add)(
+            chatbot_dashboard_group(chatbot_id),
+            channel_name,
+        )
+        notification = Notification(
+            id=uuid.uuid4(),
+            recipient_type=NotificationRecipientType.CHATBOT,
+            chatbot_id=chatbot_id,
+            notification_type=NotificationType.TRAINING_COMPLETE,
+            title="Knowledge training complete",
+            metadata={"knowledge_base_id": str(uuid.uuid4())},
+        )
+
+        with patch(
+            "notification.services.send_notification.get_channel_layer",
+            return_value=channel_layer,
+        ):
+            emit_notification(notification)
+
+        event = async_to_sync(channel_layer.receive)(channel_name)
+        self.assertEqual(event["type"], "notification.created")
+        self.assertEqual(
+            event["notification"]["notification_type"],
+            "training_complete",
+        )
+        self.assertEqual(
+            event["notification"]["event"],
+            "training_complete",
         )

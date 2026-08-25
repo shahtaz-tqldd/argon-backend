@@ -15,7 +15,6 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       ADK_DB_URL: postgresql+asyncpg://${DB_USER:-argon_db_owner}:${DB_PASSWORD:-argon_db_password}@postgres:5432/adk_session_db
-      VECTOR_DB_URL: postgresql://${VECTOR_DB_USER:-argon_db_owner}:${VECTOR_DB_PASSWORD:-argon_db_password}@postgres:5432/${VECTOR_DB_NAME:-argon_vector_db}
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
     volumes:
@@ -42,7 +41,6 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       ADK_DB_URL: postgresql+asyncpg://${DB_USER:-argon_db_owner}:${DB_PASSWORD:-argon_db_password}@postgres:5432/adk_session_db
-      VECTOR_DB_URL: postgresql://${VECTOR_DB_USER:-argon_db_owner}:${VECTOR_DB_PASSWORD:-argon_db_password}@postgres:5432/${VECTOR_DB_NAME:-argon_vector_db}
       DJANGO_CREATE_SUPERUSER: "0"
       DJANGO_WAIT_FOR_MIGRATIONS: "1"
       CELERY_BROKER_URL: redis://redis:6379/0
@@ -71,7 +69,6 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       ADK_DB_URL: postgresql+asyncpg://${DB_USER:-argon_db_owner}:${DB_PASSWORD:-argon_db_password}@postgres:5432/adk_session_db
-      VECTOR_DB_URL: postgresql://${VECTOR_DB_USER:-argon_db_owner}:${VECTOR_DB_PASSWORD:-argon_db_password}@postgres:5432/${VECTOR_DB_NAME:-argon_vector_db}
       DJANGO_CREATE_SUPERUSER: "0"
       DJANGO_WAIT_FOR_MIGRATIONS: "1"
       CELERY_BROKER_URL: redis://redis:6379/0
@@ -98,7 +95,6 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       ADK_DB_URL: postgresql+asyncpg://${DB_USER:-argon_db_owner}:${DB_PASSWORD:-argon_db_password}@postgres:5432/adk_session_db
-      VECTOR_DB_URL: postgresql://${VECTOR_DB_USER:-argon_db_owner}:${VECTOR_DB_PASSWORD:-argon_db_password}@postgres:5432/${VECTOR_DB_NAME:-argon_vector_db}
       DJANGO_CREATE_SUPERUSER: "0"
       DJANGO_WAIT_FOR_MIGRATIONS: "1"
       CELERY_BROKER_URL: redis://redis:6379/0
@@ -118,7 +114,7 @@ services:
       POSTGRES_DB: ${DB_NAME:-argon_db}
       POSTGRES_USER: ${DB_USER:-argon_db_owner}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-argon_db_password}
-      POSTGRES_ADDITIONAL_DATABASES: adk_session_db,${VECTOR_DB_NAME:-argon_vector_db}
+      POSTGRES_ADDITIONAL_DATABASES: adk_session_db
     volumes:
       - argon_db_data:/var/lib/postgresql/data
       - ./postgres/init-additional-databases.sh:/docker-entrypoint-initdb.d/10-create-additional-databases.sh:ro

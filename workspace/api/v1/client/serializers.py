@@ -1,8 +1,13 @@
+from uuid import uuid4
+
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
 from rest_framework import serializers
 
+from app.services.r2 import delete_image, schedule_delete_image, upload_image
+from app.utils.storage_fields import R2ImageField
 from workspace.models import (
     Workspace,
     WorkspaceInvitation,
@@ -38,6 +43,12 @@ class WorkspaceOwnerSerializer(serializers.ModelSerializer):
 
 
 class WorkspaceBaseSerializer(serializers.ModelSerializer):
+    logo = R2ImageField(required=False)
+    clear_logo = serializers.BooleanField(
+        write_only=True,
+        required=False,
+        default=False,
+    )
     owner = WorkspaceOwnerSerializer(read_only=True)
     member_count = serializers.SerializerMethodField()
     current_user_role = serializers.SerializerMethodField()
@@ -49,6 +60,7 @@ class WorkspaceBaseSerializer(serializers.ModelSerializer):
             "name",
             "slug",
             "logo",
+            "clear_logo",
             "industry",
             "owner",
             "member_count",
@@ -90,25 +102,73 @@ class WorkspaceBaseSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("This field is required.")
         return value
 
-    @transaction.atomic
+    def validate(self, attrs):
+        if attrs.get("logo") and attrs.get("clear_logo"):
+            raise serializers.ValidationError(
+                {"clear_logo": "Cannot clear and replace the logo together."}
+            )
+        return attrs
+
     def create(self, validated_data):
+        logo = validated_data.pop("logo", None)
+        validated_data.pop("clear_logo", False)
+        upload = None
+        if logo is not None:
+            upload = upload_image(
+                logo,
+                folder=f"{settings.R2_IMAGES_PREFIX}/workspaces",
+                public_id=f"workspace-{uuid4().hex}",
+            )
+            validated_data["logo"] = upload["url"]
+
         user = self.context["request"].user
-        workspace = Workspace.objects.create(
-            owner=user,
-            created_by=user,
-            **validated_data,
-        )
-        WorkspaceUser.objects.create(
-            workspace=workspace,
-            user=user,
-            role=WorkspaceRole.ADMIN,
-            created_by=user,
-        )
+        try:
+            with transaction.atomic():
+                workspace = Workspace.objects.create(
+                    owner=user,
+                    created_by=user,
+                    **validated_data,
+                )
+                WorkspaceUser.objects.create(
+                    workspace=workspace,
+                    user=user,
+                    role=WorkspaceRole.ADMIN,
+                    created_by=user,
+                )
+        except Exception:
+            if upload is not None:
+                delete_image(public_id=upload["key"])
+            raise
         return workspace
 
     def update(self, instance, validated_data):
+        logo = validated_data.pop("logo", None)
+        clear_logo = validated_data.pop("clear_logo", False)
+        previous_logo_url = instance.logo
+        upload = None
+
+        if logo is not None:
+            upload = upload_image(
+                logo,
+                folder=f"{settings.R2_IMAGES_PREFIX}/workspaces",
+                public_id=f"workspace-{instance.pk}-{uuid4().hex}",
+            )
+            validated_data["logo"] = upload["url"]
+        elif clear_logo:
+            validated_data["logo"] = ""
+
         instance.updated_by = self.context["request"].user
-        return super().update(instance, validated_data)
+        try:
+            with transaction.atomic():
+                instance = super().update(instance, validated_data)
+        except Exception:
+            if upload is not None:
+                delete_image(public_id=upload["key"])
+            raise
+
+        if previous_logo_url and previous_logo_url != instance.logo:
+            schedule_delete_image(image_url=previous_logo_url)
+        return instance
 
 
 class WorkspaceListSerializer(WorkspaceBaseSerializer):

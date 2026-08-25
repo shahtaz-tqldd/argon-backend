@@ -26,6 +26,7 @@ class NotificationType(models.TextChoices):
     SESSION_ENDED = "session_ended", "Session ended"
     SESSION_STARTED = "session_started", "Session started"
     AI_NOTIFICATION = "ai_notification", "AI notification"
+    TRAINING_COMPLETE = "training_complete", "Training complete"
 
 
 class Notification(BaseModel):

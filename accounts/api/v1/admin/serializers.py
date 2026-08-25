@@ -10,7 +10,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.choices import AccountStatus
 from accounts.models import UserProfile
-from app.services.cloudinary import delete_image, upload_image
+from app.services.r2 import delete_image, schedule_delete_image, upload_image
 
 User = get_user_model()
 
@@ -117,21 +117,26 @@ class UpdateAdminInfoSerializer(serializers.Serializer):
         if avatar is not None:
             upload = upload_image(
                 avatar,
-                folder=f"{settings.CLOUDINARY_FOLDER}/admins",
+                folder=f"{settings.R2_IMAGES_PREFIX}/users",
                 public_id=f"admin-{instance.pk}-{uuid4().hex}",
             )
             profile.avatar_url = upload["url"]
         elif validated_data.get("clear_avatar"):
             profile.avatar_url = ""
 
-        with transaction.atomic():
-            if "name" in validated_data:
-                instance.save(update_fields=["name", "updated_at"])
-            if profile.avatar_url != previous_avatar_url:
-                profile.save(update_fields=["avatar_url"])
+        try:
+            with transaction.atomic():
+                if "name" in validated_data:
+                    instance.save(update_fields=["name", "updated_at"])
+                if profile.avatar_url != previous_avatar_url:
+                    profile.save(update_fields=["avatar_url"])
+        except Exception:
+            if avatar is not None:
+                delete_image(public_id=upload["key"])
+            raise
 
         if previous_avatar_url and previous_avatar_url != profile.avatar_url:
-            delete_image(image_url=previous_avatar_url)
+            schedule_delete_image(image_url=previous_avatar_url)
 
         return instance
 

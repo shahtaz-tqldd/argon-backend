@@ -26,7 +26,7 @@ from accounts.services.verification import (
     verify_email_otp,
 )
 from app.utils.validators import validate_timezone_name
-from app.services.cloudinary import delete_image, upload_image
+from app.services.r2 import delete_image, schedule_delete_image, upload_image
 
 User = get_user_model()
 
@@ -159,7 +159,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         if profile_picture is not None:
             upload = upload_image(
                 profile_picture,
-                folder=f"{settings.CLOUDINARY_FOLDER}/users",
+                folder=f"{settings.R2_IMAGES_PREFIX}/users",
                 public_id=f"user-{instance.pk}-{uuid4().hex}",
             )
             profile.avatar_url = upload["url"]
@@ -168,14 +168,19 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             profile.avatar_url = ""
             changed_profile_fields.append("avatar_url")
 
-        with transaction.atomic():
-            if name_changed:
-                instance.save(update_fields=["name", "updated_at"])
-            if changed_profile_fields:
-                profile.save(update_fields=sorted(set(changed_profile_fields)))
+        try:
+            with transaction.atomic():
+                if name_changed:
+                    instance.save(update_fields=["name", "updated_at"])
+                if changed_profile_fields:
+                    profile.save(update_fields=sorted(set(changed_profile_fields)))
+        except Exception:
+            if profile_picture is not None:
+                delete_image(public_id=upload["key"])
+            raise
 
         if previous_avatar_url and previous_avatar_url != profile.avatar_url:
-            delete_image(image_url=previous_avatar_url)
+            schedule_delete_image(image_url=previous_avatar_url)
 
         return instance
 

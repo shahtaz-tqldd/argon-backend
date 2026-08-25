@@ -15,6 +15,7 @@ from accounts.api.v1.client.serializers import (
     UserSerializer,
     build_auth_token_payload,
 )
+from app.services.r2 import schedule_delete_image
 from app.utils.pagination import CustomPagination
 from app.utils.permission import IsWorkspaceUser
 from app.utils.response import APIResponse
@@ -265,11 +266,14 @@ class WorkspaceDeleteView(WorkspaceObjectMixin, GenericAPIView):
 
     def delete(self, request, *args, **kwargs):
         workspace = self.get_workspace()
+        previous_logo_url = workspace.logo
         workspace.is_active = False
+        workspace.logo = ""
         workspace.updated_by = request.user
         workspace.save(
-            update_fields=["is_active", "updated_by", "updated_at"]
+            update_fields=["is_active", "logo", "updated_by", "updated_at"]
         )
+        schedule_delete_image(image_url=previous_logo_url)
         return APIResponse.success(
             message="Workspace deleted successfully.",
         )

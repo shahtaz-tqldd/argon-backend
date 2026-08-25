@@ -10,6 +10,7 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny
 
 from accounts.api.v1.client.serializers import build_auth_token_payload
+from app.services.r2 import schedule_delete_image
 from app.utils.pagination import CustomPagination
 from app.utils.permission import IsChatbotUser
 from app.utils.response import APIResponse
@@ -246,17 +247,21 @@ class ChatbotDeleteView(ChatbotObjectMixin, GenericAPIView):
 
     def delete(self, request, *args, **kwargs):
         chatbot = self.get_chatbot()
+        previous_logo_url = chatbot.logo
         chatbot.is_deleted = True
+        chatbot.logo = ""
         chatbot.status = ChatbotStatusTypes.DISABLED
         chatbot.updated_by = request.user
         chatbot.save(
             update_fields=[
                 "is_deleted",
+                "logo",
                 "status",
                 "updated_by",
                 "updated_at",
             ]
         )
+        schedule_delete_image(image_url=previous_logo_url)
         return APIResponse.success(
             message="Chatbot deleted successfully.",
         )

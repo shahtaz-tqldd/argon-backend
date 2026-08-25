@@ -6,7 +6,7 @@ from django.db.models.functions import Lower
 from django.utils import timezone
 
 from app.base.models import BaseModel
-from promotion.choices import DiscountDuration, DiscountType
+from coupon.choices import DiscountDuration, DiscountType
 
 
 class Discount(BaseModel):

@@ -10,13 +10,11 @@ fi
 
 if [[ "${DJANGO_RUN_MIGRATIONS:-0}" == "1" ]]; then
   python manage.py migrate --noinput
-  python manage.py migrate --database=vector --noinput
 fi
 
 if [[ "${DJANGO_WAIT_FOR_MIGRATIONS:-0}" == "1" ]]; then
   echo "Waiting for Django migrations to be applied..."
-  until python manage.py migrate --check --noinput >/dev/null 2>&1 \
-    && python manage.py migrate --database=vector --check --noinput >/dev/null 2>&1; do
+  until python manage.py migrate --check --noinput >/dev/null 2>&1; do
     sleep 2
   done
 fi

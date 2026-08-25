@@ -48,5 +48,6 @@ chatbot_team = [
 
 urlpatterns = [
     path("team/", include(chatbot_team)),
+    path("knowledge/", include("knowledge.api.v1.client.urls")),
     path("", include(chatbot)),
 ]

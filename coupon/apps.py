@@ -1,7 +1,7 @@
 from django.apps import AppConfig
 
 
-class PromotionConfig(AppConfig):
+class CouponConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
-    name = "promotion"
+    name = "coupon"
     verbose_name = "Coupons and Discounts"

@@ -1,10 +1,14 @@
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from rest_framework import serializers
 
+from app.services.r2 import delete_image, schedule_delete_image, upload_image
+from app.utils.storage_fields import R2ImageField
 from chatbot.models import Chatbot, ChatbotInvitation, ChatbotUser
 from chatbot.services.invitations import (
     InvalidChatbotInvitation,
@@ -64,6 +68,12 @@ class WorkspaceReferenceField(serializers.RelatedField):
 
 
 class ChatbotBaseSerializer(serializers.ModelSerializer):
+    logo = R2ImageField(required=False)
+    clear_logo = serializers.BooleanField(
+        write_only=True,
+        required=False,
+        default=False,
+    )
     workspace = WorkspaceReferenceField(
         queryset=Workspace.objects.filter(is_active=True),
         required=False,
@@ -95,6 +105,7 @@ class ChatbotBaseSerializer(serializers.ModelSerializer):
             "human_handoff_enabled",
             "other_settings",
             "logo",
+            "clear_logo",
             "status",
             "member_count",
             "current_user_role",
@@ -125,6 +136,11 @@ class ChatbotBaseSerializer(serializers.ModelSerializer):
         return membership.role if membership else None
 
     def validate(self, attrs):
+        if attrs.get("logo") and attrs.get("clear_logo"):
+            raise serializers.ValidationError(
+                {"clear_logo": "Cannot clear and replace the logo together."}
+            )
+
         workspace = attrs.pop("workspace", None)
         workspace_id = attrs.pop("workspace_id", None)
         workspace_slug = attrs.pop("workspace_slug", None)
@@ -190,6 +206,17 @@ class ChatbotBaseSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         workspace = validated_data.pop("workspace")
+        logo = validated_data.pop("logo", None)
+        validated_data.pop("clear_logo", False)
+        upload = None
+        if logo is not None:
+            upload = upload_image(
+                logo,
+                folder=f"{settings.R2_IMAGES_PREFIX}/chatbots",
+                public_id=f"chatbot-{uuid4().hex}",
+            )
+            validated_data["logo"] = upload["url"]
+
         try:
             return create_chatbot(
                 workspace=workspace,
@@ -197,15 +224,45 @@ class ChatbotBaseSerializer(serializers.ModelSerializer):
                 **validated_data,
             )
         except (DjangoValidationError, ValueError) as exc:
+            if upload is not None:
+                delete_image(public_id=upload["key"])
             message = exc.messages[0] if hasattr(exc, "messages") else str(exc)
             raise serializers.ValidationError({"non_field_errors": message}) from exc
+        except Exception:
+            if upload is not None:
+                delete_image(public_id=upload["key"])
+            raise
 
     def update(self, instance, validated_data):
+        logo = validated_data.pop("logo", None)
+        clear_logo = validated_data.pop("clear_logo", False)
+        previous_logo_url = instance.logo
+        upload = None
+
+        if logo is not None:
+            upload = upload_image(
+                logo,
+                folder=f"{settings.R2_IMAGES_PREFIX}/chatbots",
+                public_id=f"chatbot-{instance.pk}-{uuid4().hex}",
+            )
+            validated_data["logo"] = upload["url"]
+        elif clear_logo:
+            validated_data["logo"] = ""
+
         instance.updated_by = self.context["request"].user
-        for field, value in validated_data.items():
-            setattr(instance, field, value)
-        update_fields = [*validated_data.keys(), "updated_by", "updated_at"]
-        instance.save(update_fields=update_fields)
+        try:
+            with transaction.atomic():
+                for field, value in validated_data.items():
+                    setattr(instance, field, value)
+                update_fields = [*validated_data.keys(), "updated_by", "updated_at"]
+                instance.save(update_fields=update_fields)
+        except Exception:
+            if upload is not None:
+                delete_image(public_id=upload["key"])
+            raise
+
+        if previous_logo_url and previous_logo_url != instance.logo:
+            schedule_delete_image(image_url=previous_logo_url)
         return instance
 
 

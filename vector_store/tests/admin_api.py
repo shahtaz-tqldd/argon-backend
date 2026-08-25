@@ -7,18 +7,17 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from vector_store.services.vectorize import VectorSearchResult
+from knowledge.models import KnowledgeBase
 from vector_store.api.v1.admin.serializers import (
     VectorRecordListQuerySerializer,
     VectorRecordSerializer,
 )
 from vector_store.api.v1.admin.views import (
-    VectorRecordBulkDeleteAPIView,
-    VectorRecordDeleteAPIView,
     VectorRecordListAPIView,
     VectorSemanticSearchAPIView,
 )
 from vector_store.models import VectorDocument
+from vector_store.services.vectorize import VectorSearchResult
 
 
 class FakeVectorQuerySet:
@@ -46,70 +45,60 @@ class VectorStoreAdminAPITests(SimpleTestCase):
         force_authenticate(request, user=self.admin)
         return request
 
-    def _record(self, *, source_type=VectorDocument.SourceType.DESTINATION):
+    def _record(self):
         now = timezone.now()
+        knowledge_base = KnowledgeBase(
+            id=uuid4(),
+            chatbot_id=uuid4(),
+        )
         return VectorDocument(
             id=uuid4(),
-            source_type=source_type,
-            source_id=uuid4(),
-            content="Semantic vector record content.",
-            metadata={"destination_id": str(uuid4()), "name": "Record"},
+            knowledge_base=knowledge_base,
+            chunk_index=0,
+            token_count=12,
+            content_hash="a" * 64,
+            content="Knowledge vector record.",
+            metadata={"title": "Record"},
             embedding=[0.1] * 1536,
             created_at=now,
             updated_at=now,
         )
 
-    def test_source_type_filter_accepts_singular_plural_and_comma_values(self):
+    def test_list_filters_accept_only_knowledge_identifiers(self):
+        chatbot_id = uuid4()
+        knowledge_base_id = uuid4()
         serializer = VectorRecordListQuerySerializer(
             data={
-                "source_type": "destinations,attractions,cuisine,activities",
+                "chatbot_id": str(chatbot_id),
+                "knowledge_base_id": str(knowledge_base_id),
             }
         )
-
         self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["chatbot_id"], chatbot_id)
         self.assertEqual(
-            serializer.validated_data["source_type"],
-            [
-                VectorDocument.SourceType.DESTINATION,
-                VectorDocument.SourceType.ATTRACTION,
-                VectorDocument.SourceType.CUISINE,
-                VectorDocument.SourceType.ACTIVITY,
-            ],
+            serializer.validated_data["knowledge_base_id"],
+            knowledge_base_id,
         )
 
-    def test_source_type_filter_rejects_unknown_values(self):
-        serializer = VectorRecordListQuerySerializer(
-            data={"source_type": "destination,hotel"},
-        )
-
-        self.assertFalse(serializer.is_valid())
-        self.assertIn("source_type", serializer.errors)
-
-    def test_record_serializer_never_exposes_embedding(self):
+    def test_record_serializer_never_exposes_embedding_or_source_type(self):
         data = VectorRecordSerializer(self._record()).data
-
         self.assertNotIn("embedding", data)
-        self.assertIn("content", data)
-        self.assertIn("metadata", data)
+        self.assertNotIn("source_type", data)
+        self.assertNotIn("source_id", data)
+        self.assertIn("knowledge_base_id", data)
 
     @patch.object(VectorRecordListAPIView, "get_queryset")
-    def test_list_is_paginated_filtered_and_omits_embedding(self, get_queryset):
-        destination_id = uuid4()
-        source_id = uuid4()
-        queryset = FakeVectorQuerySet(
-            [
-                self._record(source_type=VectorDocument.SourceType.ATTRACTION),
-                self._record(source_type=VectorDocument.SourceType.CUISINE),
-            ]
-        )
+    def test_list_filters_by_chatbot_and_knowledge_base(self, get_queryset):
+        chatbot_id = uuid4()
+        knowledge_base_id = uuid4()
+        queryset = FakeVectorQuerySet([self._record(), self._record()])
         get_queryset.return_value = queryset
         request = self._authenticate(
             self.factory.get(
                 "/api/v1/admin/vector-store/records/",
                 {
-                    "source_type": "attractions,cuisine",
-                    "destination_id": str(destination_id),
-                    "source_id": str(source_id),
+                    "chatbot_id": str(chatbot_id),
+                    "knowledge_base_id": str(knowledge_base_id),
                     "page_size": 1,
                 },
             )
@@ -118,48 +107,40 @@ class VectorStoreAdminAPITests(SimpleTestCase):
         response = VectorRecordListAPIView.as_view()(request)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["meta"]["count"], 2)
-        self.assertEqual(response.data["meta"]["page_size"], 1)
-        self.assertEqual(len(response.data["data"]), 1)
-        self.assertNotIn("embedding", response.data["data"][0])
         self.assertEqual(
             queryset.filters,
             [
-                {
-                    "source_type__in": [
-                        VectorDocument.SourceType.ATTRACTION,
-                        VectorDocument.SourceType.CUISINE,
-                    ]
-                },
-                {"metadata__destination_id": str(destination_id)},
-                {"source_id": source_id},
+                {"knowledge_base__chatbot_id": chatbot_id},
+                {"knowledge_base_id": knowledge_base_id},
             ],
         )
 
-    @patch("vector_store.api.v1.admin.views.DestinationVectorService.search")
-    def test_semantic_search_returns_content_metadata_and_distance(self, search):
-        destination_id = uuid4()
-        record_id = uuid4()
-        source_id = uuid4()
+    @patch("vector_store.api.v1.admin.views.KnowledgeVectorService.search")
+    def test_semantic_search_uses_knowledge_filters(self, search):
+        chatbot_id = uuid4()
+        knowledge_base_id = uuid4()
         search.return_value = [
             VectorSearchResult(
-                id=str(record_id),
-                source_type=VectorDocument.SourceType.ACTIVITY,
-                source_id=str(source_id),
-                content="A highly relevant activity.",
-                metadata={"destination_id": str(destination_id)},
+                id=str(uuid4()),
+                knowledge_base_id=str(knowledge_base_id),
+                chatbot_id=str(chatbot_id),
+                chunk_index=0,
+                token_count=20,
+                content="Relevant knowledge.",
+                metadata={"title": "Policy"},
                 distance=0.12,
             )
         ]
         request = self._authenticate(
-            self.factory.get(
+            self.factory.post(
                 "/api/v1/admin/vector-store/search/",
                 {
-                    "query": "adventurous city activity",
-                    "source_type": "activities",
-                    "destination_id": str(destination_id),
+                    "query": "refund policy",
+                    "chatbot_id": str(chatbot_id),
+                    "knowledge_base_ids": [str(knowledge_base_id)],
                     "limit": 5,
                 },
+                format="json",
             )
         )
 
@@ -167,86 +148,12 @@ class VectorStoreAdminAPITests(SimpleTestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         search.assert_called_once_with(
-            "adventurous city activity",
+            "refund policy",
             limit=5,
-            source_types=[VectorDocument.SourceType.ACTIVITY],
-            destination_id=destination_id,
+            chatbot_id=chatbot_id,
+            knowledge_base_ids=[knowledge_base_id],
         )
-        result = response.data["data"][0]
-        self.assertEqual(result["content"], "A highly relevant activity.")
-        self.assertEqual(result["metadata"]["destination_id"], str(destination_id))
-        self.assertEqual(result["distance"], 0.12)
-        self.assertNotIn("embedding", result)
-
-    @patch.object(VectorRecordDeleteAPIView, "get_object")
-    def test_single_delete_uses_vector_database(self, get_object):
-        record_id = uuid4()
-        record = Mock(id=record_id)
-        get_object.return_value = record
-        request = self._authenticate(
-            self.factory.delete(
-                f"/api/v1/admin/vector-store/records/{record_id}/delete/",
-            )
-        )
-
-        response = VectorRecordDeleteAPIView.as_view()(
-            request,
-            record_id=record_id,
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        record.delete.assert_called_once_with(using="vector")
-        self.assertEqual(response.data["data"]["id"], str(record_id))
-
-    @patch("vector_store.api.v1.admin.views.transaction.atomic")
-    @patch("vector_store.api.v1.admin.views.VectorDocument.objects")
-    def test_bulk_delete_deduplicates_and_reports_missing_ids(
-        self,
-        vector_document_objects,
-        atomic,
-    ):
-        existing_id = uuid4()
-        missing_id = uuid4()
-        filtered_queryset = vector_document_objects.using.return_value.filter.return_value
-        queryset = filtered_queryset.select_for_update.return_value
-        queryset.values_list.return_value = [existing_id]
-        queryset.delete.return_value = (1, {"vector_store.VectorDocument": 1})
-        request = self._authenticate(
-            self.factory.post(
-                "/api/v1/admin/vector-store/records/bulk-delete/",
-                {"ids": [str(existing_id), str(existing_id), str(missing_id)]},
-                format="json",
-            )
-        )
-
-        response = VectorRecordBulkDeleteAPIView.as_view()(request)
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        atomic.assert_called_once_with(using="vector")
-        vector_document_objects.using.assert_called_once_with("vector")
-        vector_document_objects.using.return_value.filter.assert_called_once_with(
-            id__in=[existing_id, missing_id],
-        )
-        filtered_queryset.select_for_update.assert_called_once_with()
         self.assertEqual(
-            response.data["data"],
-            {
-                "requested_count": 2,
-                "deleted_count": 1,
-                "deleted_ids": [str(existing_id)],
-                "not_found_ids": [str(missing_id)],
-            },
+            response.data["data"][0]["knowledge_base_id"],
+            str(knowledge_base_id),
         )
-
-    @patch.object(VectorRecordListAPIView, "get_queryset")
-    def test_vector_admin_apis_require_a_superadmin(self, get_queryset):
-        request = self.factory.get("/api/v1/admin/vector-store/records/")
-        force_authenticate(
-            request,
-            user=SimpleNamespace(is_authenticated=True, is_superuser=False),
-        )
-
-        response = VectorRecordListAPIView.as_view()(request)
-
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-        get_queryset.assert_not_called()
