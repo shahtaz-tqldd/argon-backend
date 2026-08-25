@@ -86,6 +86,8 @@ class ChatbotBaseSerializer(serializers.ModelSerializer):
             "welcome_message",
             "fallback_message",
             "instructions",
+            "escalation_rule",
+            "never_answer",
             "language",
             "timezone",
             "ai_enabled",

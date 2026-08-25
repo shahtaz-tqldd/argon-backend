@@ -49,6 +49,8 @@ class Chatbot(BaseModel):
     welcome_message = models.TextField(blank=True)
     fallback_message = models.TextField(blank=True)
     instructions = models.TextField(blank=True)
+    escalation_rule = models.TextField(blank=True)
+    never_answer = models.TextField(blank=True)
 
     language = models.CharField(max_length=20, default="en")
     timezone = models.CharField(

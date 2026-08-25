@@ -60,6 +60,8 @@ class ChatbotClientAPITests(APITestCase):
                 "welcome_message": "Welcome!",
                 "fallback_message": "Please try again.",
                 "instructions": "Be concise.",
+                "escalation_rule": "Escalate refund requests.",
+                "never_answer": "Do not provide legal advice.",
                 "language": "bn",
                 "timezone": "Asia/Dhaka",
                 "ai_enabled": False,
@@ -75,6 +77,16 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(chatbot.welcome_message, "Welcome!")
         self.assertEqual(chatbot.fallback_message, "Please try again.")
         self.assertEqual(chatbot.instructions, "Be concise.")
+        self.assertEqual(chatbot.escalation_rule, "Escalate refund requests.")
+        self.assertEqual(chatbot.never_answer, "Do not provide legal advice.")
+        self.assertEqual(
+            response.data["data"]["escalation_rule"],
+            "Escalate refund requests.",
+        )
+        self.assertEqual(
+            response.data["data"]["never_answer"],
+            "Do not provide legal advice.",
+        )
         self.assertEqual(chatbot.language, "bn")
         self.assertEqual(chatbot.timezone, "Asia/Dhaka")
         self.assertFalse(chatbot.ai_enabled)
