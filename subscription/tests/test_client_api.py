@@ -34,7 +34,7 @@ class SubscriptionClientAPITests(APITestCase):
         )
         self.chatbot = Chatbot.objects.create(
             workspace=self.workspace,
-            name="Support Bot",
+            chatbot_name="Support Bot",
             created_by=self.user,
             updated_by=self.user,
         )

@@ -13,6 +13,7 @@ from knowledge.utils.choices import (
     KnowledgeTrainingStageTypes,
     StatusTypes,
 )
+from vector_store.models import VectorDocument
 from workspace.services import ensure_personal_workspace
 
 
@@ -28,7 +29,7 @@ class KnowledgeClientAPITests(APITestCase):
         self.workspace = ensure_personal_workspace(self.owner)
         self.chatbot = create_chatbot(
             workspace=self.workspace,
-            name="Knowledge Bot",
+            chatbot_name="Knowledge Bot",
             created_by=self.owner,
         )
         self.client.force_authenticate(self.owner)
@@ -88,6 +89,76 @@ class KnowledgeClientAPITests(APITestCase):
         self.assertEqual(len(response.data["data"]), 1)
         self.assertEqual(response.data["meta"]["count"], 2)
         self.assertEqual(response.data["meta"]["num_pages"], 2)
+        self.assertEqual(
+            set(response.data["data"][0]),
+            {
+                "id",
+                "name",
+                "url",
+                "source_type",
+                "file_type",
+                "file_size",
+                "is_enabled",
+                "status",
+                "last_crawled_at",
+                "processed_at",
+                "created_at",
+                "updated_at",
+            },
+        )
+
+    def test_usage_returns_chatbot_totals_and_static_limits(self):
+        first_file = self.create_knowledge(
+            source_type=KnowledgeSourceTypes.FILE,
+            file_size=10,
+        )
+        self.create_knowledge(
+            source_type=KnowledgeSourceTypes.FILE,
+            file_size=15,
+        )
+        other_chatbot = create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Other Knowledge Bot",
+            created_by=self.owner,
+        )
+        other_file = KnowledgeBase.objects.create(
+            chatbot=other_chatbot,
+            source_type=KnowledgeSourceTypes.FILE,
+            title="Other source",
+            original_filename="other.txt",
+            file_type="txt",
+            file_key="knowledge/other.txt",
+            file_size=100,
+            created_by=self.owner,
+            updated_by=self.owner,
+        )
+        for knowledge_base, chunk_count in ((first_file, 2), (other_file, 1)):
+            for chunk_index in range(chunk_count):
+                VectorDocument.objects.create(
+                    knowledge_base=knowledge_base,
+                    chunk_index=chunk_index,
+                    token_count=3,
+                    content="Knowledge chunk.",
+                    metadata={"chunk_count": chunk_count},
+                    embedding=[0.1] * 1536,
+                )
+
+        response = self.client.get(
+            reverse("knowledge-usage"),
+            {"chatbot": self.chatbot.slug},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["data"],
+            {
+                "total_chunks": 2,
+                "chunk_limit": 500,
+                "total_file_size_bytes": 25,
+                "file_size_limit_bytes": 25 * 1024 * 1024,
+                "file_size_limit_mb": 25,
+            },
+        )
 
     def test_details_uses_knowledge_base_id_query_parameter(self):
         source = self.create_knowledge()
@@ -117,6 +188,39 @@ class KnowledgeClientAPITests(APITestCase):
         self.assertEqual(source.text_content, "Replacement custom knowledge.")
         log = source.training_logs.get()
         self.assertTrue(log.force_retrain)
+
+    @patch("knowledge.tasks.train_knowledge_base.delay")
+    def test_metadata_update_renames_and_disables_without_retraining(self, delay):
+        api_types = {
+            KnowledgeSourceTypes.FILE: "file",
+            KnowledgeSourceTypes.WEBSITE: "url",
+            KnowledgeSourceTypes.TEXT: "custom",
+        }
+
+        for source_type, api_type in api_types.items():
+            with self.subTest(source_type=source_type):
+                source = self.create_knowledge(
+                    source_type=source_type,
+                    status=StatusTypes.READY,
+                )
+
+                response = self.client.patch(
+                    reverse("knowledge-update"),
+                    {"title": "Renamed source", "is_enabled": False},
+                    format="json",
+                    query_params={
+                        "knowledge_base_id": source.id,
+                        "type": api_type,
+                    },
+                )
+
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                source.refresh_from_db()
+                self.assertEqual(source.title, "Renamed source")
+                self.assertFalse(source.is_enabled)
+                self.assertFalse(source.training_logs.exists())
+
+        delay.assert_not_called()
 
     @patch("knowledge.tasks.train_knowledge_base.delay")
     def test_file_update_retries_only_a_failed_training(self, delay):

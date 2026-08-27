@@ -9,7 +9,13 @@ from rest_framework import serializers
 
 from app.services.r2 import delete_image, schedule_delete_image, upload_image
 from app.utils.storage_fields import R2ImageField
-from chatbot.models import Chatbot, ChatbotInvitation, ChatbotUser
+from chatbot.models import (
+    Chatbot,
+    ChatbotAllowedOrigin,
+    ChatbotInvitation,
+    ChatbotUser,
+    ChatbotWidgetSettings,
+)
 from chatbot.services.invitations import (
     InvalidChatbotInvitation,
     accept_chatbot_invitation,
@@ -22,7 +28,10 @@ from chatbot.utils.permissions import (
     default_chatbot_user_permissions,
     normalize_chatbot_permission_codes,
 )
-from chatbot.utils.validation import validate_unique_chatbot_name
+from chatbot.utils.validation import (
+    normalize_widget_origin,
+    validate_unique_chatbot_name,
+)
 from workspace.models import Workspace, WorkspaceUser
 
 User = get_user_model()
@@ -90,7 +99,8 @@ class ChatbotBaseSerializer(serializers.ModelSerializer):
             "workspace",
             "workspace_id",
             "workspace_slug",
-            "name",
+            "chatbot_name",
+            "business_name",
             "description",
             "slug",
             "welcome_message",
@@ -187,21 +197,23 @@ class ChatbotBaseSerializer(serializers.ModelSerializer):
                 )
             attrs["workspace"] = workspace
 
-        if "name" in attrs:
-            name = attrs["name"].strip()
-            if not name:
-                raise serializers.ValidationError({"name": "This field is required."})
+        if "chatbot_name" in attrs:
+            chatbot_name = attrs["chatbot_name"].strip()
+            if not chatbot_name:
+                raise serializers.ValidationError(
+                    {"chatbot_name": "This field is required."}
+                )
             try:
                 validate_unique_chatbot_name(
                     workspace=workspace,
-                    name=name,
+                    chatbot_name=chatbot_name,
                     chatbot_id=self.instance.pk if self.instance else None,
                 )
             except DjangoValidationError as exc:
                 raise serializers.ValidationError(
-                    {"name": exc.messages[0]}
+                    {"chatbot_name": exc.messages[0]}
                 ) from exc
-            attrs["name"] = name
+            attrs["chatbot_name"] = chatbot_name
         return attrs
 
     def create(self, validated_data):
@@ -278,12 +290,302 @@ class ChatbotDetailSerializer(ChatbotBaseSerializer):
     """Serialize the complete details of a chatbot."""
 
 
-class ChatbotShortDetailSerializer(ChatbotBaseSerializer):
-    """Serialize the short-detail endpoint.
 
-    This currently preserves the existing response contract. Its dedicated class
-    allows the short representation to evolve without affecting other endpoints.
-    """
+class ChatbotWidgetSettingsSerializer(serializers.ModelSerializer):
+    """Serialize the configuration used to render a chatbot widget."""
+
+    class Meta:
+        model = ChatbotWidgetSettings
+        fields = (
+            "id",
+            "is_enabled",
+            "public_key",
+            "primary_color",
+            "secondary_color",
+            "launcher_position",
+            "launcher_text",
+            "header_title",
+            "header_description",
+            "show_branding",
+            "theme",
+            "other_settings",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+
+class ChatbotAllowedURLSerializer(serializers.ModelSerializer):
+    """Serialize an allowed widget URL and its enabled state."""
+
+    url = serializers.CharField(source="origin", read_only=True)
+
+    class Meta:
+        model = ChatbotAllowedOrigin
+        fields = (
+            "id",
+            "url",
+            "is_active",
+        )
+        read_only_fields = fields
+
+
+class ChatbotWidgetDetailSerializer(serializers.ModelSerializer):
+    """Serialize widget settings alongside basic chatbot details."""
+
+    widget_settings = ChatbotWidgetSettingsSerializer(read_only=True)
+    allowed_urls = ChatbotAllowedURLSerializer(
+        source="allowed_origins",
+        many=True,
+        read_only=True,
+    )
+
+    class Meta:
+        model = Chatbot
+        fields = (
+            "id",
+            "chatbot_name",
+            "business_name",
+            "description",
+            "slug",
+            "logo",
+            "welcome_message",
+            "status",
+            "widget_settings",
+            "allowed_urls",
+        )
+        read_only_fields = fields
+
+
+class ChatbotWidgetSettingsUpdateSerializer(serializers.ModelSerializer):
+    """Validate mutable widget settings."""
+
+    class Meta:
+        model = ChatbotWidgetSettings
+        fields = (
+            "is_enabled",
+            "primary_color",
+            "secondary_color",
+            "launcher_position",
+            "launcher_text",
+            "header_title",
+            "header_description",
+            "show_branding",
+            "theme",
+            "other_settings",
+        )
+
+
+class ChatbotAllowedURLUpdateSerializer(serializers.Serializer):
+    """Validate a widget URL upsert or state change."""
+
+    id = serializers.UUIDField(required=False)
+    url = serializers.CharField(required=False, max_length=300)
+    is_active = serializers.BooleanField(required=False)
+
+    def validate_url(self, value):
+        try:
+            return normalize_widget_origin(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages[0]) from exc
+
+    def validate(self, attrs):
+        if "id" not in attrs and "url" not in attrs:
+            raise serializers.ValidationError(
+                "Either id or url is required."
+            )
+        if set(attrs) == {"id"}:
+            raise serializers.ValidationError(
+                "Provide url or is_active to update the allowed URL."
+            )
+        return attrs
+
+
+class ChatbotWidgetUpdateSerializer(serializers.Serializer):
+    """Update widget settings and upsert allowed URLs atomically."""
+
+    widget_settings = ChatbotWidgetSettingsUpdateSerializer(required=False)
+    allowed_urls = ChatbotAllowedURLUpdateSerializer(
+        many=True,
+        required=False,
+    )
+    removed_allowed_url_id = serializers.UUIDField(required=False)
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError(
+                "Provide widget_settings, allowed_urls, or "
+                "removed_allowed_url_id."
+            )
+
+        allowed_urls = attrs.get("allowed_urls")
+        removed_origin_id = attrs.get("removed_allowed_url_id")
+        if allowed_urls is None and removed_origin_id is None:
+            return attrs
+
+        existing_origins = list(self.instance.allowed_origins.all())
+        origins_by_id = {origin.id: origin for origin in existing_origins}
+        origins_by_url = {
+            origin.origin: origin for origin in existing_origins
+        }
+
+        if (
+            removed_origin_id is not None
+            and removed_origin_id not in origins_by_id
+        ):
+            raise serializers.ValidationError(
+                {
+                    "removed_allowed_url_id": (
+                        "Allowed URL not found for this chatbot."
+                    )
+                }
+            )
+        if allowed_urls is None:
+            return attrs
+
+        submitted_ids = set()
+        submitted_urls = set()
+        item_errors = {}
+
+        for index, item in enumerate(allowed_urls):
+            origin_id = item.get("id")
+            url = item.get("url")
+            origin = None
+
+            if origin_id is not None:
+                origin = origins_by_id.get(origin_id)
+                if origin is None:
+                    item_errors[index] = {
+                        "id": "Allowed URL not found for this chatbot."
+                    }
+                    continue
+            elif url is not None:
+                origin = origins_by_url.get(url)
+
+            target_url = url or origin.origin
+            conflicting_origin = origins_by_url.get(target_url)
+            if (
+                conflicting_origin is not None
+                and origin is not None
+                and conflicting_origin.id != origin.id
+            ):
+                item_errors[index] = {
+                    "url": "This URL is already configured for the chatbot."
+                }
+                continue
+
+            if origin is not None and origin.id in submitted_ids:
+                item_errors[index] = {
+                    "id": "Each allowed URL can only be submitted once."
+                }
+                continue
+            if target_url in submitted_urls:
+                item_errors[index] = {
+                    "url": "Each URL can only be submitted once."
+                }
+                continue
+
+            if origin is not None:
+                submitted_ids.add(origin.id)
+                item["_origin_id"] = origin.id
+            submitted_urls.add(target_url)
+
+        if item_errors:
+            raise serializers.ValidationError(
+                {"allowed_urls": item_errors}
+            )
+        if removed_origin_id in submitted_ids:
+            raise serializers.ValidationError(
+                {
+                    "removed_allowed_url_id": (
+                        "A URL cannot be updated and removed together."
+                    )
+                }
+            )
+        return attrs
+
+    def update(self, instance, validated_data):
+        widget_data = validated_data.get("widget_settings")
+        allowed_urls = validated_data.get("allowed_urls")
+        removed_origin_id = validated_data.get("removed_allowed_url_id")
+        user = self.context["request"].user
+
+        with transaction.atomic():
+            if widget_data:
+                widget_settings = (
+                    ChatbotWidgetSettings.objects.select_for_update().get(
+                        chatbot=instance,
+                    )
+                )
+                for field, value in widget_data.items():
+                    setattr(widget_settings, field, value)
+                widget_settings.updated_by = user
+                widget_settings.save(
+                    update_fields=[
+                        *widget_data.keys(),
+                        "updated_by",
+                        "updated_at",
+                    ]
+                )
+
+            if allowed_urls is not None:
+                for item in allowed_urls:
+                    origin_id = item.pop("_origin_id", None)
+                    url = item.get("url")
+                    is_active = item.get("is_active")
+
+                    if origin_id is None:
+                        ChatbotAllowedOrigin.objects.create(
+                            chatbot=instance,
+                            origin=url,
+                            is_active=(
+                                True if is_active is None else is_active
+                            ),
+                            created_by=user,
+                            updated_by=user,
+                        )
+                        continue
+
+                    origin = (
+                        ChatbotAllowedOrigin.objects.select_for_update().get(
+                            chatbot=instance,
+                            id=origin_id,
+                        )
+                    )
+                    update_fields = []
+                    if url is not None and url != origin.origin:
+                        origin.origin = url
+                        update_fields.append("origin")
+                    if (
+                        is_active is not None
+                        and is_active != origin.is_active
+                    ):
+                        origin.is_active = is_active
+                        update_fields.append("is_active")
+                    if update_fields:
+                        origin.updated_by = user
+                        origin.save(
+                            update_fields=[
+                                *update_fields,
+                                "updated_by",
+                                "updated_at",
+                            ]
+                        )
+
+            if removed_origin_id is not None:
+                (
+                    ChatbotAllowedOrigin.objects.select_for_update()
+                    .filter(
+                        chatbot=instance,
+                        id=removed_origin_id,
+                    )
+                    .delete()
+                )
+
+        return instance
+
+    def create(self, validated_data):
+        raise NotImplementedError
 
 
 class ChatbotUpdateSerializer(ChatbotBaseSerializer):
@@ -363,7 +665,10 @@ class ChatbotMemberPermissionUpdateSerializer(serializers.ModelSerializer):
 
 class ChatbotInvitationSerializer(serializers.ModelSerializer):
     chatbot = serializers.UUIDField(source="chatbot_id", read_only=True)
-    chatbot_name = serializers.CharField(source="chatbot.name", read_only=True)
+    chatbot_name = serializers.CharField(
+        source="chatbot.chatbot_name",
+        read_only=True,
+    )
 
     class Meta:
         model = ChatbotInvitation

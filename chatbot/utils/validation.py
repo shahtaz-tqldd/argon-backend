@@ -58,12 +58,17 @@ def validate_other_settings(value):
         raise ValidationError("Other settings must be a JSON object.")
 
 
-def validate_unique_chatbot_name(*, workspace, name, chatbot_id=None):
+def validate_unique_chatbot_name(
+    *,
+    workspace,
+    chatbot_name,
+    chatbot_id=None,
+):
     from chatbot.models import Chatbot
 
     queryset = Chatbot.objects.filter(
         workspace=workspace,
-        name__iexact=name.strip(),
+        chatbot_name__iexact=chatbot_name.strip(),
     )
     if chatbot_id is not None:
         queryset = queryset.exclude(pk=chatbot_id)

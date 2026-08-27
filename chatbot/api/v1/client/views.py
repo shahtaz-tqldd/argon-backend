@@ -26,8 +26,9 @@ from chatbot.api.v1.client.serializers import (
     ChatbotMemberQuerySerializer,
     ChatbotMemberSerializer,
     ChatbotQuerySerializer,
-    ChatbotShortDetailSerializer,
     ChatbotUpdateSerializer,
+    ChatbotWidgetDetailSerializer,
+    ChatbotWidgetUpdateSerializer,
     InviteChatbotMemberSerializer,
 )
 from chatbot.models import Chatbot, ChatbotInvitation, ChatbotUser
@@ -200,15 +201,54 @@ class ChatbotDetailView(ChatbotObjectMixin, GenericAPIView):
         )
 
 
-class ChatbotShortDetailView(ChatbotObjectMixin, GenericAPIView):
+class ChatbotWidgetDetailView(ChatbotObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
-    serializer_class = ChatbotShortDetailSerializer
+    serializer_class = ChatbotWidgetDetailSerializer
 
     def get(self, request, *args, **kwargs):
         return APIResponse.success(
             data=self.get_serializer(self.get_chatbot()).data,
-            message="Chatbot fetched successfully.",
+            message="Chatbot widget details fetched successfully.",
         )
+
+
+class ChatbotWidgetUpdateView(ChatbotObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    serializer_class = ChatbotWidgetUpdateSerializer
+    required_chatbot_permission = ChatbotPermissionTypes.SETUP_CONFIGURATION
+
+    def _update(self, request, *, partial):
+        chatbot = self.get_chatbot()
+        serializer = self.get_serializer(
+            chatbot,
+            data=request.data,
+            partial=partial,
+        )
+        if not serializer.is_valid():
+            return validation_error_response(
+                serializer.errors,
+                "Chatbot widget update failed.",
+            )
+        try:
+            chatbot = serializer.save()
+        except drf_serializers.ValidationError as exc:
+            return validation_error_response(
+                exc.detail,
+                "Chatbot widget update failed.",
+            )
+        return APIResponse.success(
+            data=ChatbotWidgetDetailSerializer(
+                chatbot,
+                context=self.get_serializer_context(),
+            ).data,
+            message="Chatbot widget updated successfully.",
+        )
+
+    def put(self, request, *args, **kwargs):
+        return self._update(request, partial=False)
+
+    def patch(self, request, *args, **kwargs):
+        return self._update(request, partial=True)
 
 
 class ChatbotUpdateView(ChatbotObjectMixin, GenericAPIView):

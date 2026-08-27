@@ -9,7 +9,12 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from chatbot.models import Chatbot, ChatbotInvitation, ChatbotUser
+from chatbot.models import (
+    Chatbot,
+    ChatbotAllowedOrigin,
+    ChatbotInvitation,
+    ChatbotUser,
+)
 from chatbot.services import create_chatbot
 from chatbot.utils.choices import ChatbotPermissionTypes, ChatbotRoleTypes
 from workspace.models import Workspace, WorkspaceUser
@@ -36,7 +41,7 @@ class ChatbotClientAPITests(APITestCase):
         )
         self.chatbot = create_chatbot(
             workspace=self.workspace,
-            name="Support Bot",
+            chatbot_name="Support Bot",
             created_by=self.owner,
         )
         ChatbotUser.objects.create(chatbot=self.chatbot, user=self.member)
@@ -51,12 +56,225 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["data"]["slug"], self.chatbot.slug)
 
+    def test_chatbot_widget_details_returns_widget_and_basic_chatbot_details(self):
+        widget_settings = self.chatbot.widget_settings
+        widget_settings.launcher_text = "Chat with support"
+        widget_settings.header_title = "Support"
+        widget_settings.other_settings = {"corner_radius": 12}
+        widget_settings.save()
+        enabled_origin = ChatbotAllowedOrigin.objects.create(
+            chatbot=self.chatbot,
+            origin="https://app.example.com",
+            created_by=self.owner,
+        )
+        disabled_origin = ChatbotAllowedOrigin.objects.create(
+            chatbot=self.chatbot,
+            origin="https://disabled.example.com",
+            is_active=False,
+            created_by=self.owner,
+        )
+
+        response = self.client.get(
+            reverse("chatbot-widget-details"),
+            {"chatbot": self.chatbot.slug},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["data"]
+        self.assertEqual(data["id"], str(self.chatbot.id))
+        self.assertEqual(data["chatbot_name"], self.chatbot.chatbot_name)
+        self.assertEqual(data["business_name"], self.chatbot.business_name)
+        self.assertEqual(data["slug"], self.chatbot.slug)
+        self.assertEqual(data["logo"], self.chatbot.logo)
+        self.assertEqual(data["welcome_message"], self.chatbot.welcome_message)
+        self.assertEqual(data["status"], self.chatbot.status)
+        self.assertEqual(
+            data["allowed_urls"],
+            [
+                {
+                    "id": str(enabled_origin.id),
+                    "url": "https://app.example.com",
+                    "is_active": True,
+                },
+                {
+                    "id": str(disabled_origin.id),
+                    "url": "https://disabled.example.com",
+                    "is_active": False,
+                },
+            ],
+        )
+
+        widget_data = data["widget_settings"]
+        self.assertEqual(widget_data["id"], str(widget_settings.id))
+        self.assertEqual(widget_data["public_key"], widget_settings.public_key)
+        self.assertTrue(widget_data["is_enabled"])
+        self.assertEqual(widget_data["launcher_text"], "Chat with support")
+        self.assertEqual(widget_data["header_title"], "Support")
+        self.assertEqual(widget_data["other_settings"], {"corner_radius": 12})
+
+    def test_chatbot_widget_details_requires_chatbot_membership(self):
+        outsider = User.objects.create_user(
+            email="widget-outsider@example.com",
+            password="StrongPass123!",
+        )
+        self.client.force_authenticate(outsider)
+
+        response = self.client.get(
+            reverse("chatbot-widget-details"),
+            {"chatbot": self.chatbot.slug},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_chatbot_widget_update_changes_settings_and_upserts_allowed_urls(self):
+        existing_origin = ChatbotAllowedOrigin.objects.create(
+            chatbot=self.chatbot,
+            origin="https://old.example.com",
+            created_by=self.owner,
+        )
+        omitted_origin = ChatbotAllowedOrigin.objects.create(
+            chatbot=self.chatbot,
+            origin="https://unchanged.example.com",
+            created_by=self.owner,
+        )
+
+        response = self.client.patch(
+            reverse("chatbot-widget-update"),
+            {
+                "widget_settings": {
+                    "primary_color": "#112233",
+                    "launcher_text": "Ask us anything",
+                    "theme": "dark",
+                },
+                "allowed_urls": [
+                    {
+                        "id": str(existing_origin.id),
+                        "url": "https://new.example.com/",
+                        "is_active": False,
+                    },
+                    {
+                        "url": "https://fresh.example.com/",
+                        "is_active": True,
+                    },
+                ],
+            },
+            format="json",
+            QUERY_STRING=urlencode({"chatbot": self.chatbot.slug}),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        widget_data = response.data["data"]["widget_settings"]
+        self.assertEqual(widget_data["primary_color"], "#112233")
+        self.assertEqual(widget_data["launcher_text"], "Ask us anything")
+        self.assertEqual(widget_data["theme"], "dark")
+
+        existing_origin.refresh_from_db()
+        self.assertEqual(existing_origin.origin, "https://new.example.com")
+        self.assertFalse(existing_origin.is_active)
+        self.assertEqual(existing_origin.updated_by, self.owner)
+        self.assertTrue(
+            ChatbotAllowedOrigin.objects.filter(
+                chatbot=self.chatbot,
+                origin="https://fresh.example.com",
+                is_active=True,
+                created_by=self.owner,
+                updated_by=self.owner,
+            ).exists()
+        )
+        omitted_origin.refresh_from_db()
+        self.assertTrue(omitted_origin.is_active)
+
+        allowed_urls = response.data["data"]["allowed_urls"]
+        self.assertEqual(
+            {item["url"]: item["is_active"] for item in allowed_urls},
+            {
+                "https://fresh.example.com": True,
+                "https://new.example.com": False,
+                "https://unchanged.example.com": True,
+            },
+        )
+
+    def test_chatbot_widget_update_requires_setup_permission(self):
+        self.client.force_authenticate(self.member)
+
+        response = self.client.patch(
+            reverse("chatbot-widget-update"),
+            {"widget_settings": {"theme": "dark"}},
+            format="json",
+            QUERY_STRING=urlencode({"chatbot": self.chatbot.slug}),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_chatbot_widget_update_removes_allowed_url_by_id(self):
+        removed_origin = ChatbotAllowedOrigin.objects.create(
+            chatbot=self.chatbot,
+            origin="https://remove.example.com",
+            created_by=self.owner,
+        )
+        retained_origin = ChatbotAllowedOrigin.objects.create(
+            chatbot=self.chatbot,
+            origin="https://retain.example.com",
+            created_by=self.owner,
+        )
+
+        response = self.client.patch(
+            reverse("chatbot-widget-update"),
+            {"removed_allowed_url_id": str(removed_origin.id)},
+            format="json",
+            QUERY_STRING=urlencode({"chatbot": self.chatbot.slug}),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(
+            ChatbotAllowedOrigin.objects.filter(id=removed_origin.id).exists()
+        )
+        self.assertTrue(
+            ChatbotAllowedOrigin.objects.filter(id=retained_origin.id).exists()
+        )
+        self.assertEqual(
+            response.data["data"]["allowed_urls"],
+            [
+                {
+                    "id": str(retained_origin.id),
+                    "url": retained_origin.origin,
+                    "is_active": True,
+                }
+            ],
+        )
+
+    def test_chatbot_widget_update_rejects_foreign_allowed_url_removal(self):
+        other_chatbot = create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Other Chatbot",
+            created_by=self.owner,
+        )
+        foreign_origin = ChatbotAllowedOrigin.objects.create(
+            chatbot=other_chatbot,
+            origin="https://other.example.com",
+            created_by=self.owner,
+        )
+
+        response = self.client.patch(
+            reverse("chatbot-widget-update"),
+            {"removed_allowed_url_id": str(foreign_origin.id)},
+            format="json",
+            QUERY_STRING=urlencode({"chatbot": self.chatbot.slug}),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("removed_allowed_url_id", response.data["errors"])
+        self.assertTrue(
+            ChatbotAllowedOrigin.objects.filter(id=foreign_origin.id).exists()
+        )
+
     def test_chatbot_create_accepts_core_settings_and_creates_widget_settings(self):
         response = self.client.post(
             reverse("chatbot-create"),
             {
                 "workspace": self.workspace.slug,
-                "name": "Configured Bot",
+                "chatbot_name": "Configured Bot",
+                "business_name": "Argon Support",
                 "welcome_message": "Welcome!",
                 "fallback_message": "Please try again.",
                 "instructions": "Be concise.",
@@ -73,7 +291,16 @@ class ChatbotClientAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        chatbot = Chatbot.objects.get(name="Configured Bot")
+        chatbot = Chatbot.objects.get(chatbot_name="Configured Bot")
+        self.assertEqual(chatbot.business_name, "Argon Support")
+        self.assertEqual(
+            response.data["data"]["chatbot_name"],
+            "Configured Bot",
+        )
+        self.assertEqual(
+            response.data["data"]["business_name"],
+            "Argon Support",
+        )
         self.assertEqual(chatbot.welcome_message, "Welcome!")
         self.assertEqual(chatbot.fallback_message, "Please try again.")
         self.assertEqual(chatbot.instructions, "Be concise.")
@@ -94,10 +321,52 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(chatbot.other_settings["response_tone"], "friendly")
         self.assertTrue(chatbot.widget_settings.public_key)
 
+    def test_chatbot_create_uses_default_conversation_messages(self):
+        response = self.client.post(
+            reverse("chatbot-create"),
+            {
+                "workspace": self.workspace.slug,
+                "chatbot_name": "Default Message Bot",
+                "business_name": "Argon",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.data["data"]
+        self.assertEqual(data["chatbot_name"], "Default Message Bot")
+        self.assertEqual(data["business_name"], "Argon")
+        self.assertEqual(
+            data["welcome_message"],
+            (
+                "Hey, I am Default Message Bot, I am here to answer anything "
+                "you want to know about Argon."
+            ),
+        )
+        self.assertEqual(
+            data["fallback_message"],
+            (
+                "Sorry, I couldn't find anything to my knowledge to answer "
+                "this question, should I connect with you one of our human "
+                "assistant?"
+            ),
+        )
+        self.assertEqual(
+            data["escalation_rule"],
+            (
+                "Hand off to human agent, when you don't find any answer, "
+                "asking about payment or collaboration."
+            ),
+        )
+        self.assertEqual(
+            data["never_answer"],
+            "Never answer about payment, outside scope and all.",
+        )
+
     def test_chatbot_list_returns_page_metadata(self):
         create_chatbot(
             workspace=self.workspace,
-            name="Sales Bot",
+            chatbot_name="Sales Bot",
             created_by=self.owner,
         )
 

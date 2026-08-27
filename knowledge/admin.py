@@ -14,7 +14,12 @@ class KnowledgeBaseAdmin(admin.ModelAdmin):
         "updated_at",
     )
     list_filter = ("source_type", "status", "is_enabled")
-    search_fields = ("title", "url", "original_filename", "chatbot__name")
+    search_fields = (
+        "title",
+        "url",
+        "original_filename",
+        "chatbot__chatbot_name",
+    )
     readonly_fields = ("content_hash", "processed_at", "created_at", "updated_at")
 
 

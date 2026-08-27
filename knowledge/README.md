@@ -14,6 +14,8 @@ the knowledge source with its UUID.
   accepts JSON content and optional title.
 - GET /api/v1/chatbots/knowledge/list/?chatbot=<slug> returns a paginated
   source list.
+- GET /api/v1/chatbots/knowledge/usage/?chatbot=<slug> returns the chatbot's
+  stored chunk and file-size totals with the current static limits.
 - GET /api/v1/chatbots/knowledge/details/?knowledge_base_id=<uuid> returns
   one source.
 - PATCH /api/v1/chatbots/knowledge/update/?knowledge_base_id=<uuid>&type=file

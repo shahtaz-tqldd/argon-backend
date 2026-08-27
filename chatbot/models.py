@@ -27,6 +27,32 @@ from chatbot.utils.validation import (
 )
 
 
+DEFAULT_CHATBOT_WELCOME_MESSAGE_TEMPLATE = (
+    "Hey, I am {chatbot_name}, I am here to answer anything you want to know "
+    "about {business_name}."
+)
+DEFAULT_CHATBOT_FALLBACK_MESSAGE = (
+    "Sorry, I couldn't find anything to my knowledge to answer this question, "
+    "should I connect with you one of our human assistant?"
+)
+DEFAULT_CHATBOT_ESCALATION_RULE = (
+    "Hand off to human agent, when you don't find any answer, asking about "
+    "payment or collaboration."
+)
+DEFAULT_CHATBOT_NEVER_ANSWER = (
+    "Never answer about payment, outside scope and all."
+)
+DEFAULT_WIDGET_HEADER_TITLE_TEMPLATE = "{chatbot_name}"
+DEFAULT_WIDGET_HEADER_DESCRIPTION = "typically replies instantly"
+
+
+def build_default_chatbot_welcome_message(chatbot_name, business_name=""):
+    return DEFAULT_CHATBOT_WELCOME_MESSAGE_TEMPLATE.format(
+        chatbot_name=chatbot_name,
+        business_name=business_name,
+    )
+
+
 class Chatbot(BaseModel):
     workspace = models.ForeignKey(
         "workspace.Workspace",
@@ -35,7 +61,8 @@ class Chatbot(BaseModel):
     )
 
     # identity
-    name = models.CharField(max_length=120)
+    chatbot_name = models.CharField(max_length=120)
+    business_name = models.CharField(max_length=120, blank=True, default="")
     description = models.TextField(blank=True)
     slug = models.SlugField(
         max_length=140,
@@ -46,11 +73,23 @@ class Chatbot(BaseModel):
     logo = models.URLField(blank=True)
 
     # conversation
-    welcome_message = models.TextField(blank=True)
-    fallback_message = models.TextField(blank=True)
+    welcome_message = models.TextField(
+        blank=True,
+        default=DEFAULT_CHATBOT_WELCOME_MESSAGE_TEMPLATE,
+    )
+    fallback_message = models.TextField(
+        blank=True,
+        default=DEFAULT_CHATBOT_FALLBACK_MESSAGE,
+    )
     instructions = models.TextField(blank=True)
-    escalation_rule = models.TextField(blank=True)
-    never_answer = models.TextField(blank=True)
+    escalation_rule = models.TextField(
+        blank=True,
+        default=DEFAULT_CHATBOT_ESCALATION_RULE,
+    )
+    never_answer = models.TextField(
+        blank=True,
+        default=DEFAULT_CHATBOT_NEVER_ANSWER,
+    )
 
     language = models.CharField(max_length=20, default="en")
     timezone = models.CharField(
@@ -89,10 +128,10 @@ class Chatbot(BaseModel):
     is_deleted = models.BooleanField(default=False, db_index=True)
 
     class Meta:
-        ordering = ["workspace__name", "name"]
+        ordering = ["workspace__name", "chatbot_name"]
         constraints = [
             models.UniqueConstraint(
-                fields=["workspace", "name"],
+                fields=["workspace", "chatbot_name"],
                 name="unique_chatbot_name_per_workspace",
             ),
         ]
@@ -109,10 +148,12 @@ class Chatbot(BaseModel):
         ]
 
     def __str__(self):
-        return self.name
+        return self.chatbot_name
 
     def generate_unique_slug(self):
-        base_slug = slugify(self.name)[:120].strip("-") or "chatbot"
+        base_slug = (
+            slugify(self.chatbot_name)[:120].strip("-") or "chatbot"
+        )
 
         queryset = type(self).objects.all()
 
@@ -135,6 +176,11 @@ class Chatbot(BaseModel):
     def save(self, *args, **kwargs):
         if not self.slug:
             self.slug = self.generate_unique_slug()
+        if self.welcome_message == DEFAULT_CHATBOT_WELCOME_MESSAGE_TEMPLATE:
+            self.welcome_message = build_default_chatbot_welcome_message(
+                self.chatbot_name,
+                self.business_name,
+            )
 
         super().save(*args, **kwargs)
 
@@ -173,7 +219,7 @@ class ChatbotWidgetSettings(BaseModel):
     )
     secondary_color = models.CharField(
         max_length=9,
-        default="#ff683a",
+        default="#fafafa",
         validators=[validate_hex_color],
     )
 
@@ -185,8 +231,16 @@ class ChatbotWidgetSettings(BaseModel):
     launcher_text = models.CharField(max_length=100, blank=True)
 
     # widget behaviour
-    header_title = models.CharField(max_length=60, blank=True)
-    header_description = models.CharField(max_length=100, blank=True)
+    header_title = models.CharField(
+        max_length=60,
+        blank=True,
+        default=DEFAULT_WIDGET_HEADER_TITLE_TEMPLATE,
+    )
+    header_description = models.CharField(
+        max_length=100,
+        blank=True,
+        default=DEFAULT_WIDGET_HEADER_DESCRIPTION,
+    )
     show_branding = models.BooleanField(default=True)
     theme = models.CharField(
         max_length=20,
@@ -200,6 +254,11 @@ class ChatbotWidgetSettings(BaseModel):
         blank=True,
         validators=[validate_widget_settings],
     )
+
+    def save(self, *args, **kwargs):
+        if self.header_title == DEFAULT_WIDGET_HEADER_TITLE_TEMPLATE:
+            self.header_title = self.chatbot.chatbot_name[:60]
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Widget settings: {self.chatbot}"
@@ -269,7 +328,7 @@ class ChatbotUser(BaseMinModel):
     is_active = models.BooleanField(default=True, db_index=True)
 
     class Meta:
-        ordering = ["chatbot__name", "user__email"]
+        ordering = ["chatbot__chatbot_name", "user__email"]
         constraints = [
             models.UniqueConstraint(
                 fields=["chatbot", "user"],

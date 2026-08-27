@@ -37,7 +37,7 @@ class StripeWebhookProcessorTests(TestCase):
         )
         chatbot = Chatbot.objects.create(
             workspace=workspace,
-            name="Billing Bot",
+            chatbot_name="Billing Bot",
         )
         plan = SubscriptionPlan.objects.create(
             name="Growth",

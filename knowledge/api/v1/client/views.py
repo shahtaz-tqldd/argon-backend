@@ -11,18 +11,21 @@ from chatbot.utils.choices import ChatbotPermissionTypes
 from knowledge.api.v1.client.serializers import (
     KNOWLEDGE_API_TYPE_TO_SOURCE_TYPE,
     FileKnowledgeCreateSerializer,
+    KnowledgeBaseBasicSerializer,
     KnowledgeBaseQuerySerializer,
     KnowledgeBaseSerializer,
     KnowledgeChatbotQuerySerializer,
+    KnowledgeMetadataUpdateSerializer,
     KnowledgeTrainingLogSerializer,
     KnowledgeUpdateQuerySerializer,
     KnowledgeUploadQuerySerializer,
+    KnowledgeUsageSerializer,
     TextKnowledgeCreateSerializer,
     TextKnowledgeUpdateSerializer,
     URLKnowledgeCreateSerializer,
 )
 from knowledge.models import KnowledgeBase, KnowledgeTrainingLog
-from knowledge.services import queue_knowledge_training
+from knowledge.services import get_knowledge_usage, queue_knowledge_training
 from knowledge.utils.choices import (
     KnowledgeTrainingStageTypes,
     StatusTypes,
@@ -166,24 +169,44 @@ class KnowledgeListView(
     GenericAPIView,
 ):
     permission_classes = [IsChatbotUser]
-    serializer_class = KnowledgeBaseSerializer
+    serializer_class = KnowledgeBaseBasicSerializer
 
     def get(self, request, *args, **kwargs):
-        latest_logs = KnowledgeTrainingLog.objects.order_by("-created_at")
         queryset = (
             KnowledgeBase.objects.filter(chatbot=self.get_chatbot())
-            .prefetch_related(
-                Prefetch(
-                    "training_logs",
-                    queryset=latest_logs,
-                    to_attr="all_training_logs",
-                )
+            .only(
+                "id",
+                "title",
+                "url",
+                "source_type",
+                "original_filename",
+                "text_content",
+                "file_type",
+                "file_size",
+                "is_enabled",
+                "status",
+                "last_crawled_at",
+                "processed_at",
+                "created_at",
+                "updated_at",
             )
             .order_by("-created_at")
         )
         return self.paginated_response(
             queryset,
             message="Knowledge sources fetched successfully.",
+        )
+
+
+class KnowledgeUsageView(KnowledgeChatbotMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    serializer_class = KnowledgeUsageSerializer
+
+    def get(self, request, *args, **kwargs):
+        usage = get_knowledge_usage(self.get_chatbot())
+        return APIResponse.success(
+            data=self.get_serializer(usage).data,
+            message="Knowledge usage fetched successfully.",
         )
 
 
@@ -206,7 +229,7 @@ class KnowledgeUpdateView(KnowledgeObjectMixin, GenericAPIView):
     def get_serializer_class(self):
         if self.get_knowledge_query()["type"] == "custom":
             return TextKnowledgeUpdateSerializer
-        return KnowledgeBaseSerializer
+        return KnowledgeMetadataUpdateSerializer
 
     def _queue_retraining(self, knowledge_base, *, message):
         if has_active_training(knowledge_base):
@@ -237,6 +260,35 @@ class KnowledgeUpdateView(KnowledgeObjectMixin, GenericAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if request.data:
+            serializer = self.get_serializer(
+                knowledge_base,
+                data=request.data,
+                partial=True,
+            )
+            serializer.is_valid(raise_exception=True)
+            content_changed = "content" in serializer.validated_data
+
+            if content_changed and has_active_training(knowledge_base):
+                return APIResponse.error(
+                    message="Content cannot be edited while training is active.",
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            knowledge_base = serializer.save()
+            if content_changed:
+                return self._queue_retraining(
+                    knowledge_base,
+                    message=(
+                        "Custom knowledge source updated and queued for training."
+                    ),
+                )
+
+            return APIResponse.success(
+                data=KnowledgeBaseSerializer(knowledge_base).data,
+                message="Knowledge source updated successfully.",
+            )
+
         if api_type == "file":
             if has_active_training(knowledge_base):
                 return APIResponse.error(
@@ -261,20 +313,10 @@ class KnowledgeUpdateView(KnowledgeObjectMixin, GenericAPIView):
                 message="URL knowledge source queued for retraining.",
             )
 
-        if has_active_training(knowledge_base):
-            return APIResponse.error(
-                message="Content cannot be edited while training is active.",
-                status=status.HTTP_409_CONFLICT,
-            )
-        serializer = self.get_serializer(
-            knowledge_base,
-            data=request.data,
-        )
-        serializer.is_valid(raise_exception=True)
-        knowledge_base = serializer.save()
-        return self._queue_retraining(
-            knowledge_base,
-            message="Custom knowledge source updated and queued for training.",
+        return APIResponse.error(
+            errors={"content": ["This field is required."]},
+            message="Content is required to update a custom knowledge source.",
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     def put(self, request, *args, **kwargs):

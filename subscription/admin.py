@@ -68,7 +68,7 @@ class ChatbotSubscriptionAdmin(admin.ModelAdmin):
         "cancel_at_period_end",
     )
     search_fields = (
-        "chatbot__name",
+        "chatbot__chatbot_name",
         "chatbot__workspace__name",
         "plan_price__plan__name",
         "selected_by__email",
@@ -114,7 +114,7 @@ class PaymentAdmin(admin.ModelAdmin):
         "idempotency_key",
         "description",
         "user__email",
-        "subscription__chatbot__name",
+        "subscription__chatbot__chatbot_name",
         "plan_price__plan__name",
     )
     autocomplete_fields = ("subscription", "plan_price", "user")

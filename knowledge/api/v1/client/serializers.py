@@ -25,6 +25,14 @@ class KnowledgeChatbotQuerySerializer(serializers.Serializer):
     chatbot = serializers.SlugField()
 
 
+class KnowledgeUsageSerializer(serializers.Serializer):
+    total_chunks = serializers.IntegerField(read_only=True)
+    chunk_limit = serializers.IntegerField(read_only=True)
+    total_file_size_bytes = serializers.IntegerField(read_only=True)
+    file_size_limit_bytes = serializers.IntegerField(read_only=True)
+    file_size_limit_mb = serializers.IntegerField(read_only=True)
+
+
 class KnowledgeUploadQuerySerializer(KnowledgeChatbotQuerySerializer):
     type = serializers.ChoiceField(choices=KNOWLEDGE_API_TYPES)
 
@@ -56,6 +64,28 @@ class KnowledgeTrainingLogSerializer(serializers.ModelSerializer):
             "error_message",
             "started_at",
             "completed_at",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+
+class KnowledgeBaseBasicSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = KnowledgeBase
+        fields = (
+            "id",
+            "name",
+            "url",
+            "source_type",
+            "file_type",
+            "file_size",
+            "is_enabled",
+            "status",
+            "last_crawled_at",
+            "processed_at",
             "created_at",
             "updated_at",
         )
@@ -179,21 +209,28 @@ class TextKnowledgeCreateSerializer(serializers.Serializer):
         )
 
 
-class TextKnowledgeUpdateSerializer(serializers.Serializer):
+class KnowledgeMetadataUpdateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=500, required=False, allow_blank=True)
-    content = serializers.CharField(
-        trim_whitespace=True,
-        validators=[validate_custom_text],
-    )
     is_enabled = serializers.BooleanField(required=False)
 
     def update(self, instance, validated_data):
         if "title" in validated_data:
             instance.title = validated_data["title"]
-        if "content" in validated_data:
-            instance.text_content = validated_data["content"]
         if "is_enabled" in validated_data:
             instance.is_enabled = validated_data["is_enabled"]
         instance.updated_by = self.context["request"].user
         instance.save()
         return instance
+
+
+class TextKnowledgeUpdateSerializer(KnowledgeMetadataUpdateSerializer):
+    content = serializers.CharField(
+        required=False,
+        trim_whitespace=True,
+        validators=[validate_custom_text],
+    )
+
+    def update(self, instance, validated_data):
+        if "content" in validated_data:
+            instance.text_content = validated_data["content"]
+        return super().update(instance, validated_data)

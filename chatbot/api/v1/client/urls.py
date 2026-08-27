@@ -8,9 +8,14 @@ chatbot = [
     path("list/", views.ChatbotListView.as_view(), name="chatbot-list"),
     path("details/", views.ChatbotDetailView.as_view(), name="chatbot-detail"),
     path(
-        "short-details/",
-        views.ChatbotShortDetailView.as_view(),
-        name="chatbot-short-detail",
+        "widget-details/",
+        views.ChatbotWidgetDetailView.as_view(),
+        name="chatbot-widget-details",
+    ),
+    path(
+        "widget-update/",
+        views.ChatbotWidgetUpdateView.as_view(),
+        name="chatbot-widget-update",
     ),
     path("update/", views.ChatbotUpdateView.as_view(), name="chatbot-update"),
     path("delete/", views.ChatbotDeleteView.as_view(), name="chatbot-delete"),
@@ -47,7 +52,6 @@ chatbot_team = [
 ]
 
 urlpatterns = [
-    path("team/", include(chatbot_team)),
-    path("knowledge/", include("knowledge.api.v1.client.urls")),
     path("", include(chatbot)),
+    path("team/", include(chatbot_team)),
 ]

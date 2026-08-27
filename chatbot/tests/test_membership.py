@@ -2,7 +2,14 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.test import TestCase
 
-from chatbot.models import ChatbotUser, ChatbotWidgetSettings
+from chatbot.models import (
+    DEFAULT_CHATBOT_ESCALATION_RULE,
+    DEFAULT_CHATBOT_FALLBACK_MESSAGE,
+    DEFAULT_CHATBOT_NEVER_ANSWER,
+    Chatbot,
+    ChatbotUser,
+    ChatbotWidgetSettings,
+)
 from chatbot.services import assign_user_to_chatbot, create_chatbot
 from chatbot.utils.choices import ChatbotRoleTypes
 from workspace.services import add_workspace_user, ensure_personal_workspace
@@ -40,10 +47,34 @@ class ChatbotMembershipTests(TestCase):
             added_by=self.owner,
         )
 
+    def test_chatbot_model_applies_default_conversation_messages(self):
+        chatbot = Chatbot.objects.create(
+            workspace=self.workspace,
+            chatbot_name="Direct Bot",
+            created_by=self.owner,
+        )
+
+        self.assertEqual(
+            chatbot.welcome_message,
+            (
+                "Hey, I am Direct Bot, I am here to answer anything you want "
+                "to know about ."
+            ),
+        )
+        self.assertEqual(
+            chatbot.fallback_message,
+            DEFAULT_CHATBOT_FALLBACK_MESSAGE,
+        )
+        self.assertEqual(
+            chatbot.escalation_rule,
+            DEFAULT_CHATBOT_ESCALATION_RULE,
+        )
+        self.assertEqual(chatbot.never_answer, DEFAULT_CHATBOT_NEVER_ANSWER)
+
     def test_chatbot_creator_is_assigned_as_admin(self):
         chatbot = create_chatbot(
             workspace=self.workspace,
-            name="Support Bot",
+            chatbot_name="Support Bot",
             created_by=self.owner,
         )
 
@@ -55,11 +86,29 @@ class ChatbotMembershipTests(TestCase):
         self.assertTrue(
             ChatbotWidgetSettings.objects.filter(chatbot=chatbot).exists()
         )
+        self.assertEqual(chatbot.chatbot_name, "Support Bot")
+        self.assertEqual(chatbot.business_name, "")
+        self.assertEqual(
+            chatbot.welcome_message,
+            (
+                "Hey, I am Support Bot, I am here to answer anything you want "
+                "to know about ."
+            ),
+        )
+        self.assertEqual(
+            chatbot.fallback_message,
+            DEFAULT_CHATBOT_FALLBACK_MESSAGE,
+        )
+        self.assertEqual(
+            chatbot.escalation_rule,
+            DEFAULT_CHATBOT_ESCALATION_RULE,
+        )
+        self.assertEqual(chatbot.never_answer, DEFAULT_CHATBOT_NEVER_ANSWER)
 
     def test_workspace_member_can_assign_another_workspace_member(self):
         chatbot = create_chatbot(
             workspace=self.workspace,
-            name="Support Bot",
+            chatbot_name="Support Bot",
             created_by=self.owner,
         )
 
@@ -75,7 +124,7 @@ class ChatbotMembershipTests(TestCase):
     def test_outsider_cannot_be_assigned_to_chatbot(self):
         chatbot = create_chatbot(
             workspace=self.workspace,
-            name="Support Bot",
+            chatbot_name="Support Bot",
             created_by=self.owner,
         )
 

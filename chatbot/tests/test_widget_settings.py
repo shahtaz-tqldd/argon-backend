@@ -22,7 +22,7 @@ class ChatbotWidgetSettingsTests(TestCase):
         self.workspace = ensure_personal_workspace(self.owner)
         self.chatbot = create_chatbot(
             workspace=self.workspace,
-            name="Widget Bot",
+            chatbot_name="Widget Bot",
             created_by=self.owner,
         )
 
@@ -36,6 +36,11 @@ class ChatbotWidgetSettingsTests(TestCase):
         self.assertEqual(
             widget_settings.launcher_position,
             ChatbotWidgetLauncherPositionTypes.BOTTOM_RIGHT,
+        )
+        self.assertEqual(widget_settings.header_title, "Widget Bot")
+        self.assertEqual(
+            widget_settings.header_description,
+            "typically replies instantly",
         )
         self.assertEqual(widget_settings.theme, ChatbotWidgetThemeTypes.LIGHT)
 

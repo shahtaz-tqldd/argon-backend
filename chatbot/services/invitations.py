@@ -101,7 +101,7 @@ def _deliver_chatbot_invitation(*, invitation, token):
         "inviter_name": (
             invitation.created_by.name or invitation.created_by.email
         ),
-        "chatbot_name": invitation.chatbot.name,
+        "chatbot_name": invitation.chatbot.chatbot_name,
         "workspace_name": invitation.chatbot.workspace.name,
         "invitation_link": invitation_link,
         "token": token,
@@ -109,7 +109,9 @@ def _deliver_chatbot_invitation(*, invitation, token):
     }
     kwargs = {
         "recipient_email": invitation.email,
-        "subject": f"Join {invitation.chatbot.name} on Argon Chatbot",
+        "subject": (
+            f"Join {invitation.chatbot.chatbot_name} on Argon Chatbot"
+        ),
         "message": render_to_string("emails/chatbot_invitation.txt", context),
         "html_message": render_to_string(
             "emails/chatbot_invitation.html",

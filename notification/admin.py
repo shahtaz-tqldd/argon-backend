@@ -22,7 +22,7 @@ class NotificationAdmin(admin.ModelAdmin):
         "recipient__email",
         "recipient__name",
         "workspace__name",
-        "chatbot__name",
+        "chatbot__chatbot_name",
     )
     autocomplete_fields = ("recipient", "workspace", "chatbot")
     readonly_fields = ("id", "created_at", "updated_at")

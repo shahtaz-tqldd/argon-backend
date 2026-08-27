@@ -1,7 +1,15 @@
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
-from chatbot.models import Chatbot, ChatbotUser, ChatbotWidgetSettings
+from chatbot.models import (
+    DEFAULT_CHATBOT_ESCALATION_RULE,
+    DEFAULT_CHATBOT_FALLBACK_MESSAGE,
+    DEFAULT_CHATBOT_NEVER_ANSWER,
+    Chatbot,
+    ChatbotUser,
+    ChatbotWidgetSettings,
+    build_default_chatbot_welcome_message,
+)
 from chatbot.utils.choices import ChatbotRoleTypes, ChatbotStatusTypes
 from chatbot.utils.validation import validate_unique_chatbot_name
 from workspace.models import WorkspaceUser
@@ -24,14 +32,15 @@ def _require_active_workspace_user(workspace, user):
 def create_chatbot(
     *,
     workspace,
-    name,
+    chatbot_name,
     created_by,
+    business_name="",
     description="",
-    welcome_message="",
-    fallback_message="",
+    welcome_message=None,
+    fallback_message=DEFAULT_CHATBOT_FALLBACK_MESSAGE,
     instructions="",
-    escalation_rule="",
-    never_answer="",
+    escalation_rule=DEFAULT_CHATBOT_ESCALATION_RULE,
+    never_answer=DEFAULT_CHATBOT_NEVER_ANSWER,
     language="en",
     timezone="UTC",
     ai_enabled=True,
@@ -45,14 +54,23 @@ def create_chatbot(
     if not workspace.is_active:
         raise ValidationError("Cannot create a chatbot in an inactive workspace.")
 
-    name = name.strip()
-    if not name:
+    chatbot_name = chatbot_name.strip()
+    if not chatbot_name:
         raise ValidationError("Chatbot name is required.")
-    validate_unique_chatbot_name(workspace=workspace, name=name)
+    validate_unique_chatbot_name(
+        workspace=workspace,
+        chatbot_name=chatbot_name,
+    )
+    if welcome_message is None:
+        welcome_message = build_default_chatbot_welcome_message(
+            chatbot_name,
+            business_name,
+        )
 
     chatbot = Chatbot.objects.create(
         workspace=workspace,
-        name=name,
+        chatbot_name=chatbot_name,
+        business_name=business_name,
         description=description,
         welcome_message=welcome_message,
         fallback_message=fallback_message,
