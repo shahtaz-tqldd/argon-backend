@@ -130,21 +130,12 @@ class PlanPrice(BaseModel):
     currency = models.CharField(max_length=3, default="USD")
     amount = models.DecimalField(max_digits=12, decimal_places=2)
 
-    # Null for providers with no upstream "price object" concept (e.g. bKash —
-    # you just charge `amount` directly against an agreement/token).
-    provider_price_id = models.CharField(max_length=255, null=True, blank=True)
     ai_message_overage_unit_price = models.DecimalField(
         max_digits=12,
         decimal_places=6,
         null=True,
         blank=True,
         help_text="Price for each AI message above the plan limit.",
-    )
-    provider_overage_price_id = models.CharField(
-        max_length=255,
-        null=True,
-        blank=True,
-        help_text="Optional provider-side metered price identifier.",
     )
     is_active = models.BooleanField(default=True, db_index=True)
 
@@ -153,12 +144,6 @@ class PlanPrice(BaseModel):
             models.UniqueConstraint(
                 fields=["plan", "provider", "billing_interval", "currency"],
                 name="sub_planprice_unique_combo",
-            ),
-            models.UniqueConstraint(
-                fields=["provider", "provider_price_id"],
-                name="sub_planprice_provider_id_unique",
-                condition=Q(provider_price_id__isnull=False)
-                & ~Q(provider_price_id=""),
             ),
             models.CheckConstraint(condition=Q(amount__gte=0), name="sub_planprice_amount_gte_0"),
             models.CheckConstraint(
@@ -292,7 +277,16 @@ class ChatbotSubscription(BaseModel):
             ),
             models.UniqueConstraint(
                 fields=["provider", "provider_subscription_id"],
-                condition=Q(provider_subscription_id__isnull=False)
+                condition=Q(
+                    status__in=[
+                        SubscriptionStatus.INCOMPLETE,
+                        SubscriptionStatus.ACTIVE,
+                        SubscriptionStatus.PAST_DUE,
+                        SubscriptionStatus.PAUSED,
+                        SubscriptionStatus.UNPAID,
+                    ],
+                    provider_subscription_id__isnull=False,
+                )
                 & ~Q(provider_subscription_id=""),
                 name="sub_provider_subscription_unique",
             ),
@@ -313,6 +307,7 @@ class ChatbotSubscription(BaseModel):
             and plan_price.billing_interval == BillingInterval.ANNUAL
         ):
             ai_message_limit *= 12
+        overage_enabled = plan.ai_message_overage_enabled
 
         self.snapshot = {
             "version": 1,
@@ -330,7 +325,6 @@ class ChatbotSubscription(BaseModel):
                 "billing_interval": str(plan_price.billing_interval),
                 "amount": str(plan_price.amount),
                 "currency": plan_price.currency.strip().upper(),
-                "provider_price_id": plan_price.provider_price_id or "",
             },
             "limits": {
                 "ai_message_limit": ai_message_limit,
@@ -338,13 +332,15 @@ class ChatbotSubscription(BaseModel):
                 "knowledge_chunk_limit": plan.knowledge_chunk_limit,
             },
             "overage": {
-                "enabled": plan.ai_message_overage_enabled,
+                "enabled": overage_enabled,
                 "unit_price": (
                     str(plan_price.ai_message_overage_unit_price)
-                    if plan_price.ai_message_overage_unit_price is not None
+                    if (
+                        overage_enabled
+                        and plan_price.ai_message_overage_unit_price is not None
+                    )
                     else None
                 ),
-                "provider_price_id": plan_price.provider_overage_price_id or "",
             },
         }
 

@@ -10,7 +10,6 @@ from subscription.choices import (
     PaymentProvider,
     PaymentStatus,
     PaymentType,
-    RenewalMode,
     SubscriptionStatus,
     WebhookProcessingStatus,
 )
@@ -18,7 +17,6 @@ from subscription.models import (
     ChatbotSubscription,
     Payment,
     PaymentWebhookEvent,
-    PlanPrice,
 )
 from subscription.services.stripe import StripeBillingService
 
@@ -28,6 +26,7 @@ logger = logging.getLogger("app.subscription.webhooks")
 
 HANDLED_EVENT_TYPES = {
     "checkout.session.completed",
+    "checkout.session.async_payment_failed",
     "checkout.session.async_payment_succeeded",
     "checkout.session.expired",
     "customer.subscription.created",
@@ -128,9 +127,11 @@ def _minor_units_to_decimal(amount, currency):
 
 def _subscription_from_metadata(metadata, *, provider_subscription_id=""):
     internal_id = _valid_uuid((metadata or {}).get("argon_subscription_id"))
-    queryset = ChatbotSubscription.objects.select_for_update().select_related(
+    queryset = ChatbotSubscription.objects.select_related(
         "plan_price",
         "selected_by",
+    ).select_for_update(
+        of=("self",),
     )
     if provider_subscription_id:
         subscription = queryset.filter(
@@ -144,81 +145,9 @@ def _subscription_from_metadata(metadata, *, provider_subscription_id=""):
     return None
 
 
-def _plan_price_from_stripe_subscription(stripe_subscription):
-    price_ids = [
-        _object_id(item.get("price"))
-        for item in (stripe_subscription.get("items") or {}).get("data", [])
-    ]
-    price_ids = [price_id for price_id in price_ids if price_id]
-    if not price_ids:
-        return None
-    return (
-        PlanPrice.objects.select_related("plan")
-        .filter(
-            provider=PaymentProvider.STRIPE,
-            provider_price_id__in=price_ids,
-        )
-        .first()
-    )
-
-
-def _replace_subscription_contract(subscription, plan_price):
-    """Create a fresh immutable snapshot when Stripe changes the base price."""
-    now = timezone.now()
-    previous_metadata = subscription.provider_metadata or {}
-    provider_subscription_id = subscription.provider_subscription_id
-    subscription.status = SubscriptionStatus.CANCELED
-    subscription.canceled_at = now
-    subscription.ended_at = now
-    subscription.provider_subscription_id = None
-    subscription.save(
-        update_fields=[
-            "status",
-            "canceled_at",
-            "ended_at",
-            "provider_subscription_id",
-            "updated_at",
-        ]
-    )
-
-    replacement = ChatbotSubscription.objects.create(
-        chatbot=subscription.chatbot,
-        plan_price=plan_price,
-        selected_by=subscription.selected_by,
-        provider=PaymentProvider.STRIPE,
-        renewal_mode=RenewalMode.PROVIDER_MANAGED,
-        status=SubscriptionStatus.INCOMPLETE,
-        provider_customer_id=subscription.provider_customer_id,
-        provider_subscription_id=provider_subscription_id,
-        provider_metadata={
-            "replaces_subscription_id": str(subscription.id),
-        },
-        created_by=subscription.selected_by,
-        updated_by=subscription.selected_by,
-    )
-    subscription.provider_metadata = {
-        **previous_metadata,
-        "replaced_by_subscription_id": str(replacement.id),
-    }
-    subscription.save(update_fields=["provider_metadata", "updated_at"])
-    return replacement
-
-
-def _subscription_period(stripe_subscription, local_subscription):
+def _subscription_period(stripe_subscription):
     items = (stripe_subscription.get("items") or {}).get("data", [])
-    target_price_id = (
-        (local_subscription.snapshot or {})
-        .get("pricing", {})
-        .get("provider_price_id")
-    )
-    selected_item = None
-    for item in items:
-        if _object_id(item.get("price")) == target_price_id:
-            selected_item = item
-            break
-    if selected_item is None and items:
-        selected_item = items[0]
-    selected_item = selected_item or {}
+    selected_item = items[0] if items else {}
 
     period_start = selected_item.get(
         "current_period_start",
@@ -314,6 +243,8 @@ class StripeWebhookProcessor:
             "checkout.session.async_payment_succeeded",
         }:
             return self._checkout_completed(data)
+        if event_type == "checkout.session.async_payment_failed":
+            return self._checkout_failed(data)
         if event_type == "checkout.session.expired":
             return self._checkout_expired(data)
         if event_type in {
@@ -357,6 +288,7 @@ class StripeWebhookProcessor:
             "checkout_session_id": checkout.get("id", ""),
             "checkout_status": checkout.get("status", "complete"),
             "checkout_payment_status": payment_status or "",
+            "checkout_async_payment_failed": False,
         }
         subscription.save(
             update_fields=[
@@ -370,9 +302,45 @@ class StripeWebhookProcessor:
         )
         return None
 
+    def _checkout_failed(self, checkout):
+        metadata = checkout.get("metadata") or {}
+        provider_subscription_id = _object_id(checkout.get("subscription"))
+        subscription = _subscription_from_metadata(
+            metadata,
+            provider_subscription_id=provider_subscription_id,
+        )
+        if subscription is None or subscription.status != SubscriptionStatus.INCOMPLETE:
+            return None
+
+        subscription.provider_customer_id = _object_id(checkout.get("customer"))
+        subscription.provider_subscription_id = provider_subscription_id or None
+        subscription.provider_metadata = {
+            **(subscription.provider_metadata or {}),
+            "checkout_session_id": checkout.get("id", ""),
+            "checkout_status": checkout.get("status", "complete"),
+            "checkout_payment_status": "failed",
+            "checkout_async_payment_failed": True,
+        }
+        subscription.save(
+            update_fields=[
+                "provider_customer_id",
+                "provider_subscription_id",
+                "provider_metadata",
+                "updated_at",
+            ]
+        )
+        return None
+
     def _checkout_expired(self, checkout):
         subscription = _subscription_from_metadata(checkout.get("metadata") or {})
         if subscription is None or subscription.status != SubscriptionStatus.INCOMPLETE:
+            return None
+        current_checkout_id = (subscription.provider_metadata or {}).get(
+            "checkout_session_id"
+        )
+        if current_checkout_id != checkout.get("id"):
+            # This subscription has already rotated to a replacement Session.
+            # A delayed expiration event for the old Session must not cancel it.
             return None
         now = timezone.now()
         subscription.status = SubscriptionStatus.CANCELED
@@ -411,44 +379,8 @@ class StripeWebhookProcessor:
         ):
             return None
 
-        stripe_plan_price = _plan_price_from_stripe_subscription(
-            stripe_subscription
-        )
-        stripe_items = (stripe_subscription.get("items") or {}).get("data", [])
-        if stripe_items and stripe_plan_price is None:
-            subscription.status = SubscriptionStatus.PAUSED
-            subscription.provider_customer_id = _object_id(
-                stripe_subscription.get("customer")
-            )
-            subscription.provider_subscription_id = provider_subscription_id or None
-            subscription.provider_metadata = {
-                **(subscription.provider_metadata or {}),
-                "stripe_status": stripe_subscription.get("status", ""),
-                "stripe_subscription_event_created": event_created,
-                "billing_sync_error": "Stripe subscription price is not configured.",
-            }
-            subscription.save(
-                update_fields=[
-                    "status",
-                    "provider_customer_id",
-                    "provider_subscription_id",
-                    "provider_metadata",
-                    "updated_at",
-                ]
-            )
-            return None
-        if (
-            stripe_plan_price is not None
-            and stripe_plan_price.id != subscription.plan_price_id
-        ):
-            subscription = _replace_subscription_contract(
-                subscription,
-                stripe_plan_price,
-            )
-
         current_period_start, current_period_end = _subscription_period(
-            stripe_subscription,
-            subscription,
+            stripe_subscription
         )
         status = STRIPE_SUBSCRIPTION_STATUS_MAP.get(
             stripe_subscription.get("status"),

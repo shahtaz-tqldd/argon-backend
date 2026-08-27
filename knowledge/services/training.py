@@ -9,6 +9,10 @@ from django.utils import timezone
 from app.services.web_scrapper import WebScraper
 from knowledge.models import KnowledgeBase, KnowledgeTrainingLog
 from knowledge.services.extraction import extract_file_content
+from knowledge.services.usage import (
+    get_knowledge_subscription,
+    validate_knowledge_chunk_capacity,
+)
 from knowledge.services.validation import validate_public_url
 from knowledge.utils.choices import (
     KnowledgeSourceTypes,
@@ -89,6 +93,7 @@ class KnowledgeTrainingService:
         )
         self._start(knowledge_base, training_log)
         try:
+            get_knowledge_subscription(knowledge_base.chatbot)
             content, scraped_title = self._extract(knowledge_base, training_log)
             title_from_scrape = ""
             if scraped_title and not knowledge_base.title:
@@ -127,6 +132,7 @@ class KnowledgeTrainingService:
 
             training_log.total_chunks = len(chunks)
             training_log.save(update_fields=["total_chunks", "updated_at"])
+            validate_knowledge_chunk_capacity(knowledge_base, len(chunks))
             documents = self._embed_chunks(
                 knowledge_base,
                 training_log,
@@ -141,6 +147,11 @@ class KnowledgeTrainingService:
                 message="Replacing the source vectors.",
             )
             with transaction.atomic():
+                validate_knowledge_chunk_capacity(
+                    knowledge_base,
+                    len(chunks),
+                    lock_subscription=True,
+                )
                 self.vector_service.replace_knowledge_base(
                     knowledge_base.id,
                     documents,

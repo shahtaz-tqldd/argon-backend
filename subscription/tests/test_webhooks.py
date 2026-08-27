@@ -48,7 +48,6 @@ class StripeWebhookProcessorTests(TestCase):
             provider=PaymentProvider.STRIPE,
             billing_interval=BillingInterval.MONTHLY,
             amount=Decimal("19.00"),
-            provider_price_id="price_growth",
         )
         self.subscription = ChatbotSubscription.objects.create(
             chatbot=chatbot,
@@ -101,6 +100,61 @@ class StripeWebhookProcessorTests(TestCase):
             WebhookProcessingStatus.PROCESSED,
         )
 
+    def test_expiration_for_replaced_checkout_does_not_cancel_subscription(self):
+        self.subscription.provider_metadata = {
+            "checkout_session_id": "cs_test_replacement",
+            "checkout_status": "open",
+        }
+        self.subscription.save(update_fields=["provider_metadata", "updated_at"])
+
+        self.process(
+            self.event(
+                "checkout.session.expired",
+                {
+                    "id": "cs_test_old",
+                    "metadata": {
+                        "argon_subscription_id": str(self.subscription.id),
+                    },
+                },
+            )
+        )
+
+        self.subscription.refresh_from_db()
+        self.assertEqual(self.subscription.status, SubscriptionStatus.INCOMPLETE)
+        self.assertEqual(
+            self.subscription.provider_metadata["checkout_session_id"],
+            "cs_test_replacement",
+        )
+
+    def test_async_checkout_failure_marks_the_checkout_as_retryable(self):
+        self.process(
+            self.event(
+                "checkout.session.async_payment_failed",
+                {
+                    "id": "cs_test_failed",
+                    "status": "complete",
+                    "payment_status": "unpaid",
+                    "customer": "cus_123",
+                    "subscription": "sub_failed",
+                    "metadata": {
+                        "argon_subscription_id": str(self.subscription.id),
+                    },
+                },
+            )
+        )
+
+        self.subscription.refresh_from_db()
+        self.assertEqual(self.subscription.status, SubscriptionStatus.INCOMPLETE)
+        self.assertTrue(
+            self.subscription.provider_metadata[
+                "checkout_async_payment_failed"
+            ]
+        )
+        self.assertEqual(
+            self.subscription.provider_subscription_id,
+            "sub_failed",
+        )
+
     def test_paid_invoice_creates_payment_record(self):
         self.subscription.provider_subscription_id = "sub_123"
         self.subscription.provider_customer_id = "cus_123"
@@ -139,18 +193,7 @@ class StripeWebhookProcessorTests(TestCase):
         self.assertEqual(payment.subscription, self.subscription)
         self.assertEqual(webhook_event.payment, payment)
 
-    def test_stripe_price_change_creates_a_new_immutable_contract(self):
-        replacement_plan = SubscriptionPlan.objects.create(
-            name="Pro",
-            ai_message_limit=5000,
-        )
-        replacement_price = PlanPrice.objects.create(
-            plan=replacement_plan,
-            provider=PaymentProvider.STRIPE,
-            billing_interval=BillingInterval.MONTHLY,
-            amount=Decimal("49.00"),
-            provider_price_id="price_pro",
-        )
+    def test_dynamic_stripe_price_keeps_the_local_contract(self):
         self.subscription.provider_subscription_id = "sub_123"
         self.subscription.save(
             update_fields=["provider_subscription_id", "updated_at"]
@@ -169,7 +212,7 @@ class StripeWebhookProcessorTests(TestCase):
                 "items": {
                     "data": [
                         {
-                            "price": {"id": "price_pro"},
+                            "price": {"id": "price_created_inline"},
                             "current_period_start": 1_800_000_000,
                             "current_period_end": 1_802_592_000,
                         }
@@ -181,10 +224,6 @@ class StripeWebhookProcessorTests(TestCase):
         self.process(event)
 
         self.subscription.refresh_from_db()
-        replacement = ChatbotSubscription.objects.get(
-            provider_subscription_id="sub_123"
-        )
-        self.assertEqual(self.subscription.status, SubscriptionStatus.CANCELED)
-        self.assertEqual(replacement.plan_price, replacement_price)
-        self.assertEqual(replacement.status, SubscriptionStatus.ACTIVE)
-        self.assertEqual(replacement.get_plan_name(), "Pro")
+        self.assertEqual(ChatbotSubscription.objects.count(), 1)
+        self.assertEqual(self.subscription.status, SubscriptionStatus.ACTIVE)
+        self.assertEqual(self.subscription.get_plan_name(), "Growth")

@@ -1,3 +1,4 @@
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -8,11 +9,23 @@ from rest_framework.test import APITestCase
 
 from chatbot.services import create_chatbot
 from knowledge.models import KnowledgeBase, KnowledgeTrainingLog
+from knowledge.services import (
+    KnowledgeLimitExceeded,
+    validate_knowledge_chunk_capacity,
+)
 from knowledge.utils.choices import (
     KnowledgeSourceTypes,
     KnowledgeTrainingStageTypes,
     StatusTypes,
 )
+from subscription.choices import (
+    BillingInterval,
+    PaymentProvider,
+    PlanFeature,
+    RenewalMode,
+    SubscriptionStatus,
+)
+from subscription.models import ChatbotSubscription, PlanPrice, SubscriptionPlan
 from vector_store.models import VectorDocument
 from workspace.services import ensure_personal_workspace
 
@@ -31,6 +44,29 @@ class KnowledgeClientAPITests(APITestCase):
             workspace=self.workspace,
             chatbot_name="Knowledge Bot",
             created_by=self.owner,
+        )
+        self.plan = SubscriptionPlan.objects.create(
+            name="Free",
+            ai_message_limit=100,
+            file_size_limit_mb=10,
+            knowledge_chunk_limit=2,
+            features=[PlanFeature.KNOWLEDGE_BASE],
+            is_free=True,
+        )
+        self.price = PlanPrice.objects.create(
+            plan=self.plan,
+            provider=PaymentProvider.MANUAL,
+            billing_interval=BillingInterval.MONTHLY,
+            currency="USD",
+            amount=Decimal("0.00"),
+        )
+        self.subscription = ChatbotSubscription.objects.create(
+            chatbot=self.chatbot,
+            plan_price=self.price,
+            selected_by=self.owner,
+            provider=PaymentProvider.MANUAL,
+            renewal_mode=RenewalMode.MANUAL,
+            status=SubscriptionStatus.ACTIVE,
         )
         self.client.force_authenticate(self.owner)
 
@@ -107,12 +143,12 @@ class KnowledgeClientAPITests(APITestCase):
             },
         )
 
-    def test_usage_returns_chatbot_totals_and_static_limits(self):
+    def test_usage_returns_chatbot_totals_and_subscription_snapshot_limits(self):
         first_file = self.create_knowledge(
             source_type=KnowledgeSourceTypes.FILE,
             file_size=10,
         )
-        self.create_knowledge(
+        second_file = self.create_knowledge(
             source_type=KnowledgeSourceTypes.FILE,
             file_size=15,
         )
@@ -143,6 +179,10 @@ class KnowledgeClientAPITests(APITestCase):
                     embedding=[0.1] * 1536,
                 )
 
+        self.plan.file_size_limit_mb = 1
+        self.plan.knowledge_chunk_limit = 1
+        self.plan.save()
+
         response = self.client.get(
             reverse("knowledge-usage"),
             {"chatbot": self.chatbot.slug},
@@ -153,12 +193,29 @@ class KnowledgeClientAPITests(APITestCase):
             response.data["data"],
             {
                 "total_chunks": 2,
-                "chunk_limit": 500,
+                "chunk_limit": 2,
                 "total_file_size_bytes": 25,
-                "file_size_limit_bytes": 25 * 1024 * 1024,
-                "file_size_limit_mb": 25,
+                "file_size_limit_bytes": 10 * 1024 * 1024,
+                "file_size_limit_mb": 10,
             },
         )
+        with self.assertRaises(KnowledgeLimitExceeded):
+            validate_knowledge_chunk_capacity(second_file, 1)
+
+    @patch("knowledge.tasks.train_knowledge_base.delay")
+    def test_upload_requires_an_active_knowledge_subscription(self, delay):
+        self.subscription.status = SubscriptionStatus.CANCELED
+        self.subscription.save(update_fields=["status", "updated_at"])
+
+        response = self.client.post(
+            reverse("knowledge-upload"),
+            {"content": "Custom support documentation."},
+            format="json",
+            query_params={"chatbot": self.chatbot.slug, "type": "custom"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        delay.assert_not_called()
 
     def test_details_uses_knowledge_base_id_query_parameter(self):
         source = self.create_knowledge()

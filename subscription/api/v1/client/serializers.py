@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from subscription.choices import PaymentProvider
+from subscription.choices import BillingInterval, PaymentProvider
 from subscription.models import ChatbotSubscription, Payment, PlanPrice, SubscriptionPlan
 
 
@@ -78,9 +78,12 @@ class StripeCheckoutSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "This plan requires contacting sales."
             )
-        if not plan_price.provider_price_id:
+        if plan_price.billing_interval not in {
+            BillingInterval.MONTHLY,
+            BillingInterval.ANNUAL,
+        }:
             raise serializers.ValidationError(
-                "This price is not configured for Stripe checkout."
+                "Stripe checkout supports monthly or annual prices only."
             )
         return plan_price
 

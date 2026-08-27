@@ -28,6 +28,7 @@ from subscription.models import ChatbotSubscription, Payment, PlanPrice, Subscri
 from subscription.services.stripe import (
     StripeBillingService,
     StripeConfigurationError,
+    StripePaymentRequiredError,
     StripeServiceError,
     StripeWebhookError,
 )
@@ -125,7 +126,7 @@ class StripeCheckoutAPIView(SubscriptionChatbotMixin, GenericAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            subscription, checkout_url, reused = start_stripe_checkout(
+            checkout_result = start_stripe_checkout(
                 chatbot=chatbot,
                 plan_price=serializer.validated_data["plan_price"],
                 user=request.user,
@@ -140,6 +141,11 @@ class StripeCheckoutAPIView(SubscriptionChatbotMixin, GenericAPIView):
                 message=str(exc),
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
+        except StripePaymentRequiredError as exc:
+            return APIResponse.error(
+                message=str(exc),
+                status=status.HTTP_402_PAYMENT_REQUIRED,
+            )
         except StripeServiceError as exc:
             return APIResponse.error(
                 message=str(exc),
@@ -148,12 +154,27 @@ class StripeCheckoutAPIView(SubscriptionChatbotMixin, GenericAPIView):
 
         return APIResponse.success(
             data={
-                "subscription_id": str(subscription.id),
-                "checkout_url": checkout_url,
-                "reused": reused,
+                "subscription_id": str(checkout_result.subscription.id),
+                "subscription_status": checkout_result.subscription.status,
+                "client_secret": checkout_result.client_secret,
+                "requires_checkout": bool(checkout_result.client_secret),
+                "reused": checkout_result.reused,
+                "action": checkout_result.action,
             },
-            message="Stripe checkout is ready.",
-            status=status.HTTP_200_OK if reused else status.HTTP_201_CREATED,
+            message={
+                "checkout": "Stripe checkout is ready.",
+                "subscription_activated": (
+                    "Stripe payment confirmed and subscription activated."
+                ),
+                "plan_changed": "Subscription plan changed successfully.",
+                "already_active": "This subscription plan is already active.",
+            }[checkout_result.action],
+            status=(
+                status.HTTP_201_CREATED
+                if checkout_result.action == "checkout"
+                and not checkout_result.reused
+                else status.HTTP_200_OK
+            ),
         )
 
 

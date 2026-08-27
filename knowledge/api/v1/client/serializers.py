@@ -10,6 +10,11 @@ from knowledge.services.validation import (
     validate_knowledge_file,
     validate_public_url,
 )
+from knowledge.services.usage import (
+    KnowledgeEntitlementError,
+    KnowledgeLimitExceeded,
+    validate_knowledge_file_capacity,
+)
 from knowledge.utils.choices import KnowledgeSourceTypes
 
 
@@ -144,6 +149,17 @@ class FileKnowledgeCreateSerializer(serializers.Serializer):
         validators=[validate_knowledge_file],
     )
     title = serializers.CharField(max_length=500, required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        try:
+            validate_knowledge_file_capacity(
+                self.context["chatbot"],
+                attrs["file"].size,
+            )
+        except (KnowledgeEntitlementError, KnowledgeLimitExceeded) as exc:
+            raise serializers.ValidationError({"file": [str(exc)]}) from exc
+        return attrs
 
     def create(self, validated_data):
         uploaded_file = validated_data["file"]

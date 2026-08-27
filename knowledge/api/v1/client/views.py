@@ -25,7 +25,12 @@ from knowledge.api.v1.client.serializers import (
     URLKnowledgeCreateSerializer,
 )
 from knowledge.models import KnowledgeBase, KnowledgeTrainingLog
-from knowledge.services import get_knowledge_usage, queue_knowledge_training
+from knowledge.services import (
+    KnowledgeEntitlementError,
+    get_knowledge_subscription,
+    get_knowledge_usage,
+    queue_knowledge_training,
+)
 from knowledge.utils.choices import (
     KnowledgeTrainingStageTypes,
     StatusTypes,
@@ -146,6 +151,13 @@ class KnowledgeUploadView(KnowledgeChatbotMixin, GenericAPIView):
         return self.serializer_by_type[self.get_chatbot_query()["type"]]
 
     def post(self, request, *args, **kwargs):
+        try:
+            get_knowledge_subscription(self.get_chatbot())
+        except KnowledgeEntitlementError as exc:
+            return APIResponse.error(
+                message=str(exc),
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         knowledge_base = serializer.save()
@@ -203,7 +215,13 @@ class KnowledgeUsageView(KnowledgeChatbotMixin, GenericAPIView):
     serializer_class = KnowledgeUsageSerializer
 
     def get(self, request, *args, **kwargs):
-        usage = get_knowledge_usage(self.get_chatbot())
+        try:
+            usage = get_knowledge_usage(self.get_chatbot())
+        except KnowledgeEntitlementError as exc:
+            return APIResponse.error(
+                message=str(exc),
+                status=status.HTTP_403_FORBIDDEN,
+            )
         return APIResponse.success(
             data=self.get_serializer(usage).data,
             message="Knowledge usage fetched successfully.",
@@ -232,6 +250,13 @@ class KnowledgeUpdateView(KnowledgeObjectMixin, GenericAPIView):
         return KnowledgeMetadataUpdateSerializer
 
     def _queue_retraining(self, knowledge_base, *, message):
+        try:
+            get_knowledge_subscription(knowledge_base.chatbot)
+        except KnowledgeEntitlementError as exc:
+            return APIResponse.error(
+                message=str(exc),
+                status=status.HTTP_403_FORBIDDEN,
+            )
         if has_active_training(knowledge_base):
             return APIResponse.error(
                 message="This knowledge source already has an active training job.",

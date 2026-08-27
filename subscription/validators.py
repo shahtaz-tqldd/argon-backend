@@ -80,7 +80,6 @@ def validate_subscription_snapshot(value):
         "billing_interval",
         "amount",
         "currency",
-        "provider_price_id",
     }
     missing = required_pricing_fields.difference(pricing)
     if missing:
@@ -106,8 +105,6 @@ def validate_subscription_snapshot(value):
 
     if "enabled" not in overage or not isinstance(overage["enabled"], bool):
         raise ValidationError({"overage.enabled": "A boolean value is required."})
-    if "provider_price_id" not in overage:
-        raise ValidationError({"overage": "Missing field: provider_price_id."})
     unit_price = overage.get("unit_price")
     if overage["enabled"]:
         if limits["ai_message_limit"] is None:

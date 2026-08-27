@@ -38,12 +38,7 @@ class PlanPriceAdmin(admin.ModelAdmin):
         "updated_at",
     )
     list_filter = ("provider", "billing_interval", "currency", "is_active")
-    search_fields = (
-        "plan__name",
-        "plan__slug",
-        "provider_price_id",
-        "provider_overage_price_id",
-    )
+    search_fields = ("plan__name", "plan__slug")
     autocomplete_fields = ("plan",)
     readonly_fields = ("id", "created_at", "updated_at")
     list_select_related = ("plan",)
