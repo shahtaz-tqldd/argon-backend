@@ -384,6 +384,76 @@ class ChatbotClientAPITests(APITestCase):
         self.assertIsNotNone(response.data["meta"]["next"])
         self.assertIsNone(response.data["meta"]["previous"])
 
+    def test_workspace_member_can_list_and_open_every_workspace_chatbot(self):
+        workspace_chatbot = create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Workspace Bot",
+            created_by=self.owner,
+        )
+        ChatbotUser.objects.filter(
+            chatbot=self.chatbot,
+            user=self.member,
+        ).delete()
+        self.client.force_authenticate(self.member)
+
+        response = self.client.get(
+            reverse("chatbot-list"),
+            {"page_size": 10},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            {item["slug"] for item in response.data["data"]},
+            {self.chatbot.slug, workspace_chatbot.slug},
+        )
+
+        response = self.client.get(
+            reverse("chatbot-detail"),
+            {"chatbot": workspace_chatbot.slug},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        response = self.client.patch(
+            (
+                f'{reverse("chatbot-update")}?'
+                f'{urlencode({"chatbot": workspace_chatbot.slug})}'
+            ),
+            {"description": "Not allowed without chatbot permission"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_chatbot_only_member_lists_only_assigned_chatbots(self):
+        chatbot_only_member = User.objects.create_user(
+            email="chatbot-only@example.com",
+            password="StrongPass123!",
+        )
+        ChatbotUser.objects.create(
+            chatbot=self.chatbot,
+            user=chatbot_only_member,
+        )
+        other_chatbot = create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Other Bot",
+            created_by=self.owner,
+        )
+        self.client.force_authenticate(chatbot_only_member)
+
+        response = self.client.get(
+            reverse("chatbot-list"),
+            {"page_size": 10},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 1)
+        self.assertEqual(response.data["data"][0]["slug"], self.chatbot.slug)
+
+        response = self.client.get(
+            reverse("chatbot-detail"),
+            {"chatbot": other_chatbot.slug},
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_chatbot_member_list_returns_page_metadata(self):
         response = self.client.get(
             reverse("chatbot-members"),

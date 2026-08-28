@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
@@ -149,8 +150,14 @@ class ChatbotListView(PaginatedListMixin, GenericAPIView):
         return (
             Chatbot.objects.select_related("workspace")
             .filter(
-                memberships__user=self.request.user,
-                memberships__is_active=True,
+                Q(
+                    workspace__memberships__user=self.request.user,
+                    workspace__memberships__is_active=True,
+                )
+                | Q(
+                    memberships__user=self.request.user,
+                    memberships__is_active=True,
+                ),
                 workspace__is_active=True,
                 is_deleted=False,
             )
@@ -193,6 +200,7 @@ class ChatbotCreateView(GenericAPIView):
 class ChatbotDetailView(ChatbotObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     serializer_class = ChatbotDetailSerializer
+    allow_workspace_member = True
 
     def get(self, request, *args, **kwargs):
         return APIResponse.success(

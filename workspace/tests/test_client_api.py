@@ -2,6 +2,8 @@ from unittest.mock import patch
 from urllib.parse import urlencode
 
 from django.contrib.auth import get_user_model
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -202,6 +204,7 @@ class WorkspaceClientAPITests(APITestCase):
         )
         self.assertEqual(member_data["role"], WorkspaceRole.MEMBER)
         self.assertTrue(member_data["is_active"])
+        self.assertTrue(member_data["invitation_request_accepted"])
         self.assertIsNotNone(member_data["invited_at"])
 
         member_query = {
@@ -317,6 +320,7 @@ class WorkspaceClientAPITests(APITestCase):
         )
         self.assertEqual(pending_member["role"], WorkspaceRole.MEMBER)
         self.assertFalse(pending_member["is_active"])
+        self.assertFalse(pending_member["invitation_request_accepted"])
 
         self.client.force_authenticate(user=None)
         accept_url = reverse("accept-workspace-invitation")
@@ -326,9 +330,20 @@ class WorkspaceClientAPITests(APITestCase):
             "password": "StrongPass123!",
             "confirm_password": "StrongPass123!",
         }
-        response = self.client.post(accept_url, payload, format="json")
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.post(accept_url, payload, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        invitation_lock_query = next(
+            query["sql"]
+            for query in queries.captured_queries
+            if 'FROM "workspace_workspaceinvitation"' in query["sql"]
+            and "FOR UPDATE" in query["sql"]
+        )
+        self.assertIn(
+            'FOR UPDATE OF "workspace_workspaceinvitation"',
+            invitation_lock_query,
+        )
         invited_user = User.objects.get(email="invited@example.com")
         self.assertTrue(invited_user.is_email_verified)
         self.assertFalse(Workspace.objects.filter(owner=invited_user).exists())

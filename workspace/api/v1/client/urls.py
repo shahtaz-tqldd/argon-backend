@@ -10,7 +10,7 @@ workspaces = [
 ]
 
 workspace_members = [
-    path("list/", views.WorkspaceMemberListView.as_view(), name="workspace-members"),
+    path("member-list/", views.WorkspaceMemberListView.as_view(), name="workspace-members"),
     path(
         "details/",
         views.WorkspaceMemberDetailView.as_view(),
@@ -39,6 +39,6 @@ workspace_members = [
 ]
 
 urlpatterns = [
-    path("team/", include(workspace_members)),
     path("", include(workspaces)),
+    path("team/", include(workspace_members)),
 ]

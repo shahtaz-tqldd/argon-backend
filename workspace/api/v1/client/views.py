@@ -322,6 +322,7 @@ class WorkspaceMemberListView(
                 if invitation is not None
                 else membership.created_at
             )
+            membership.invitation_request_accepted = True
 
         pending_invitations = [
             invitation
@@ -338,6 +339,7 @@ class WorkspaceMemberListView(
             )
             invitation.role = WorkspaceRole.MEMBER
             invitation.is_active = False
+            invitation.invitation_request_accepted = False
             invitation.invited_at = invitation.created_at
 
         return sorted(

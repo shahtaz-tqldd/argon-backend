@@ -156,6 +156,12 @@ class IsChatbotUser(BasePermission):
         ):
             return True
 
+        if (
+            getattr(view, "allow_workspace_member", False)
+            and workspace_role is not None
+        ):
+            return True
+
         if chatbot_membership is None:
             return False
 

@@ -45,7 +45,7 @@ def get_valid_workspace_invitation(token):
 
 
 def _deliver_workspace_invitation(*, invitation, token):
-    query = urlencode({"token": token})
+    query = urlencode({"token": token, "email": invitation.email})
     invitation_link = (
         f"{settings.USER_FRONTEND_URL.rstrip('/')}"
         f"{settings.WORKSPACE_INVITATION_PATH}?{query}"
@@ -142,7 +142,7 @@ def issue_workspace_invitation(*, workspace, email, invited_by):
 def accept_workspace_invitation(*, token, name, password):
     try:
         invitation = (
-            WorkspaceInvitation.objects.select_for_update()
+            WorkspaceInvitation.objects.select_for_update(of=("self",))
             .select_related("workspace", "created_by")
             .get(token_hash=hash_invitation_token(token))
         )

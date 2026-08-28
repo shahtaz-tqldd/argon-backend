@@ -213,6 +213,7 @@ class WorkspaceMemberListSerializer(serializers.Serializer):
     user = WorkspaceMemberUserSerializer(read_only=True)
     role = serializers.CharField(read_only=True)
     is_active = serializers.BooleanField(read_only=True)
+    invitation_request_accepted = serializers.BooleanField(read_only=True)
     last_active = serializers.DateTimeField(
         source="user.last_active",
         read_only=True,
