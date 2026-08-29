@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
@@ -39,6 +39,8 @@ from chatbot.utils.choices import (
     ChatbotStatusTypes,
 )
 from chatbot.utils.permissions import available_chatbot_permissions
+from subscription.models import ChatbotSubscription
+from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
 
 User = get_user_model()
 
@@ -148,7 +150,29 @@ class ChatbotListView(PaginatedListMixin, GenericAPIView):
 
     def get_queryset(self):
         return (
-            Chatbot.objects.select_related("workspace")
+            Chatbot.objects.select_related(
+                "workspace",
+                "created_by__profile",
+            )
+            .prefetch_related(
+                Prefetch(
+                    "memberships",
+                    queryset=ChatbotUser.objects.filter(
+                        is_active=True,
+                        user__is_active=True,
+                    )
+                    .select_related("user__profile")
+                    .order_by("user__email"),
+                    to_attr="active_memberships",
+                ),
+                Prefetch(
+                    "subscriptions",
+                    queryset=ChatbotSubscription.objects.filter(
+                        status__in=OPEN_SUBSCRIPTION_STATUSES,
+                    ).order_by("-created_at"),
+                    to_attr="open_subscriptions",
+                ),
+            )
             .filter(
                 Q(
                     workspace__memberships__user=self.request.user,

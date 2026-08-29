@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal
 from unittest.mock import patch
 from urllib.parse import urlencode
 
@@ -17,6 +18,13 @@ from chatbot.models import (
 )
 from chatbot.services import create_chatbot
 from chatbot.utils.choices import ChatbotPermissionTypes, ChatbotRoleTypes
+from subscription.choices import (
+    BillingInterval,
+    PaymentProvider,
+    RenewalMode,
+    SubscriptionStatus,
+)
+from subscription.models import ChatbotSubscription, PlanPrice, SubscriptionPlan
 from workspace.models import Workspace, WorkspaceUser
 from workspace.services import add_workspace_user, ensure_personal_workspace
 
@@ -383,6 +391,87 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(response.data["meta"]["num_pages"], 2)
         self.assertIsNotNone(response.data["meta"]["next"])
         self.assertIsNone(response.data["meta"]["previous"])
+
+    def test_chatbot_list_returns_compact_details_creator_and_members(self):
+        self.owner.name = "Chatbot Owner"
+        self.owner.save(update_fields=["name"])
+        self.owner.profile.avatar_url = "https://example.com/owner.png"
+        self.owner.profile.save(update_fields=["avatar_url"])
+        self.member.name = "Chatbot Member"
+        self.member.save(update_fields=["name"])
+        self.member.profile.avatar_url = "https://example.com/member.png"
+        self.member.profile.save(update_fields=["avatar_url"])
+        plan = SubscriptionPlan.objects.create(name="Growth")
+        plan_price = PlanPrice.objects.create(
+            plan=plan,
+            provider=PaymentProvider.STRIPE,
+            billing_interval=BillingInterval.MONTHLY,
+            currency="USD",
+            amount=Decimal("19.00"),
+        )
+        ChatbotSubscription.objects.create(
+            chatbot=self.chatbot,
+            plan_price=plan_price,
+            selected_by=self.owner,
+            provider=PaymentProvider.STRIPE,
+            renewal_mode=RenewalMode.PROVIDER_MANAGED,
+            status=SubscriptionStatus.ACTIVE,
+        )
+
+        response = self.client.get(
+            reverse("chatbot-list"),
+            {"page_size": 10},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["data"]), 1)
+        data = response.data["data"][0]
+        self.assertEqual(
+            set(data),
+            {
+                "slug",
+                "chatbot_name",
+                "business_name",
+                "description",
+                "ai_enabled",
+                "logo",
+                "status",
+                "current_user_role",
+                "subscription_plan_name",
+                "created_by",
+                "members",
+            },
+        )
+        self.assertEqual(data["slug"], self.chatbot.slug)
+        self.assertEqual(data["chatbot_name"], self.chatbot.chatbot_name)
+        self.assertEqual(data["business_name"], self.chatbot.business_name)
+        self.assertEqual(data["description"], self.chatbot.description)
+        self.assertEqual(data["ai_enabled"], self.chatbot.ai_enabled)
+        self.assertEqual(data["logo"], self.chatbot.logo)
+        self.assertEqual(data["status"], self.chatbot.status)
+        self.assertEqual(data["current_user_role"], ChatbotRoleTypes.ADMIN)
+        self.assertEqual(data["subscription_plan_name"], plan.name)
+        self.assertEqual(
+            data["created_by"],
+            {
+                "name": self.owner.name,
+                "email": self.owner.email,
+                "avatar": self.owner.profile.avatar_url,
+            },
+        )
+        self.assertEqual(
+            data["members"],
+            [
+                {
+                    "name": self.member.name,
+                    "avatar": self.member.profile.avatar_url,
+                },
+                {
+                    "name": self.owner.name,
+                    "avatar": self.owner.profile.avatar_url,
+                },
+            ],
+        )
 
     def test_workspace_member_can_list_and_open_every_workspace_chatbot(self):
         workspace_chatbot = create_chatbot(

@@ -32,6 +32,7 @@ from chatbot.utils.validation import (
     normalize_widget_origin,
     validate_unique_chatbot_name,
 )
+from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
 from workspace.models import Workspace, WorkspaceUser
 
 User = get_user_model()
@@ -278,8 +279,101 @@ class ChatbotBaseSerializer(serializers.ModelSerializer):
         return instance
 
 
-class ChatbotListSerializer(ChatbotBaseSerializer):
-    """Serialize chatbots returned by the list endpoint."""
+class ChatbotListCreatedBySerializer(serializers.ModelSerializer):
+    avatar = serializers.URLField(
+        source="profile.avatar_url",
+        read_only=True,
+        default="",
+    )
+
+    class Meta:
+        model = User
+        fields = ("name", "email", "avatar")
+        read_only_fields = fields
+
+
+class ChatbotListMemberSerializer(serializers.Serializer):
+    name = serializers.CharField(source="user.name", read_only=True)
+    avatar = serializers.URLField(
+        source="user.profile.avatar_url",
+        read_only=True,
+        default="",
+    )
+
+
+class ChatbotListSerializer(serializers.ModelSerializer):
+    """Serialize compact chatbot summaries returned by the list endpoint."""
+
+    created_by = serializers.SerializerMethodField()
+    members = serializers.SerializerMethodField()
+    current_user_role = serializers.SerializerMethodField()
+    subscription_plan_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Chatbot
+        fields = (
+            "slug",
+            "chatbot_name",
+            "business_name",
+            "description",
+            "ai_enabled",
+            "logo",
+            "status",
+            "current_user_role",
+            "subscription_plan_name",
+            "created_by",
+            "members",
+        )
+        read_only_fields = fields
+
+    def get_created_by(self, obj):
+        if obj.created_by is None:
+            return {"name": "", "email": "", "avatar": ""}
+        return ChatbotListCreatedBySerializer(obj.created_by).data
+
+    def get_members(self, obj):
+        memberships = getattr(obj, "active_memberships", None)
+        if memberships is None:
+            memberships = obj.memberships.filter(
+                is_active=True,
+                user__is_active=True,
+            ).select_related("user__profile")
+        return ChatbotListMemberSerializer(memberships, many=True).data
+
+    def get_current_user_role(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return None
+
+        memberships = getattr(obj, "active_memberships", None)
+        if memberships is not None:
+            return next(
+                (
+                    membership.role
+                    for membership in memberships
+                    if membership.user_id == request.user.pk
+                ),
+                None,
+            )
+
+        return (
+            obj.memberships.filter(
+                user=request.user,
+                is_active=True,
+            )
+            .values_list("role", flat=True)
+            .first()
+        )
+
+    def get_subscription_plan_name(self, obj):
+        subscriptions = getattr(obj, "open_subscriptions", None)
+        if subscriptions is None:
+            subscription = obj.subscriptions.filter(
+                status__in=OPEN_SUBSCRIPTION_STATUSES,
+            ).first()
+        else:
+            subscription = subscriptions[0] if subscriptions else None
+        return subscription.get_plan_name() if subscription else ""
 
 
 class ChatbotCreateSerializer(ChatbotBaseSerializer):
