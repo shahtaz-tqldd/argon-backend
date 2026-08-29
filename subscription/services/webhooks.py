@@ -24,6 +24,15 @@ from subscription.services.stripe import StripeBillingService
 logger = logging.getLogger("app.subscription.webhooks")
 
 
+def _apply_subscription_capacity(subscription):
+    # Imported lazily to avoid the chatbot/subscription service import cycle.
+    from chatbot.services.capacity import (
+        apply_active_subscription_to_chatbot_capacity,
+    )
+
+    return apply_active_subscription_to_chatbot_capacity(subscription)
+
+
 HANDLED_EVENT_TYPES = {
     "checkout.session.completed",
     "checkout.session.async_payment_failed",
@@ -275,6 +284,7 @@ class StripeWebhookProcessor:
             return None
 
         payment_status = checkout.get("payment_status")
+        was_active = subscription.status == SubscriptionStatus.ACTIVE
         if (
             payment_status in {"paid", "no_payment_required"}
             and subscription.status == SubscriptionStatus.INCOMPLETE
@@ -300,6 +310,11 @@ class StripeWebhookProcessor:
                 "updated_at",
             ]
         )
+        if (
+            not was_active
+            and subscription.status == SubscriptionStatus.ACTIVE
+        ):
+            _apply_subscription_capacity(subscription)
         return None
 
     def _checkout_failed(self, checkout):
@@ -369,6 +384,7 @@ class StripeWebhookProcessor:
         if subscription is None:
             return None
 
+        previous_status = subscription.status
         previous_event_created = (subscription.provider_metadata or {}).get(
             "stripe_subscription_event_created"
         )
@@ -429,6 +445,11 @@ class StripeWebhookProcessor:
                 "updated_at",
             ]
         )
+        if (
+            previous_status != SubscriptionStatus.ACTIVE
+            and subscription.status == SubscriptionStatus.ACTIVE
+        ):
+            _apply_subscription_capacity(subscription)
         return None
 
     def _sync_invoice(self, invoice, event_type):
@@ -443,6 +464,7 @@ class StripeWebhookProcessor:
         if subscription is None:
             return None
 
+        previous_status = subscription.status
         if provider_subscription_id and not subscription.provider_subscription_id:
             subscription.provider_subscription_id = provider_subscription_id
         customer_id = _object_id(invoice.get("customer"))
@@ -475,6 +497,11 @@ class StripeWebhookProcessor:
                 "updated_at",
             ]
         )
+        if (
+            previous_status != SubscriptionStatus.ACTIVE
+            and subscription.status == SubscriptionStatus.ACTIVE
+        ):
+            _apply_subscription_capacity(subscription)
 
         paid_at = _timestamp(
             (invoice.get("status_transitions") or {}).get("paid_at")

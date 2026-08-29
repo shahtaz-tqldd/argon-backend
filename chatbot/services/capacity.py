@@ -1,13 +1,17 @@
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.utils import timezone
 
 from chatbot.models import ChatbotCapacity
 from chatbot.services.resolution import resolve_chatbot_reference
 from chatbot.services.subscription import get_chatbot_subscription_entitlements
-from subscription.choices import PlanFeature
+from lead_capture.models import LeadCaptureConfig
+from subscription.choices import PlanFeature, SubscriptionStatus
+from subscription.models import ChatbotSubscription
 
 
 BYTES_PER_MEGABYTE = 1024 * 1024
+CAPACITY_APPLIED_METADATA_KEY = "chatbot_capacity_applied_at"
 UNSET = object()
 
 
@@ -144,3 +148,107 @@ def sync_chatbot_capacity_from_subscription(
         knowledge_chunk_limit=entitlements.knowledge_chunk_limit,
         active_features=entitlements.features,
     )
+
+
+def _message_limit_after_paid_plan(capacity, new_plan_allowance, *, created):
+    if created:
+        return new_plan_allowance
+    if capacity.ai_message_limit is None or new_plan_allowance is None:
+        return None
+
+    remaining_messages = max(
+        capacity.ai_message_limit - capacity.current_ai_message_count,
+        0,
+    )
+    return (
+        capacity.current_ai_message_count
+        + remaining_messages
+        + new_plan_allowance
+    )
+
+
+@transaction.atomic
+def apply_active_subscription_to_chatbot_capacity(subscription):
+    """Apply one newly activated subscription to cached chatbot capacity.
+
+    Each subscription contract is applied once. Paid plans add their message
+    allowance to the chatbot's remaining balance, while free plans reset the
+    message allowance and usage. All other limits and features are replaced by
+    the newly active contract.
+    """
+
+    subscription = (
+        ChatbotSubscription.objects.select_for_update()
+        .select_related("chatbot")
+        .get(pk=subscription.pk)
+    )
+    if subscription.status != SubscriptionStatus.ACTIVE:
+        raise ValidationError(
+            "Only an active subscription can be applied to chatbot capacity."
+        )
+
+    metadata = subscription.provider_metadata or {}
+    if metadata.get(CAPACITY_APPLIED_METADATA_KEY):
+        return ChatbotCapacity.objects.get(chatbot_id=subscription.chatbot_id)
+
+    capacity, created = ChatbotCapacity.objects.get_or_create(
+        chatbot_id=subscription.chatbot_id
+    )
+    if not created:
+        capacity = ChatbotCapacity.objects.select_for_update().get(
+            pk=capacity.pk
+        )
+
+    features = _normalized_features(subscription.get_features())
+    file_size_limit_mb = subscription.get_file_size_limit_mb()
+    new_plan_allowance = subscription.get_ai_message_limit()
+
+    if subscription.is_free_plan():
+        capacity.ai_message_limit = new_plan_allowance
+        capacity.current_ai_message_count = 0
+    else:
+        capacity.ai_message_limit = _message_limit_after_paid_plan(
+            capacity,
+            new_plan_allowance,
+            created=created,
+        )
+
+    capacity.file_size_limit_bytes = (
+        file_size_limit_mb * BYTES_PER_MEGABYTE
+        if file_size_limit_mb is not None
+        else None
+    )
+    capacity.knowledge_chunk_limit = (
+        subscription.get_knowledge_chunk_limit()
+    )
+    capacity.active_features = features
+    capacity.full_clean()
+    capacity.save()
+
+    if (
+        not subscription.is_free_plan()
+        and PlanFeature.LEAD_CAPTURE in features
+    ):
+        LeadCaptureConfig.objects.get_or_create(
+            chatbot_id=subscription.chatbot_id,
+            defaults={
+                "created_by": subscription.selected_by,
+                "updated_by": subscription.selected_by,
+            },
+        )
+    else:
+        LeadCaptureConfig.objects.filter(
+            chatbot_id=subscription.chatbot_id,
+            is_enabled=True,
+        ).update(
+            is_enabled=False,
+            updated_by=subscription.selected_by,
+            updated_at=timezone.now(),
+        )
+
+    subscription.provider_metadata = {
+        **metadata,
+        CAPACITY_APPLIED_METADATA_KEY: timezone.now().isoformat(),
+    }
+    subscription.save(update_fields=["provider_metadata", "updated_at"])
+    return capacity

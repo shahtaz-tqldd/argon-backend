@@ -9,6 +9,7 @@ from django.test import SimpleTestCase
 from chatbot.models import Chatbot, ChatbotCapacity
 from chatbot.services.capacity import (
     BYTES_PER_MEGABYTE,
+    _message_limit_after_paid_plan,
     get_chatbot_capacity,
     sync_chatbot_capacity_from_subscription,
     update_chatbot_capacity,
@@ -51,6 +52,22 @@ class ChatbotCapacityServiceTests(SimpleTestCase):
 
         self.assertIs(result, self.capacity)
         get_capacity.assert_called_once_with(chatbot_id=self.chatbot.id)
+
+    def test_paid_plan_adds_allowance_to_remaining_messages(self):
+        self.capacity.ai_message_limit = 1000
+        self.capacity.current_ai_message_count = 658
+
+        updated_limit = _message_limit_after_paid_plan(
+            self.capacity,
+            1500,
+            created=False,
+        )
+
+        self.assertEqual(updated_limit, 2500)
+        self.assertEqual(
+            updated_limit - self.capacity.current_ai_message_count,
+            342 + 1500,
+        )
 
     def test_update_applies_atomic_usage_deltas_and_limits(self):
         with (

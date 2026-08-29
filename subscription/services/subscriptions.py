@@ -24,6 +24,15 @@ OPEN_SUBSCRIPTION_STATUSES = (
 )
 
 
+def _apply_subscription_capacity(subscription):
+    # Imported lazily to avoid the chatbot/subscription service import cycle.
+    from chatbot.services.capacity import (
+        apply_active_subscription_to_chatbot_capacity,
+    )
+
+    return apply_active_subscription_to_chatbot_capacity(subscription)
+
+
 class SubscriptionConflictError(Exception):
     """Raised when a chatbot already has an incompatible open subscription."""
 
@@ -230,6 +239,7 @@ def _activate_completed_checkout(*, subscription, checkout, user):
             "updated_at",
         ]
     )
+    _apply_subscription_capacity(locked)
     return locked
 
 
@@ -435,6 +445,7 @@ def _change_active_stripe_plan(
         replacement.created_by = user
         replacement.updated_by = user
         replacement.save(force_insert=True)
+        _apply_subscription_capacity(replacement)
         latest_invoice_id = _object_id(
             stripe_subscription.get("latest_invoice")
         )
@@ -720,37 +731,86 @@ def start_stripe_checkout(*, chatbot, plan_price, user, stripe_service=None):
     )
 
 
-@transaction.atomic
-def activate_free_subscription(*, chatbot, plan_price, user):
-    existing = (
-        ChatbotSubscription.objects.select_for_update()
-        .filter(
-            chatbot=chatbot,
-            status__in=OPEN_SUBSCRIPTION_STATUSES,
+def activate_free_subscription(
+    *,
+    chatbot,
+    plan_price,
+    user,
+    stripe_service=None,
+):
+    """Activate free and replace any current plan immediately."""
+
+    with transaction.atomic():
+        existing = (
+            ChatbotSubscription.objects.select_for_update()
+            .filter(
+                chatbot=chatbot,
+                status__in=OPEN_SUBSCRIPTION_STATUSES,
+            )
+            .first()
         )
-        .first()
-    )
-    if existing is not None:
-        if (
+        if existing is not None and (
             existing.status == SubscriptionStatus.ACTIVE
             and existing.plan_price_id == plan_price.id
             and existing.is_free_plan()
         ):
             return existing, False
-        raise SubscriptionConflictError(
-            "This chatbot already has an open subscription."
+
+        existing_id = existing.pk if existing is not None else None
+        provider_subscription_id = (
+            existing.provider_subscription_id
+            if existing is not None
+            and existing.provider == PaymentProvider.STRIPE
+            else None
         )
 
-    now = timezone.now()
-    subscription = ChatbotSubscription.objects.create(
-        chatbot=chatbot,
-        plan_price=plan_price,
-        selected_by=user,
-        provider=plan_price.provider,
-        renewal_mode=RenewalMode.MANUAL,
-        status=SubscriptionStatus.ACTIVE,
-        started_at=now,
-        created_by=user,
-        updated_by=user,
-    )
-    return subscription, True
+    if provider_subscription_id:
+        (stripe_service or StripeBillingService()).cancel_subscription(
+            subscription_id=provider_subscription_id
+        )
+
+    with transaction.atomic():
+        existing = (
+            ChatbotSubscription.objects.select_for_update()
+            .filter(
+                chatbot=chatbot,
+                status__in=OPEN_SUBSCRIPTION_STATUSES,
+            )
+            .first()
+        )
+        if (existing.pk if existing is not None else None) != existing_id:
+            raise SubscriptionConflictError(
+                "The subscription changed while the free plan was activating."
+            )
+
+        now = timezone.now()
+        if existing is not None:
+            existing.status = SubscriptionStatus.CANCELED
+            existing.canceled_at = now
+            existing.ended_at = now
+            existing.cancel_at_period_end = False
+            existing.updated_by = user
+            existing.save(
+                update_fields=[
+                    "status",
+                    "canceled_at",
+                    "ended_at",
+                    "cancel_at_period_end",
+                    "updated_by",
+                    "updated_at",
+                ]
+            )
+
+        subscription = ChatbotSubscription.objects.create(
+            chatbot=chatbot,
+            plan_price=plan_price,
+            selected_by=user,
+            provider=plan_price.provider,
+            renewal_mode=RenewalMode.MANUAL,
+            status=SubscriptionStatus.ACTIVE,
+            started_at=now,
+            created_by=user,
+            updated_by=user,
+        )
+        _apply_subscription_capacity(subscription)
+        return subscription, True

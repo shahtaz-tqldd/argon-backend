@@ -6,11 +6,13 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from chatbot.models import Chatbot, ChatbotUser
+from chatbot.models import Chatbot, ChatbotCapacity, ChatbotUser
 from chatbot.utils.choices import ChatbotRoleTypes
+from lead_capture.models import LeadCaptureConfig
 from subscription.choices import (
     BillingInterval,
     PaymentProvider,
+    PlanFeature,
     RenewalMode,
     SubscriptionStatus,
 )
@@ -245,7 +247,10 @@ class SubscriptionClientAPITests(APITestCase):
         )
         premium = SubscriptionPlan.objects.create(
             name="Premium",
-            ai_message_limit=3500,
+            ai_message_limit=1500,
+            file_size_limit_mb=75,
+            knowledge_chunk_limit=1500,
+            features=[PlanFeature.LEAD_CAPTURE],
         )
         premium_price = PlanPrice.objects.create(
             plan=premium,
@@ -262,6 +267,14 @@ class SubscriptionClientAPITests(APITestCase):
             "latest_invoice": "in_upgrade",
             "items": {"data": []},
         }
+        capacity = ChatbotCapacity.objects.create(
+            chatbot=self.chatbot,
+            ai_message_limit=1000,
+            current_ai_message_count=658,
+            file_size_limit_bytes=25 * 1024 * 1024,
+            knowledge_chunk_limit=5000,
+            active_features=[PlanFeature.KNOWLEDGE_BASE],
+        )
 
         response = self.client.post(
             f'{reverse("subscription-checkout")}?chatbot={self.chatbot.slug}',
@@ -280,6 +293,19 @@ class SubscriptionClientAPITests(APITestCase):
         )
         self.assertEqual(replacement.plan_price, premium_price)
         self.assertEqual(replacement.provider_subscription_id, "sub_123")
+        capacity.refresh_from_db()
+        self.assertEqual(capacity.ai_message_limit, 2500)
+        self.assertEqual(capacity.current_ai_message_count, 658)
+        self.assertEqual(
+            capacity.ai_message_limit - capacity.current_ai_message_count,
+            342 + 1500,
+        )
+        self.assertEqual(capacity.file_size_limit_bytes, 75 * 1024 * 1024)
+        self.assertEqual(capacity.knowledge_chunk_limit, 1500)
+        self.assertEqual(capacity.active_features, [PlanFeature.LEAD_CAPTURE])
+        self.assertTrue(
+            LeadCaptureConfig.objects.filter(chatbot=self.chatbot).exists()
+        )
         change_plan.assert_called_once()
 
     @patch(
@@ -361,7 +387,17 @@ class SubscriptionClientAPITests(APITestCase):
         self.assertEqual(price["amount"], "19.00")
 
     def test_free_plan_can_be_activated_without_stripe(self):
-        free_plan = SubscriptionPlan.objects.create(name="Free", is_free=True)
+        free_plan = SubscriptionPlan.objects.create(
+            name="Free",
+            is_free=True,
+            ai_message_limit=100,
+            file_size_limit_mb=10,
+            knowledge_chunk_limit=30,
+            features=[
+                PlanFeature.HUMAN_HANDOFF,
+                PlanFeature.KNOWLEDGE_BASE,
+            ],
+        )
         free_price = PlanPrice.objects.create(
             plan=free_plan,
             provider=PaymentProvider.MANUAL,
@@ -378,6 +414,73 @@ class SubscriptionClientAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["data"]["status"], "active")
+        capacity = ChatbotCapacity.objects.get(chatbot=self.chatbot)
+        self.assertEqual(capacity.ai_message_limit, 100)
+        self.assertEqual(capacity.current_ai_message_count, 0)
+
+    @patch(
+        "subscription.services.subscriptions.StripeBillingService.cancel_subscription"
+    )
+    def test_paid_plan_can_change_to_free_and_reset_capacity(self, cancel):
+        current = ChatbotSubscription.objects.create(
+            chatbot=self.chatbot,
+            plan_price=self.price,
+            selected_by=self.user,
+            provider=PaymentProvider.STRIPE,
+            renewal_mode=RenewalMode.PROVIDER_MANAGED,
+            status=SubscriptionStatus.ACTIVE,
+            provider_customer_id="cus_123",
+            provider_subscription_id="sub_123",
+        )
+        capacity = ChatbotCapacity.objects.create(
+            chatbot=self.chatbot,
+            ai_message_limit=1000,
+            current_ai_message_count=658,
+            active_features=[PlanFeature.LEAD_CAPTURE],
+        )
+        lead_config = LeadCaptureConfig.objects.create(
+            chatbot=self.chatbot,
+            is_enabled=True,
+        )
+        free_plan = SubscriptionPlan.objects.create(
+            name="Free",
+            is_free=True,
+            ai_message_limit=100,
+            file_size_limit_mb=10,
+            knowledge_chunk_limit=30,
+            features=[
+                PlanFeature.HUMAN_HANDOFF,
+                PlanFeature.KNOWLEDGE_BASE,
+            ],
+        )
+        free_price = PlanPrice.objects.create(
+            plan=free_plan,
+            provider=PaymentProvider.MANUAL,
+            billing_interval=BillingInterval.MONTHLY,
+            currency="USD",
+            amount=Decimal("0"),
+        )
+        cancel.return_value = {"id": "sub_123", "status": "canceled"}
+
+        response = self.client.post(
+            f'{reverse("subscription-activate-free")}?chatbot={self.chatbot.slug}',
+            {"plan_price_id": str(free_price.id)},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        current.refresh_from_db()
+        capacity.refresh_from_db()
+        lead_config.refresh_from_db()
+        self.assertEqual(current.status, SubscriptionStatus.CANCELED)
+        self.assertEqual(capacity.ai_message_limit, 100)
+        self.assertEqual(capacity.current_ai_message_count, 0)
+        self.assertEqual(
+            capacity.active_features,
+            [PlanFeature.HUMAN_HANDOFF, PlanFeature.KNOWLEDGE_BASE],
+        )
+        self.assertFalse(lead_config.is_enabled)
+        cancel.assert_called_once_with(subscription_id="sub_123")
 
     @patch(
         "subscription.services.subscriptions.StripeBillingService.create_checkout_session"

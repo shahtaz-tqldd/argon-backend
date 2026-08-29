@@ -10,7 +10,6 @@ from chatbot.models import (
     ChatbotWidgetSettings,
     build_default_chatbot_welcome_message,
 )
-from chatbot.services.capacity import sync_chatbot_capacity_from_subscription
 from chatbot.utils.choices import ChatbotRoleTypes, ChatbotStatusTypes
 from chatbot.utils.validation import validate_unique_chatbot_name
 from subscription.services.subscriptions import (
@@ -108,7 +107,6 @@ def create_chatbot(
         plan_price=default_free_plan_price,
         user=created_by,
     )
-    sync_chatbot_capacity_from_subscription(chatbot)
     return chatbot
 
 

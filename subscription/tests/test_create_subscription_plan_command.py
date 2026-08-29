@@ -16,6 +16,10 @@ class CreateSubscriptionPlanCommandTests(TestCase):
             "knowledge_chunk_limit": 30,
             "amount": Decimal("0.00"),
             "provider": PaymentProvider.MANUAL,
+            "features": [
+                PlanFeature.HUMAN_HANDOFF,
+                PlanFeature.KNOWLEDGE_BASE,
+            ],
         },
         "starter": {
             "ai_message_limit": 650,
@@ -23,6 +27,10 @@ class CreateSubscriptionPlanCommandTests(TestCase):
             "knowledge_chunk_limit": 250,
             "amount": Decimal("35.00"),
             "provider": PaymentProvider.STRIPE,
+            "features": [
+                PlanFeature.HUMAN_HANDOFF,
+                PlanFeature.KNOWLEDGE_BASE,
+            ],
         },
         "growth": {
             "ai_message_limit": 1500,
@@ -30,6 +38,11 @@ class CreateSubscriptionPlanCommandTests(TestCase):
             "knowledge_chunk_limit": 600,
             "amount": Decimal("49.00"),
             "provider": PaymentProvider.STRIPE,
+            "features": [
+                PlanFeature.HUMAN_HANDOFF,
+                PlanFeature.KNOWLEDGE_BASE,
+                PlanFeature.LEAD_CAPTURE,
+            ],
         },
         "premium": {
             "ai_message_limit": 3500,
@@ -37,6 +50,11 @@ class CreateSubscriptionPlanCommandTests(TestCase):
             "knowledge_chunk_limit": 1500,
             "amount": Decimal("79.00"),
             "provider": PaymentProvider.STRIPE,
+            "features": [
+                PlanFeature.HUMAN_HANDOFF,
+                PlanFeature.KNOWLEDGE_BASE,
+                PlanFeature.LEAD_CAPTURE,
+            ],
         },
     }
 
@@ -57,10 +75,7 @@ class CreateSubscriptionPlanCommandTests(TestCase):
                     plan.knowledge_chunk_limit,
                     expected["knowledge_chunk_limit"],
                 )
-                self.assertEqual(
-                    plan.features,
-                    [PlanFeature.HUMAN_HANDOFF, PlanFeature.KNOWLEDGE_BASE],
-                )
+                self.assertEqual(plan.features, expected["features"])
                 price = plan.prices.get()
                 self.assertEqual(price.provider, expected["provider"])
                 self.assertEqual(price.amount, expected["amount"])
@@ -72,6 +87,14 @@ class CreateSubscriptionPlanCommandTests(TestCase):
         self.assertIsNone(enterprise.file_size_limit_mb)
         self.assertIsNone(enterprise.knowledge_chunk_limit)
         self.assertTrue(enterprise.requires_sales_contact)
+        self.assertEqual(
+            enterprise.features,
+            [
+                PlanFeature.HUMAN_HANDOFF,
+                PlanFeature.KNOWLEDGE_BASE,
+                PlanFeature.LEAD_CAPTURE,
+            ],
+        )
         self.assertFalse(enterprise.prices.filter(is_active=True).exists())
 
     def test_command_is_idempotent_and_restores_plan_configuration(self):

@@ -16,6 +16,10 @@ STANDARD_FEATURES = [
     PlanFeature.HUMAN_HANDOFF,
     PlanFeature.KNOWLEDGE_BASE,
 ]
+LEAD_CAPTURE_FEATURES = [
+    *STANDARD_FEATURES,
+    PlanFeature.LEAD_CAPTURE,
+]
 
 PLAN_CONFIGURATIONS = (
     {
@@ -57,7 +61,7 @@ PLAN_CONFIGURATIONS = (
         "ai_message_limit": 1500,
         "file_size_limit_mb": 50,
         "knowledge_chunk_limit": 600,
-        "features": STANDARD_FEATURES,
+        "features": LEAD_CAPTURE_FEATURES,
         "is_free": False,
         "requires_sales_contact": False,
         "sort_order": 20,
@@ -73,7 +77,7 @@ PLAN_CONFIGURATIONS = (
         "ai_message_limit": 3500,
         "file_size_limit_mb": 75,
         "knowledge_chunk_limit": 1500,
-        "features": STANDARD_FEATURES,
+        "features": LEAD_CAPTURE_FEATURES,
         "is_free": False,
         "requires_sales_contact": False,
         "sort_order": 30,
@@ -89,7 +93,7 @@ PLAN_CONFIGURATIONS = (
         "ai_message_limit": None,
         "file_size_limit_mb": None,
         "knowledge_chunk_limit": None,
-        "features": STANDARD_FEATURES,
+        "features": LEAD_CAPTURE_FEATURES,
         "is_free": False,
         "requires_sales_contact": True,
         "sort_order": 40,

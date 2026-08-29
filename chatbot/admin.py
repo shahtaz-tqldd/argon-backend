@@ -6,6 +6,7 @@ from chatbot.models import (
     ChatbotInvitation,
     ChatbotUser,
     ChatbotWidgetSettings,
+    ChatbotCapacity
 )
 
 
@@ -70,3 +71,9 @@ class ChatbotInvitationAdmin(admin.ModelAdmin):
     )
     autocomplete_fields = ("chatbot",)
     readonly_fields = ("id", "token_hash", "created_at", "updated_at")
+
+
+@admin.register(ChatbotCapacity)
+class ChatbotCapacityAdmin(admin.ModelAdmin):
+    list_display = ("chatbot__chatbot_name", "created_at")
+    readonly_fields = ("id", "created_at", "updated_at")

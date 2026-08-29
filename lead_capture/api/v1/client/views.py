@@ -60,7 +60,7 @@ class LeadCaptureChatbotMixin:
         if self._chatbot is None:
             self._chatbot = get_object_or_404(
                 Chatbot.objects.select_related("workspace"),
-                slug=self.get_chatbot_query()["chatbot"],
+                slug=self.get_chatbot_query()["chatbot_slug"],
                 is_deleted=False,
                 workspace__is_active=True,
             )

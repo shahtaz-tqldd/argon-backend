@@ -7,7 +7,7 @@ from lead_capture.utils.validators import MAX_CAPTURE_FIELDS
 
 
 class LeadChatbotQuerySerializer(serializers.Serializer):
-    chatbot = serializers.SlugField()
+    chatbot_slug = serializers.SlugField()
 
 
 class LeadQuerySerializer(LeadChatbotQuerySerializer):

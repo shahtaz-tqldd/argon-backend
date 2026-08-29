@@ -46,7 +46,7 @@ class LeadCaptureClientAPITests(APITestCase):
         self.client.force_authenticate(self.user)
 
     def url(self, name, *, lead=None):
-        query = f"?chatbot={self.chatbot.slug}"
+        query = f"?chatbot_slug={self.chatbot.slug}"
         if lead is not None:
             query += f"&lead_id={lead.id}"
         return f"{reverse(name)}{query}"

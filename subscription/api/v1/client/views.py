@@ -198,6 +198,16 @@ class FreeSubscriptionAPIView(SubscriptionChatbotMixin, GenericAPIView):
                 message=str(exc),
                 status=status.HTTP_409_CONFLICT,
             )
+        except StripeConfigurationError as exc:
+            return APIResponse.error(
+                message=str(exc),
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except StripeServiceError as exc:
+            return APIResponse.error(
+                message=str(exc),
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
         return APIResponse.success(
             data=ChatbotSubscriptionClientSerializer(subscription).data,
             message="Free subscription activated successfully.",
