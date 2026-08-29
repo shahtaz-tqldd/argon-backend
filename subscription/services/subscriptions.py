@@ -6,11 +6,12 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from subscription.choices import (
+    BillingInterval,
     PaymentProvider,
     RenewalMode,
     SubscriptionStatus,
 )
-from subscription.models import ChatbotSubscription, Payment
+from subscription.models import ChatbotSubscription, Payment, PlanPrice
 from subscription.services.stripe import StripeBillingService
 
 
@@ -25,6 +26,29 @@ OPEN_SUBSCRIPTION_STATUSES = (
 
 class SubscriptionConflictError(Exception):
     """Raised when a chatbot already has an incompatible open subscription."""
+
+
+class DefaultFreePlanNotConfigured(LookupError):
+    """Raised when the default free subscription price has not been provisioned."""
+
+
+def get_default_free_plan_price():
+    try:
+        return PlanPrice.objects.select_related("plan").get(
+            plan__slug="free",
+            plan__is_free=True,
+            plan__is_active=True,
+            provider=PaymentProvider.MANUAL,
+            billing_interval=BillingInterval.MONTHLY,
+            currency="USD",
+            amount=0,
+            is_active=True,
+        )
+    except PlanPrice.DoesNotExist as exc:
+        raise DefaultFreePlanNotConfigured(
+            "The active free/manual/monthly/USD subscription price is missing. "
+            "Run create_subscription_plan before creating chatbots."
+        ) from exc
 
 
 @dataclass(frozen=True)

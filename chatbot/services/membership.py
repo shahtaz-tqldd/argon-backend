@@ -10,8 +10,13 @@ from chatbot.models import (
     ChatbotWidgetSettings,
     build_default_chatbot_welcome_message,
 )
+from chatbot.services.capacity import sync_chatbot_capacity_from_subscription
 from chatbot.utils.choices import ChatbotRoleTypes, ChatbotStatusTypes
 from chatbot.utils.validation import validate_unique_chatbot_name
+from subscription.services.subscriptions import (
+    activate_free_subscription,
+    get_default_free_plan_price,
+)
 from workspace.models import WorkspaceUser
 
 
@@ -66,6 +71,7 @@ def create_chatbot(
             chatbot_name,
             business_name,
         )
+    default_free_plan_price = get_default_free_plan_price()
 
     chatbot = Chatbot.objects.create(
         workspace=workspace,
@@ -97,6 +103,12 @@ def create_chatbot(
         user=created_by,
         role=ChatbotRoleTypes.ADMIN,
     )
+    activate_free_subscription(
+        chatbot=chatbot,
+        plan_price=default_free_plan_price,
+        user=created_by,
+    )
+    sync_chatbot_capacity_from_subscription(chatbot)
     return chatbot
 
 

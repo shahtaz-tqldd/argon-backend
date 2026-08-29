@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
@@ -25,6 +26,7 @@ from chatbot.utils.validation import (
     validate_other_settings,
     validate_widget_settings,
 )
+from subscription.choices import PlanFeature
 
 
 DEFAULT_CHATBOT_WELCOME_MESSAGE_TEMPLATE = (
@@ -435,3 +437,62 @@ class ChatbotInvitation(BaseModel):
 
     def __str__(self):
         return f"Invitation for {self.email} to {self.chatbot}"
+
+
+class ChatbotCapacity(BaseMinModel):
+    """Pre-calculated subscription limits and usage for one chatbot."""
+
+    chatbot = models.OneToOneField(
+        Chatbot,
+        related_name="capacity",
+        on_delete=models.CASCADE,
+    )
+
+    ai_message_limit = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Maximum AI messages for the period; null means unlimited.",
+    )
+    current_ai_message_count = models.PositiveIntegerField(default=0)
+
+    file_size_limit_bytes = models.PositiveBigIntegerField(
+        null=True,
+        blank=True,
+        help_text="Maximum stored knowledge bytes; null means unlimited.",
+    )
+    current_file_size_bytes = models.PositiveBigIntegerField(default=0)
+
+    knowledge_chunk_limit = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Maximum knowledge chunks; null means unlimited.",
+    )
+    current_knowledge_chunk_count = models.PositiveIntegerField(default=0)
+
+    active_features = ArrayField(
+        base_field=models.CharField(
+            max_length=40,
+            choices=PlanFeature.choices,
+        ),
+        default=list,
+        blank=True,
+    )
+
+    class Meta:
+        verbose_name = "Chatbot capacity"
+        verbose_name_plural = "Chatbot capacities"
+
+    def clean(self):
+        super().clean()
+        features = self.active_features or []
+        if len(features) != len(set(features)):
+            raise ValidationError(
+                {"active_features": "Active features must be unique."}
+            )
+
+    def has_feature(self, feature):
+        feature = getattr(feature, "value", feature)
+        return feature in (self.active_features or [])
+
+    def __str__(self):
+        return f"Capacity: {self.chatbot}"

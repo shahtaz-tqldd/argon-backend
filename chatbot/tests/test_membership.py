@@ -7,11 +7,14 @@ from chatbot.models import (
     DEFAULT_CHATBOT_FALLBACK_MESSAGE,
     DEFAULT_CHATBOT_NEVER_ANSWER,
     Chatbot,
+    ChatbotCapacity,
     ChatbotUser,
     ChatbotWidgetSettings,
 )
 from chatbot.services import assign_user_to_chatbot, create_chatbot
 from chatbot.utils.choices import ChatbotRoleTypes
+from subscription.choices import PlanFeature, SubscriptionStatus
+from subscription.models import ChatbotSubscription
 from workspace.services import add_workspace_user, ensure_personal_workspace
 
 User = get_user_model()
@@ -104,6 +107,19 @@ class ChatbotMembershipTests(TestCase):
             DEFAULT_CHATBOT_ESCALATION_RULE,
         )
         self.assertEqual(chatbot.never_answer, DEFAULT_CHATBOT_NEVER_ANSWER)
+        subscription = ChatbotSubscription.objects.get(
+            chatbot=chatbot,
+            status=SubscriptionStatus.ACTIVE,
+        )
+        self.assertTrue(subscription.is_free_plan())
+        capacity = ChatbotCapacity.objects.get(chatbot=chatbot)
+        self.assertEqual(capacity.ai_message_limit, 100)
+        self.assertEqual(capacity.file_size_limit_bytes, 10 * 1024 * 1024)
+        self.assertEqual(capacity.knowledge_chunk_limit, 30)
+        self.assertEqual(
+            capacity.active_features,
+            [PlanFeature.HUMAN_HANDOFF, PlanFeature.KNOWLEDGE_BASE],
+        )
 
     def test_workspace_member_can_assign_another_workspace_member(self):
         chatbot = create_chatbot(

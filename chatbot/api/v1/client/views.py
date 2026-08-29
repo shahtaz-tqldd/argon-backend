@@ -220,7 +220,6 @@ class ChatbotCreateView(GenericAPIView):
             status=status.HTTP_201_CREATED,
         )
 
-
 class ChatbotDetailView(ChatbotObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     serializer_class = ChatbotDetailSerializer
