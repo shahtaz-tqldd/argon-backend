@@ -45,15 +45,17 @@ class LeadCaptureClientAPITests(APITestCase):
         )
         self.client.force_authenticate(self.user)
 
-    def url(self, name, *, lead=None):
+    def url(self, name, *, lead=None, note=None):
         query = f"?chatbot_slug={self.chatbot.slug}"
         if lead is not None:
             query += f"&lead_id={lead.id}"
+        if note is not None:
+            query += f"&note_id={note.id}"
         return f"{reverse(name)}{query}"
 
     def test_configuration_can_be_created_fetched_and_updated(self):
         response = self.client.post(
-            self.url("lead-config"),
+            self.url("lead-config-create"),
             {
                 "is_enabled": True,
                 "custom_fields": [
@@ -83,7 +85,7 @@ class LeadCaptureClientAPITests(APITestCase):
         self.assertEqual(response.data["data"]["chatbot_id"], str(self.chatbot.id))
 
         response = self.client.patch(
-            self.url("lead-config"),
+            self.url("lead-config-update"),
             {"intro_message": "Updated introduction."},
             format="json",
         )
@@ -122,7 +124,7 @@ class LeadCaptureClientAPITests(APITestCase):
         )
 
         response = self.client.patch(
-            self.url("lead-detail", lead=lead),
+            self.url("lead-update", lead=lead),
             {
                 "name": "Updated Name",
                 "email": "UPDATED@EXAMPLE.COM",
@@ -140,11 +142,11 @@ class LeadCaptureClientAPITests(APITestCase):
         self.assertEqual(lead.status, "contacted")
         self.assertEqual(lead.lead_score, 75)
 
-    def test_notes_can_be_created_and_listed(self):
+    def test_notes_can_be_created_fetched_updated_listed_and_deleted(self):
         lead = Lead.objects.create(chatbot=self.chatbot, name="Noted Lead")
 
         response = self.client.post(
-            self.url("lead-note-list-create", lead=lead),
+            self.url("lead-note-create", lead=lead),
             {"content": "Follow up tomorrow."},
             format="json",
         )
@@ -155,11 +157,75 @@ class LeadCaptureClientAPITests(APITestCase):
         self.assertEqual(note.content, "Follow up tomorrow.")
 
         response = self.client.get(
-            self.url("lead-note-list-create", lead=lead)
+            self.url("lead-note-detail", lead=lead, note=note)
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"]["id"], str(note.id))
+
+        response = self.client.patch(
+            self.url("lead-note-update", lead=lead, note=note),
+            {"content": "Follow up next week."},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        note.refresh_from_db()
+        self.assertEqual(note.content, "Follow up next week.")
+
+        response = self.client.get(
+            self.url("lead-note-list", lead=lead)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["meta"]["count"], 1)
         self.assertEqual(
             response.data["data"][0]["author"]["email"],
             self.user.email,
+        )
+
+        response = self.client.delete(
+            self.url("lead-note-delete", lead=lead, note=note)
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"]["id"], str(note.id))
+        self.assertFalse(LeadNote.objects.filter(pk=note.id).exists())
+
+    def test_note_detail_is_scoped_to_its_lead(self):
+        lead = Lead.objects.create(chatbot=self.chatbot, name="First Lead")
+        other_lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            name="Second Lead",
+        )
+        note = LeadNote.objects.create(
+            lead=lead,
+            author=self.chatbot_user,
+            content="Private to the first lead.",
+        )
+
+        response = self.client.get(
+            self.url("lead-note-detail", lead=other_lead, note=note)
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_task_endpoints_only_accept_their_own_http_methods(self):
+        lead = Lead.objects.create(chatbot=self.chatbot, name="Method Lead")
+
+        self.assertEqual(
+            self.client.post(self.url("lead-config")).status_code,
+            status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+        self.assertEqual(
+            self.client.patch(
+                self.url("lead-detail", lead=lead),
+                {},
+                format="json",
+            ).status_code,
+            status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+        self.assertEqual(
+            self.client.post(
+                self.url("lead-note-list", lead=lead),
+                {"content": "Wrong endpoint."},
+                format="json",
+            ).status_code,
+            status.HTTP_405_METHOD_NOT_ALLOWED,
         )

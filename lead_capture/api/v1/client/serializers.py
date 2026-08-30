@@ -14,6 +14,10 @@ class LeadQuerySerializer(LeadChatbotQuerySerializer):
     lead_id = serializers.UUIDField()
 
 
+class LeadNoteQuerySerializer(LeadQuerySerializer):
+    note_id = serializers.UUIDField()
+
+
 class LeadCaptureConfigSerializer(serializers.ModelSerializer):
     chatbot_id = serializers.UUIDField(read_only=True)
 
@@ -207,3 +211,15 @@ class LeadNoteSerializer(serializers.ModelSerializer):
                 getattr(exc, "message_dict", exc.messages)
             ) from exc
         return note
+
+    def update(self, instance, validated_data):
+        for field_name, field_value in validated_data.items():
+            setattr(instance, field_name, field_value)
+        try:
+            instance.full_clean()
+            instance.save()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(
+                getattr(exc, "message_dict", exc.messages)
+            ) from exc
+        return instance

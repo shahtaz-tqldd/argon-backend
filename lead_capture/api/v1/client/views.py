@@ -13,6 +13,7 @@ from chatbot.utils.choices import ChatbotPermissionTypes
 from lead_capture.api.v1.client.serializers import (
     LeadCaptureConfigSerializer,
     LeadChatbotQuerySerializer,
+    LeadNoteQuerySerializer,
     LeadNoteSerializer,
     LeadQuerySerializer,
     LeadSerializer,
@@ -98,7 +99,26 @@ class LeadObjectMixin(LeadCaptureChatbotMixin):
         return self._lead
 
 
-class LeadCaptureConfigView(LeadCaptureChatbotMixin, GenericAPIView):
+class LeadNoteObjectMixin(LeadObjectMixin):
+    _lead_note = None
+    chatbot_query_serializer_class = LeadNoteQuerySerializer
+
+    def get_lead_note(self):
+        if self._lead_note is None:
+            self._lead_note = get_object_or_404(
+                LeadNote.objects.select_related(
+                    "author__user",
+                    "lead",
+                    "lead__chatbot",
+                    "lead__chatbot__workspace",
+                ),
+                pk=self.get_chatbot_query()["note_id"],
+                lead=self.get_lead(),
+            )
+        return self._lead_note
+
+
+class LeadCaptureConfigAPIView(LeadCaptureChatbotMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     required_chatbot_permission = ChatbotPermissionTypes.SETUP_CONFIGURATION
     serializer_class = LeadCaptureConfigSerializer
@@ -113,10 +133,44 @@ class LeadCaptureConfigView(LeadCaptureChatbotMixin, GenericAPIView):
             message="Lead capture configuration fetched successfully.",
         )
 
-    def _save(self, request, *, partial):
+
+class LeadCaptureConfigCreateAPIView(LeadCaptureChatbotMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.SETUP_CONFIGURATION
+    serializer_class = LeadCaptureConfigSerializer
+
+    def post(self, request, *args, **kwargs):
         chatbot = self.get_chatbot()
-        config = LeadCaptureConfig.objects.filter(chatbot=chatbot).first()
-        created = config is None
+        if LeadCaptureConfig.objects.filter(chatbot=chatbot).exists():
+            return APIResponse.error(
+                errors={
+                    "chatbot_slug": [
+                        "A lead capture configuration already exists for this chatbot."
+                    ]
+                },
+                message="Lead capture configuration already exists.",
+                status=status.HTTP_409_CONFLICT,
+            )
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        config = serializer.save()
+        return APIResponse.success(
+            data=self.get_serializer(config).data,
+            message="Lead capture configuration created successfully.",
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class LeadCaptureConfigUpdateAPIView(LeadCaptureChatbotMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.SETUP_CONFIGURATION
+    serializer_class = LeadCaptureConfigSerializer
+
+    def _update(self, request, *, partial):
+        config = get_object_or_404(
+            LeadCaptureConfig,
+            chatbot=self.get_chatbot(),
+        )
         serializer = self.get_serializer(
             config,
             data=request.data,
@@ -126,22 +180,14 @@ class LeadCaptureConfigView(LeadCaptureChatbotMixin, GenericAPIView):
         config = serializer.save()
         return APIResponse.success(
             data=self.get_serializer(config).data,
-            message=(
-                "Lead capture configuration created successfully."
-                if created
-                else "Lead capture configuration updated successfully."
-            ),
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+            message="Lead capture configuration updated successfully.",
         )
 
-    def post(self, request, *args, **kwargs):
-        return self._save(request, partial=False)
-
     def put(self, request, *args, **kwargs):
-        return self._save(request, partial=False)
+        return self._update(request, partial=False)
 
     def patch(self, request, *args, **kwargs):
-        return self._save(request, partial=True)
+        return self._update(request, partial=True)
 
 
 class LeadListView(
@@ -168,17 +214,19 @@ class LeadListView(
 class LeadDetailView(LeadObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     required_chatbot_permission = ChatbotPermissionTypes.LEAD_MANAGEMENT
-
-    def get_serializer_class(self):
-        if self.request.method in {"PUT", "PATCH"}:
-            return LeadUpdateSerializer
-        return LeadSerializer
+    serializer_class = LeadSerializer
 
     def get(self, request, *args, **kwargs):
         return APIResponse.success(
-            data=LeadSerializer(self.get_lead()).data,
+            data=self.get_serializer(self.get_lead()).data,
             message="Lead fetched successfully.",
         )
+
+
+class LeadUpdateView(LeadObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.LEAD_MANAGEMENT
+    serializer_class = LeadUpdateSerializer
 
     def _update(self, request, *, partial):
         serializer = self.get_serializer(
@@ -200,15 +248,10 @@ class LeadDetailView(LeadObjectMixin, GenericAPIView):
         return self._update(request, partial=True)
 
 
-class LeadNoteView(LeadObjectMixin, PaginatedLeadMixin, GenericAPIView):
+class LeadNoteListView(LeadObjectMixin, PaginatedLeadMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     required_chatbot_permission = ChatbotPermissionTypes.LEAD_MANAGEMENT
     serializer_class = LeadNoteSerializer
-
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context["lead"] = self.get_lead()
-        return context
 
     def get(self, request, *args, **kwargs):
         notes = LeadNote.objects.filter(lead=self.get_lead()).select_related(
@@ -218,6 +261,17 @@ class LeadNoteView(LeadObjectMixin, PaginatedLeadMixin, GenericAPIView):
             notes,
             message="Lead notes fetched successfully.",
         )
+
+
+class LeadNoteCreateView(LeadObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.LEAD_MANAGEMENT
+    serializer_class = LeadNoteSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["lead"] = self.get_lead()
+        return context
 
     def post(self, request, *args, **kwargs):
         chatbot_user = get_object_or_404(
@@ -235,4 +289,56 @@ class LeadNoteView(LeadObjectMixin, PaginatedLeadMixin, GenericAPIView):
             data=LeadNoteSerializer(note).data,
             message="Lead note created successfully.",
             status=status.HTTP_201_CREATED,
+        )
+
+
+class LeadNoteDetailView(LeadNoteObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.LEAD_MANAGEMENT
+    serializer_class = LeadNoteSerializer
+
+    def get(self, request, *args, **kwargs):
+        return APIResponse.success(
+            data=self.get_serializer(self.get_lead_note()).data,
+            message="Lead note fetched successfully.",
+        )
+
+
+class LeadNoteUpdateView(LeadNoteObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.LEAD_MANAGEMENT
+    serializer_class = LeadNoteSerializer
+
+    def _update(self, request, *, partial):
+        serializer = self.get_serializer(
+            self.get_lead_note(),
+            data=request.data,
+            partial=partial,
+        )
+        serializer.is_valid(raise_exception=True)
+        note = serializer.save()
+        return APIResponse.success(
+            data=self.get_serializer(note).data,
+            message="Lead note updated successfully.",
+        )
+
+    def put(self, request, *args, **kwargs):
+        return self._update(request, partial=False)
+
+    def patch(self, request, *args, **kwargs):
+        return self._update(request, partial=True)
+
+
+class LeadNoteDeleteView(LeadNoteObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.LEAD_MANAGEMENT
+    serializer_class = LeadNoteSerializer
+
+    def delete(self, request, *args, **kwargs):
+        note = self.get_lead_note()
+        note_id = str(note.id)
+        note.delete()
+        return APIResponse.success(
+            data={"id": note_id},
+            message="Lead note deleted successfully.",
         )
