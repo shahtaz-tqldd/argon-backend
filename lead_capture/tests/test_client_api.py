@@ -58,16 +58,18 @@ class LeadCaptureClientAPITests(APITestCase):
             self.url("lead-config-create"),
             {
                 "is_enabled": True,
-                "custom_fields": [
+                "collectable_fields": [
                     {
                         "label": "Organization",
                         "value": "organization",
                         "mode": "required",
+                        "type": "text",
                     },
                     {
                         "label": "Team Size",
                         "value": "team_size",
                         "mode": "optional",
+                        "type": "text",
                     },
                 ],
                 "intro_message": "Tell us about yourself.",
@@ -78,7 +80,7 @@ class LeadCaptureClientAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         config = LeadCaptureConfig.objects.get(chatbot=self.chatbot)
         self.assertTrue(config.is_enabled)
-        self.assertEqual(len(config.custom_fields), 2)
+        self.assertEqual(len(config.collectable_fields), 2)
 
         response = self.client.get(self.url("lead-config"))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -105,8 +107,10 @@ class LeadCaptureClientAPITests(APITestCase):
         for number in range(3):
             Lead.objects.create(
                 chatbot=self.chatbot,
-                name=f"Lead {number}",
-                email=f"lead-{number}@example.com",
+                collected_fields={
+                    "name": f"Lead {number}",
+                    "email": f"lead-{number}@example.com",
+                },
             )
 
         response = self.client.get(f'{self.url("lead-list")}&page_size=2')
@@ -117,33 +121,63 @@ class LeadCaptureClientAPITests(APITestCase):
         self.assertIn("notes_count", response.data["data"][0])
 
     def test_lead_information_can_be_updated(self):
+        LeadCaptureConfig.objects.create(
+            chatbot=self.chatbot,
+            collectable_fields=[
+                {
+                    "label": "Name",
+                    "value": "name",
+                    "mode": "required",
+                    "type": "text",
+                },
+                {
+                    "label": "Email",
+                    "value": "email",
+                    "mode": "required",
+                    "type": "email",
+                },
+                {
+                    "label": "Organization",
+                    "value": "organization",
+                    "mode": "optional",
+                    "type": "text",
+                },
+            ],
+        )
         lead = Lead.objects.create(
             chatbot=self.chatbot,
-            name="Original Name",
-            email="original@example.com",
+            collected_fields={
+                "name": "Original Name",
+                "email": "original@example.com",
+            },
         )
 
         response = self.client.patch(
             self.url("lead-update", lead=lead),
             {
-                "name": "Updated Name",
-                "email": "UPDATED@EXAMPLE.COM",
+                "collected_fields": {
+                    "name": "Updated Name",
+                    "email": "UPDATED@EXAMPLE.COM",
+                    "organization": "Argon",
+                },
                 "status": "contacted",
                 "lead_score": 75,
-                "custom_fields": {"organization": "Argon"},
             },
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         lead.refresh_from_db()
-        self.assertEqual(lead.name, "Updated Name")
-        self.assertEqual(lead.email, "updated@example.com")
+        self.assertEqual(lead.collected_fields["name"], "Updated Name")
+        self.assertEqual(lead.collected_fields["email"], "updated@example.com")
         self.assertEqual(lead.status, "contacted")
         self.assertEqual(lead.lead_score, 75)
 
     def test_notes_can_be_created_fetched_updated_listed_and_deleted(self):
-        lead = Lead.objects.create(chatbot=self.chatbot, name="Noted Lead")
+        lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "Noted Lead"},
+        )
 
         response = self.client.post(
             self.url("lead-note-create", lead=lead),
@@ -189,10 +223,13 @@ class LeadCaptureClientAPITests(APITestCase):
         self.assertFalse(LeadNote.objects.filter(pk=note.id).exists())
 
     def test_note_detail_is_scoped_to_its_lead(self):
-        lead = Lead.objects.create(chatbot=self.chatbot, name="First Lead")
+        lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "First Lead"},
+        )
         other_lead = Lead.objects.create(
             chatbot=self.chatbot,
-            name="Second Lead",
+            collected_fields={"name": "Second Lead"},
         )
         note = LeadNote.objects.create(
             lead=lead,
@@ -207,7 +244,10 @@ class LeadCaptureClientAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_task_endpoints_only_accept_their_own_http_methods(self):
-        lead = Lead.objects.create(chatbot=self.chatbot, name="Method Lead")
+        lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "Method Lead"},
+        )
 
         self.assertEqual(
             self.client.post(self.url("lead-config")).status_code,

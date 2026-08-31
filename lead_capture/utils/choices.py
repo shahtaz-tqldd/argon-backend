@@ -13,3 +13,9 @@ class LeadCaptureFieldMode(models.TextChoices):
     HIDDEN = "hidden", "Hidden"
     OPTIONAL = "optional", "Optional"
     REQUIRED = "required", "Required"
+
+
+class LeadCaptureFieldType(models.TextChoices):
+    TEXT = "text", "Text"
+    EMAIL = "email", "Email"
+    DATE = "date", "Date"

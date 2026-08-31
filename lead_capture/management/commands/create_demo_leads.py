@@ -4,7 +4,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from chatbot.models import Chatbot
-from lead_capture.models import Lead
+from lead_capture.models import Lead, LeadCaptureConfig
 from lead_capture.utils.choices import LeadStatusType
 
 
@@ -146,6 +146,7 @@ class Command(BaseCommand):
         created_count = 0
         updated_count = 0
         randomizer = random.Random(options["seed"])
+        self._ensure_demo_config(chatbot)
 
         for index in range(1, count + 1):
             values = self._lead_values(
@@ -157,7 +158,7 @@ class Command(BaseCommand):
             existing_lead = (
                 Lead.objects.filter(
                     chatbot=chatbot,
-                    email=values["email"],
+                    collected_fields__email=values["collected_fields"]["email"],
                     source="demo",
                 )
                 .order_by("created_at")
@@ -184,6 +185,32 @@ class Command(BaseCommand):
         )
 
     @staticmethod
+    def _ensure_demo_config(chatbot):
+        config, _created = LeadCaptureConfig.objects.get_or_create(chatbot=chatbot)
+        fields_by_value = {
+            field["value"]: field for field in config.collectable_fields
+        }
+        demo_fields = (
+            ("name", "Name", "text", "required"),
+            ("email", "Email", "email", "required"),
+            ("phone", "Phone", "text", "optional"),
+            ("address", "Address", "text", "optional"),
+            ("company", "Company", "text", "optional"),
+            ("interest", "Interest", "text", "optional"),
+            ("team_size", "Team Size", "text", "optional"),
+        )
+        for value, label, field_type, mode in demo_fields:
+            fields_by_value[value] = {
+                "label": label,
+                "value": value,
+                "mode": mode,
+                "type": field_type,
+            }
+        config.collectable_fields = list(fields_by_value.values())
+        config.full_clean()
+        config.save(update_fields=["collectable_fields", "updated_at"])
+
+    @staticmethod
     def _lead_values(*, chatbot, index, seed, randomizer):
         first_name = randomizer.choice(FIRST_NAMES)
         last_name = randomizer.choice(LAST_NAMES)
@@ -192,7 +219,7 @@ class Command(BaseCommand):
         score_minimum, score_maximum = SCORE_RANGES[status]
         email_slug = f"{first_name}.{last_name}".lower()
 
-        return {
+        collected_fields = {
             "name": f"{first_name} {last_name}",
             "email": (
                 f"{email_slug}+{chatbot.slug}-{seed}-{index:04d}@example.com"
@@ -202,11 +229,12 @@ class Command(BaseCommand):
                 f"{randomizer.randint(1000, 9999)}"
             ),
             "address": f"{address}, {city}",
-            "custom_fields": {
-                "company": randomizer.choice(COMPANIES),
-                "interest": randomizer.choice(INTERESTS),
-                "team_size": randomizer.choice(TEAM_SIZES),
-            },
+            "company": randomizer.choice(COMPANIES),
+            "interest": randomizer.choice(INTERESTS),
+            "team_size": randomizer.choice(TEAM_SIZES),
+        }
+        return {
+            "collected_fields": collected_fields,
             "initial_ip_address": f"198.51.100.{((index - 1) % 254) + 1}",
             "last_ip_address": f"203.0.113.{((index + seed - 1) % 254) + 1}",
             "detected_country_code": country_code,

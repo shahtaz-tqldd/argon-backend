@@ -42,14 +42,13 @@ class CreateDemoLeadsCommandTests(TestCase):
         leads = Lead.objects.filter(chatbot=self.chatbot, source="demo")
         self.assertEqual(leads.count(), 4)
         first_snapshot = list(
-            leads.order_by("email").values_list(
-                "email",
-                "name",
+            leads.order_by("collected_fields__email").values_list(
+                "collected_fields",
                 "status",
                 "lead_score",
             )
         )
-        self.assertTrue(all(lead.custom_fields for lead in leads))
+        self.assertTrue(all(lead.collected_fields for lead in leads))
         self.assertIn("4 created, 0 updated", output.getvalue())
 
         output = StringIO()
@@ -64,9 +63,8 @@ class CreateDemoLeadsCommandTests(TestCase):
         self.assertEqual(leads.count(), 4)
         self.assertEqual(
             list(
-                leads.order_by("email").values_list(
-                    "email",
-                    "name",
+                leads.order_by("collected_fields__email").values_list(
+                    "collected_fields",
                     "status",
                     "lead_score",
                 )

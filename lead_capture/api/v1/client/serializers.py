@@ -2,8 +2,6 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from lead_capture.models import Lead, LeadCaptureConfig, LeadNote
-from lead_capture.utils.choices import LeadCaptureFieldMode
-from lead_capture.utils.validators import MAX_CAPTURE_FIELDS
 
 
 class LeadChatbotQuerySerializer(serializers.Serializer):
@@ -27,11 +25,7 @@ class LeadCaptureConfigSerializer(serializers.ModelSerializer):
             "id",
             "chatbot_id",
             "is_enabled",
-            "name_mode",
-            "email_mode",
-            "phone_mode",
-            "address_mode",
-            "custom_fields",
+            "collectable_fields",
             "auto_collect",
             "intro_message",
             "require_consent",
@@ -40,45 +34,6 @@ class LeadCaptureConfigSerializer(serializers.ModelSerializer):
             "updated_at",
         )
         read_only_fields = ("id", "chatbot_id", "created_at", "updated_at")
-
-    def validate(self, attrs):
-        attrs = super().validate(attrs)
-
-        def value(field_name):
-            if field_name in attrs:
-                return attrs[field_name]
-            if self.instance is not None:
-                return getattr(self.instance, field_name)
-            return LeadCaptureConfig._meta.get_field(field_name).get_default()
-
-        standard_count = sum(
-            value(field_name) != LeadCaptureFieldMode.HIDDEN
-            for field_name in (
-                "name_mode",
-                "email_mode",
-                "phone_mode",
-                "address_mode",
-            )
-        )
-        custom_fields = value("custom_fields")
-        custom_count = len(custom_fields) if isinstance(custom_fields, list) else 0
-        total_count = standard_count + custom_count
-
-        if value("is_enabled") and total_count == 0:
-            raise serializers.ValidationError(
-                "At least one lead field must be optional or required when "
-                "lead capture is enabled."
-            )
-        if total_count > MAX_CAPTURE_FIELDS:
-            raise serializers.ValidationError(
-                {
-                    "custom_fields": (
-                        f"No more than {MAX_CAPTURE_FIELDS} required and "
-                        "optional fields can be configured in total."
-                    )
-                }
-            )
-        return attrs
 
     def create(self, validated_data):
         request = self.context["request"]
@@ -120,11 +75,7 @@ class LeadSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "chatbot_id",
-            "name",
-            "email",
-            "phone",
-            "address",
-            "custom_fields",
+            "collected_fields",
             "initial_ip_address",
             "last_ip_address",
             "detected_country_code",
@@ -143,11 +94,7 @@ class LeadUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Lead
         fields = (
-            "name",
-            "email",
-            "phone",
-            "address",
-            "custom_fields",
+            "collected_fields",
             "status",
             "lead_score",
             "source",

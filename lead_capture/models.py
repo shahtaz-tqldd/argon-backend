@@ -1,18 +1,19 @@
 from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.db import models
-from django.db.models import Q, Value
-from django.db.models.lookups import GreaterThan, LessThanOrEqual
+from django.db.models import Q
+from django.utils.dateparse import parse_date
 
 from app.base.models import BaseMinModel, BaseModel
 from lead_capture.utils.choices import LeadCaptureFieldMode, LeadStatusType
 from lead_capture.utils.validators import (
     MAX_CAPTURE_FIELDS,
-    validate_custom_field_config,
-    validate_lead_custom_fields,
-    total_capture_field_count_expression,
-    custom_field_count_expression,
-    json_type_expression
+    default_collectable_fields,
+    json_type_expression,
+    validate_collectable_fields,
+    validate_collected_fields,
 )
+
 
 class LeadCaptureConfig(BaseModel):
     chatbot = models.OneToOneField(
@@ -23,34 +24,12 @@ class LeadCaptureConfig(BaseModel):
 
     is_enabled = models.BooleanField(default=False)
 
-    # fields
-    name_mode = models.CharField(
-        max_length=10,
-        choices=LeadCaptureFieldMode.choices,
-        default=LeadCaptureFieldMode.REQUIRED,
-    )
-    email_mode = models.CharField(
-        max_length=10,
-        choices=LeadCaptureFieldMode.choices,
-        default=LeadCaptureFieldMode.REQUIRED,
-    )
-    phone_mode = models.CharField(
-        max_length=10,
-        choices=LeadCaptureFieldMode.choices,
-        default=LeadCaptureFieldMode.OPTIONAL,
-    )
-    address_mode = models.CharField(
-        max_length=10,
-        choices=LeadCaptureFieldMode.choices,
-        default=LeadCaptureFieldMode.HIDDEN,
-    )
-    custom_fields = models.JSONField(
-        default=list,
-        blank=True,
-        validators=[validate_custom_field_config],
+    collectable_fields = models.JSONField(
+        default=default_collectable_fields,
+        validators=[validate_collectable_fields],
         help_text=(
-            "Custom fields as label/value/mode objects. Values must be unique "
-            "snake_case keys and modes must be optional or required."
+            "Lead fields as label/value/mode/type objects. Name, email, phone, "
+            "and address are provided by default."
         ),
     )
 
@@ -71,56 +50,33 @@ class LeadCaptureConfig(BaseModel):
         verbose_name_plural = "Lead Capture Config"
         constraints = [
             models.CheckConstraint(
-                condition=json_type_expression("custom_fields", "array"),
-                name="lead_capture_custom_fields_array",
-            ),
-            models.CheckConstraint(
-                condition=(
-                    Q(is_enabled=False)
-                    | ~Q(
-                        name_mode=LeadCaptureFieldMode.HIDDEN,
-                        email_mode=LeadCaptureFieldMode.HIDDEN,
-                        phone_mode=LeadCaptureFieldMode.HIDDEN,
-                        address_mode=LeadCaptureFieldMode.HIDDEN,
-                    )
-                    | GreaterThan(custom_field_count_expression(), Value(0))
-                ),
-                name="lead_capture_enabled_has_field",
-            ),
-            models.CheckConstraint(
-                condition=LessThanOrEqual(
-                    total_capture_field_count_expression(),
-                    Value(MAX_CAPTURE_FIELDS),
-                ),
-                name="lead_capture_max_10_fields",
+                condition=json_type_expression("collectable_fields", "array"),
+                name="lead_capture_fields_array",
             ),
         ]
 
     def clean(self):
         super().clean()
-        standard_field_count = sum(
-            mode != LeadCaptureFieldMode.HIDDEN
-            for mode in (
-                self.name_mode,
-                self.email_mode,
-                self.phone_mode,
-                self.address_mode,
-            )
+        fields = (
+            self.collectable_fields
+            if isinstance(self.collectable_fields, list)
+            else []
         )
-        custom_field_count = (
-            len(self.custom_fields) if isinstance(self.custom_fields, list) else 0
-        )
-        total_field_count = standard_field_count + custom_field_count
-
-        if self.is_enabled and total_field_count == 0:
+        visible_fields = [
+            field
+            for field in fields
+            if isinstance(field, dict)
+            and field.get("mode") != LeadCaptureFieldMode.HIDDEN
+        ]
+        if self.is_enabled and not visible_fields:
             raise ValidationError(
                 "At least one lead field must be optional or required when "
                 "lead capture is enabled."
             )
-        if total_field_count > MAX_CAPTURE_FIELDS:
+        if len(visible_fields) > MAX_CAPTURE_FIELDS:
             raise ValidationError(
                 {
-                    "custom_fields": (
+                    "collectable_fields": (
                         f"No more than {MAX_CAPTURE_FIELDS} required and "
                         "optional fields can be configured in total."
                     )
@@ -140,16 +96,11 @@ class Lead(BaseMinModel):
         on_delete=models.CASCADE,
     )
 
-    name = models.CharField(max_length=200, blank=True)
-    email = models.EmailField(blank=True)
-    phone = models.CharField(max_length=50, blank=True)
-    address = models.CharField(max_length=200, blank=True)
-
-    # client specified custom fields
-    custom_fields = models.JSONField(
+    collected_fields = models.JSONField(
         default=dict,
         blank=True,
-        validators=[validate_lead_custom_fields],
+        validators=[validate_collected_fields],
+        help_text="Values collected using the chatbot's lead configuration.",
     )
 
     # ip address
@@ -178,15 +129,11 @@ class Lead(BaseMinModel):
                 fields=["chatbot", "created_at"],
                 name="lead_chatbot_created_idx",
             ),
-            models.Index(
-                fields=["chatbot", "email"],
-                name="lead_chatbot_email_idx",
-            ),
         ]
         constraints = [
             models.CheckConstraint(
-                condition=json_type_expression("custom_fields", "object"),
-                name="lead_custom_fields_object",
+                condition=json_type_expression("collected_fields", "object"),
+                name="lead_collected_fields_object",
             ),
             models.CheckConstraint(
                 condition=Q(lead_score__lte=100),
@@ -194,12 +141,115 @@ class Lead(BaseMinModel):
             ),
         ]
 
+    def clean(self):
+        super().clean()
+        self._validate_collected_fields_against_config()
+
+    def _validate_collected_fields_against_config(self):
+        if not self.chatbot_id or not isinstance(self.collected_fields, dict):
+            return
+        try:
+            config = LeadCaptureConfig.objects.get(chatbot_id=self.chatbot_id)
+        except LeadCaptureConfig.DoesNotExist:
+            raise ValidationError(
+                {
+                    "collected_fields": (
+                        "The chatbot has no lead capture configuration."
+                    )
+                }
+            )
+
+        configured_fields = {
+            field["value"]: field
+            for field in config.collectable_fields
+            if isinstance(field, dict) and isinstance(field.get("value"), str)
+        }
+        visible_fields = {
+            value: field
+            for value, field in configured_fields.items()
+            if field.get("mode") != LeadCaptureFieldMode.HIDDEN
+        }
+        unknown_fields = set(self.collected_fields) - set(visible_fields)
+        if unknown_fields:
+            raise ValidationError(
+                {
+                    "collected_fields": (
+                        "Fields are not collectable for this configuration: "
+                        f"{', '.join(sorted(unknown_fields))}."
+                    )
+                }
+            )
+        missing_fields = [
+            value
+            for value, field in visible_fields.items()
+            if field.get("mode") == LeadCaptureFieldMode.REQUIRED
+            and self._is_empty_value(self.collected_fields.get(value))
+        ]
+        if missing_fields:
+            raise ValidationError(
+                {
+                    "collected_fields": (
+                        "Required fields are missing: "
+                        f"{', '.join(sorted(missing_fields))}."
+                    )
+                }
+            )
+        for value, collected_value in self.collected_fields.items():
+            if self._is_empty_value(collected_value):
+                continue
+            field_type = visible_fields[value].get("type")
+            if field_type == "text" and not isinstance(collected_value, str):
+                raise ValidationError(
+                    {"collected_fields": f"'{value}' must be text."}
+                )
+            if field_type == "email":
+                if not isinstance(collected_value, str):
+                    raise ValidationError(
+                        {"collected_fields": f"'{value}' must be an email."}
+                    )
+                try:
+                    validate_email(collected_value)
+                except ValidationError:
+                    raise ValidationError(
+                        {
+                            "collected_fields": (
+                                f"'{value}' must be a valid email."
+                            )
+                        }
+                    )
+            if field_type == "date" and (
+                not isinstance(collected_value, str)
+                or parse_date(collected_value) is None
+            ):
+                raise ValidationError(
+                    {
+                        "collected_fields": (
+                            f"'{value}' must be a date in YYYY-MM-DD format."
+                        )
+                    }
+                )
+
+    @staticmethod
+    def _is_empty_value(value):
+        return value is None or (isinstance(value, str) and not value.strip())
+
     def save(self, *args, **kwargs):
-        self.email = self.email.strip().casefold()
+        if isinstance(self.collected_fields, dict):
+            self.collected_fields = dict(self.collected_fields)
+            email = self.collected_fields.get("email")
+            if isinstance(email, str):
+                self.collected_fields["email"] = email.strip().casefold()
         super().save(*args, **kwargs)
 
     def __str__(self):
-        identity = self.name or self.email or self.phone or str(self.id)
+        identity = next(
+            (
+                self.collected_fields.get(field)
+                for field in ("name", "email", "phone")
+                if self.collected_fields.get(field)
+            ),
+            str(self.id),
+        )
         return f"{identity} ({self.chatbot})"
 
 
@@ -248,4 +298,3 @@ class LeadNote(BaseMinModel):
 
     def __str__(self):
         return f"Note on {self.lead} by {self.author.user}"
-

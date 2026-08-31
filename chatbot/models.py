@@ -197,6 +197,11 @@ class Chatbot(BaseModel):
             }
         )
 
+    @property
+    def appointment_booking_enabled(self):
+        config = getattr(self, "appointment_booking_config", None)
+        return bool(config and config.is_enabled)
+
 
 class ChatbotWidgetSettings(BaseModel):
     chatbot = models.OneToOneField(

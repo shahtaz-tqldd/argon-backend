@@ -2,6 +2,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
+from appointment_booking.models import AppointmentBookingConfig
 from chatbot.models import ChatbotCapacity
 from chatbot.services.resolution import resolve_chatbot_reference
 from chatbot.services.subscription import get_chatbot_subscription_entitlements
@@ -238,6 +239,27 @@ def apply_active_subscription_to_chatbot_capacity(subscription):
         )
     else:
         LeadCaptureConfig.objects.filter(
+            chatbot_id=subscription.chatbot_id,
+            is_enabled=True,
+        ).update(
+            is_enabled=False,
+            updated_by=subscription.selected_by,
+            updated_at=timezone.now(),
+        )
+
+    if (
+        not subscription.is_free_plan()
+        and PlanFeature.APPOINTMENT_BOOKING in features
+    ):
+        AppointmentBookingConfig.objects.get_or_create(
+            chatbot_id=subscription.chatbot_id,
+            defaults={
+                "created_by": subscription.selected_by,
+                "updated_by": subscription.selected_by,
+            },
+        )
+    else:
+        AppointmentBookingConfig.objects.filter(
             chatbot_id=subscription.chatbot_id,
             is_enabled=True,
         ).update(

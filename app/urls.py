@@ -13,6 +13,10 @@ v1_client_urls = [
     path("chatbots/", include("chatbot.api.v1.client.urls")),
     path("knowledge/", include("knowledge.api.v1.client.urls")),
     path("lead-captures/", include("lead_capture.api.v1.client.urls")),
+    path(
+        "appointment-bookings/",
+        include("appointment_booking.api.v1.client.urls"),
+    ),
     path("subscriptions/", include("subscription.api.v1.client.urls")),
     path("notifications/", include("notification.api.v1.client.urls")),
 ]
