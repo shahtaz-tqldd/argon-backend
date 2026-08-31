@@ -23,6 +23,7 @@ MODULER_APPS = [
     "accounts.apps.AccountsConfig",
     "workspace.apps.WorkspaceConfig",
     "chatbot.apps.ChatbotConfig",
+    "chat_session.apps.ChatSessionConfig",
     "lead_capture.apps.LeadCaptureConfig",
     "appointment_booking.apps.AppointmentBookingAppConfig",
     "subscription.apps.SubscriptionConfig",

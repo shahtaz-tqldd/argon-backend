@@ -11,6 +11,7 @@ v1_client_urls = [
     path("accounts/", include("accounts.api.v1.client.urls")),
     path("workspaces/", include("workspace.api.v1.client.urls")),
     path("chatbots/", include("chatbot.api.v1.client.urls")),
+    path("chat-sessions/", include("chat_session.api.v1.client.urls")),
     path("knowledge/", include("knowledge.api.v1.client.urls")),
     path("lead-captures/", include("lead_capture.api.v1.client.urls")),
     path(
