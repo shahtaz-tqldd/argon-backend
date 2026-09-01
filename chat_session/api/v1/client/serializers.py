@@ -110,6 +110,60 @@ class ChatSessionSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class ChatSessionListSerializer(serializers.ModelSerializer):
+    user_data = serializers.SerializerMethodField()
+    unread_message_count = serializers.IntegerField(read_only=True)
+    last_message = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ChatSession
+        fields = (
+            "id",
+            "channel",
+            "user_data",
+            "unread_message_count",
+            "last_message",
+            "ai_enabled",
+            "status",
+            "ended_at",
+            "last_activity_at",
+        )
+        read_only_fields = fields
+
+    @staticmethod
+    def _first_value(*values):
+        return next((value for value in values if value not in (None, "")), "")
+
+    def get_user_data(self, obj):
+        lead = obj.lead
+        lead_fields = lead.collected_fields if lead else {}
+        user_metadata = obj.user_metadata or {}
+        metadata = obj.metadata or {}
+
+        return {
+            "name": self._first_value(
+                lead_fields.get("name"),
+                user_metadata.get("name"),
+                metadata.get("name"),
+            ),
+            "detected_country": self._first_value(
+                lead.detected_country_code if lead else "",
+                user_metadata.get("detected_country"),
+                user_metadata.get("detected_country_code"),
+                metadata.get("detected_country"),
+                metadata.get("detected_country_code"),
+            )
+        }
+
+    def get_last_message(self, obj):
+        if obj.last_message_sender is None:
+            return None
+        return {
+            "sender": obj.last_message_sender,
+            "content": obj.last_message_content,
+        }
+
+
 class ChatSessionTakeoverSerializer(serializers.ModelSerializer):
     chat_session_id = serializers.UUIDField(read_only=True)
     agent = ChatbotAgentSerializer(read_only=True)
