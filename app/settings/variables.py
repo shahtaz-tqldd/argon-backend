@@ -88,7 +88,11 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = env("CELERY_TIMEZONE", "UTC")
 CELERY_RESULT_EXTENDED = True
-CELERY_IMPORTS = ("accounts.tasks", "knowledge.tasks")
+CELERY_IMPORTS = (
+    "accounts.tasks",
+    "chat_session.tasks",
+    "knowledge.tasks",
+)
 CELERY_BEAT_SCHEDULE = {
     "permanently-delete-expired-accounts-daily": {
         "task": "accounts.tasks.permanently_delete_expired_accounts",
@@ -125,8 +129,20 @@ GOOGLE_CLOUD_LOCATION = env("GOOGLE_CLOUD_LOCATION", "")
 GEMINI_EMBEDDING_MODEL = env("GEMINI_EMBEDDING_MODEL", "gemini-embedding-2")
 GEMINI_EMBEDDING_DIMENSIONS = env_int("GEMINI_EMBEDDING_DIMENSIONS", 1536)
 GEMINI_EMBEDDING_REQUEST_DELAY_SECONDS = env_float("GEMINI_EMBEDDING_REQUEST_DELAY_SECONDS", 13.0)
+GEMINI_CHAT_MODEL = env("GEMINI_CHAT_MODEL", "gemini-2.5-flash")
+GEMINI_CHAT_MAX_OUTPUT_TOKENS = env_int("GEMINI_CHAT_MAX_OUTPUT_TOKENS", 1024)
 GEMINI_INPUT_COST_PER_MILLION = env_float("GEMINI_INPUT_COST_PER_MILLION", 0.30)
 GEMINI_OUTPUT_COST_PER_MILLION = env_float("GEMINI_OUTPUT_COST_PER_MILLION", 2.50)
+CHATBOT_AI_BACKEND = env("CHATBOT_AI_BACKEND", "placeholder").strip().casefold()
+CHATBOT_PLACEHOLDER_REPLY = env(
+    "CHATBOT_PLACEHOLDER_REPLY",
+    "Hello! How can I help you today?",
+)
+
+WIDGET_CONVERSATION_TOKEN_TTL_SECONDS = env_int(
+    "WIDGET_CONVERSATION_TOKEN_TTL_SECONDS",
+    60 * 60 * 24 * 30,
+)
 
 
 # CLOUDFLARE R2 STORAGE
@@ -163,7 +179,12 @@ KNOWLEDGE_CHUNK_OVERLAP = env_int("KNOWLEDGE_CHUNK_OVERLAP", 50)
 
 # FRONTEND URL
 USER_FRONTEND_URL = env("USER_FRONTEND_URL", "http://localhost:5173")
-ADMIN_FRONTEND_URL = env("ADMIN_FRONTEND_URL", "http://localhost:5173/admin")
+ADMIN_FRONTEND_URL = env("ADMIN_FRONTEND_URL", "http://localhost:5174")
+WIDGET_FRONTEND_URL = env("WIDGET_FRONTEND_URL", "http://localhost:5175")
+WIDGET_WEBSOCKET_BASE_URL = env(
+    "WIDGET_WEBSOCKET_BASE_URL",
+    "ws://localhost:8008" if APP_ENV == "dev" else "",
+)
 PASSWORD_RESET_PATH = env("PASSWORD_RESET_PATH", "/reset-password")
 WORKSPACE_INVITATION_PATH = env(
     "WORKSPACE_INVITATION_PATH", "/workspace-invitation"

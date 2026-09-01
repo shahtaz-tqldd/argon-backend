@@ -451,6 +451,44 @@ class ChatbotWidgetDetailSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class PublicChatbotWidgetSettingsSerializer(serializers.ModelSerializer):
+    """Serialize only the widget configuration safe for public clients."""
+
+    class Meta:
+        model = ChatbotWidgetSettings
+        fields = (
+            "primary_color",
+            "secondary_color",
+            "launcher_position",
+            "launcher_text",
+            "header_title",
+            "header_description",
+            "show_branding",
+            "theme",
+            "other_settings",
+        )
+        read_only_fields = fields
+
+
+class PublicChatbotSerializer(serializers.ModelSerializer):
+    """Serialize the public configuration consumed by an embedded widget."""
+
+    widget_settings = PublicChatbotWidgetSettingsSerializer(read_only=True)
+
+    class Meta:
+        model = Chatbot
+        fields = (
+            "chatbot_name",
+            "business_name",
+            "description",
+            "logo",
+            "welcome_message",
+            "language",
+            "widget_settings",
+        )
+        read_only_fields = fields
+
+
 class ChatbotWidgetSettingsUpdateSerializer(serializers.ModelSerializer):
     """Validate mutable widget settings."""
 

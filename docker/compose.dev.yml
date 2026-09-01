@@ -15,6 +15,7 @@ services:
       ADK_DB_URL: postgresql+asyncpg://${DB_USER:-argon_db_owner}:${DB_PASSWORD:-argon_db_password}@postgres:5432/adk_session_db
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
+      WIDGET_WEBSOCKET_BASE_URL: ws://localhost:${ASGI_PORT:-8008}
     volumes:
       - ..:/app
       - ../secrets/service-account.json:/app/secrets/service-account.json:ro

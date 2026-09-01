@@ -147,6 +147,64 @@ class AgentMessageCreateSerializer(serializers.Serializer):
         return value
 
 
+class VisitorConversationCreateSerializer(serializers.Serializer):
+    conversation_token = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=2048,
+    )
+    user_metadata = serializers.JSONField(required=False)
+    metadata = serializers.JSONField(required=False)
+
+    def validate_user_metadata(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Must be a JSON object.")
+        return value
+
+    def validate_metadata(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Must be a JSON object.")
+        return value
+
+
+class VisitorMessageCreateSerializer(serializers.Serializer):
+    content = serializers.CharField(trim_whitespace=False, max_length=10000)
+    client_message_id = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=255,
+    )
+    metadata = serializers.JSONField(required=False, default=dict)
+
+    def validate_content(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Message content cannot be blank.")
+        return value
+
+    def validate_metadata(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Must be a JSON object.")
+        return value
+
+
+class VisitorMessageSerializer(ChatMessageSerializer):
+    """Public message representation without internal agent contact details."""
+
+    sender = serializers.SerializerMethodField()
+
+    def get_sender(self, obj):
+        if obj.sender_id is None:
+            return None
+        return {
+            "name": obj.sender.user.name,
+            "avatar": getattr(
+                getattr(obj.sender.user, "profile", None),
+                "avatar_url",
+                "",
+            ),
+        }
+
+
 class ReassignSessionSerializer(serializers.Serializer):
     agent_id = serializers.UUIDField()
 
