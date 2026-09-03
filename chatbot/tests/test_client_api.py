@@ -18,6 +18,7 @@ from chatbot.models import (
 )
 from chatbot.services import create_chatbot
 from chatbot.utils.choices import ChatbotPermissionTypes, ChatbotRoleTypes
+from chat_session.models import ChatMessage
 from subscription.choices import (
     BillingInterval,
     PaymentProvider,
@@ -54,6 +55,230 @@ class ChatbotClientAPITests(APITestCase):
         )
         ChatbotUser.objects.create(chatbot=self.chatbot, user=self.member)
         self.client.force_authenticate(self.owner)
+
+    def test_public_chatbot_returns_widget_configuration_by_public_key(self):
+        widget_settings = self.chatbot.widget_settings
+        widget_settings.launcher_text = "Chat with us"
+        widget_settings.other_settings = {"corner_radius": 12}
+        widget_settings.save()
+        ChatbotAllowedOrigin.objects.create(
+            chatbot=self.chatbot,
+            origin="https://app.example.com",
+            created_by=self.owner,
+        )
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get(
+            reverse(
+                "public-chatbot",
+                kwargs={"public_key": widget_settings.public_key},
+            )
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["data"]
+        self.assertEqual(data["chatbot_name"], self.chatbot.chatbot_name)
+        self.assertEqual(data["welcome_message"], self.chatbot.welcome_message)
+        self.assertEqual(data["widget_settings"]["launcher_text"], "Chat with us")
+        self.assertEqual(
+            data["widget_settings"]["other_settings"],
+            {"corner_radius": 12},
+        )
+        self.assertNotIn("id", data)
+        self.assertNotIn("public_key", data["widget_settings"])
+        self.assertNotIn("allowed_urls", data)
+
+    def test_public_chatbot_returns_not_found_for_unknown_key(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get(
+            reverse("public-chatbot", kwargs={"public_key": "unknown-key"})
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_public_chatbot_returns_not_found_when_widget_is_disabled(self):
+        widget_settings = self.chatbot.widget_settings
+        widget_settings.is_enabled = False
+        widget_settings.save(update_fields=["is_enabled", "updated_at"])
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get(
+            reverse(
+                "public-chatbot",
+                kwargs={"public_key": widget_settings.public_key},
+            )
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_public_chatbot_returns_not_found_when_chatbot_is_disabled(self):
+        self.chatbot.status = "disabled"
+        self.chatbot.save(update_fields=["status", "updated_at"])
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get(
+            reverse(
+                "public-chatbot",
+                kwargs={
+                    "public_key": self.chatbot.widget_settings.public_key,
+                },
+            )
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_visitor_conversation_can_be_created_and_resumed(self):
+        self.client.force_authenticate(user=None)
+        url = reverse(
+            "visitor-conversation",
+            kwargs={"public_key": self.chatbot.widget_settings.public_key},
+        )
+
+        created_response = self.client.post(
+            url,
+            {
+                "user_metadata": {"locale": "en-US"},
+                "metadata": {"page_url": "https://example.com/pricing"},
+            },
+            format="json",
+        )
+
+        self.assertEqual(created_response.status_code, status.HTTP_201_CREATED)
+        created_data = created_response.data["data"]
+        self.assertFalse(created_data["resumed"])
+        self.assertTrue(created_data["conversation_token"])
+        self.assertIn(
+            f"/conversations/{created_data['session']['id']}/?token=",
+            created_data["websocket_url"],
+        )
+        self.assertEqual(created_data["messages"], [])
+
+        resumed_response = self.client.post(
+            url,
+            {"conversation_token": created_data["conversation_token"]},
+            format="json",
+        )
+
+        self.assertEqual(resumed_response.status_code, status.HTTP_200_OK)
+        resumed_data = resumed_response.data["data"]
+        self.assertTrue(resumed_data["resumed"])
+        self.assertEqual(
+            resumed_data["session"]["id"],
+            created_data["session"]["id"],
+        )
+
+    def test_visitor_conversation_rejects_invalid_token(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(
+            reverse(
+                "visitor-conversation",
+                kwargs={"public_key": self.chatbot.widget_settings.public_key},
+            ),
+            {"conversation_token": "not-a-valid-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertIn("conversation_token", response.data["errors"])
+
+    def test_visitor_conversation_enforces_configured_origin(self):
+        ChatbotAllowedOrigin.objects.create(
+            chatbot=self.chatbot,
+            origin="https://allowed.example.com",
+            created_by=self.owner,
+        )
+        self.client.force_authenticate(user=None)
+        url = reverse(
+            "visitor-conversation",
+            kwargs={"public_key": self.chatbot.widget_settings.public_key},
+        )
+
+        rejected_response = self.client.post(url, {}, format="json")
+        accepted_response = self.client.post(
+            url,
+            {},
+            format="json",
+            HTTP_ORIGIN="https://allowed.example.com",
+        )
+
+        self.assertEqual(rejected_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(accepted_response.status_code, status.HTTP_201_CREATED)
+
+    @patch("chatbot.api.v1.client.views.dispatch_ai_reply")
+    def test_visitor_message_is_authenticated_and_idempotent(self, queue_ai):
+        self.client.force_authenticate(user=None)
+        public_key = self.chatbot.widget_settings.public_key
+        bootstrap_response = self.client.post(
+            reverse(
+                "visitor-conversation",
+                kwargs={"public_key": public_key},
+            ),
+            {},
+            format="json",
+        )
+        conversation = bootstrap_response.data["data"]
+        url = reverse(
+            "visitor-message-create",
+            kwargs={
+                "public_key": public_key,
+                "session_id": conversation["session"]["id"],
+            },
+        )
+        payload = {
+            "client_message_id": "widget-message-1",
+            "content": "What is your refund policy?",
+            "metadata": {"page": "pricing"},
+        }
+        authorization = f"Bearer {conversation['conversation_token']}"
+
+        created_response = self.client.post(
+            url,
+            payload,
+            format="json",
+            HTTP_AUTHORIZATION=authorization,
+        )
+        duplicate_response = self.client.post(
+            url,
+            payload,
+            format="json",
+            HTTP_AUTHORIZATION=authorization,
+        )
+
+        self.assertEqual(created_response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(created_response.data["data"]["ai_queued"])
+        self.assertEqual(duplicate_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(duplicate_response.data["data"]["duplicate"])
+        self.assertEqual(
+            ChatMessage.objects.filter(external_id="widget-message-1").count(),
+            1,
+        )
+        queue_ai.assert_called_once()
+
+    def test_visitor_message_requires_conversation_bearer_token(self):
+        self.client.force_authenticate(user=None)
+        public_key = self.chatbot.widget_settings.public_key
+        bootstrap_response = self.client.post(
+            reverse(
+                "visitor-conversation",
+                kwargs={"public_key": public_key},
+            ),
+            {},
+            format="json",
+        )
+        session_id = bootstrap_response.data["data"]["session"]["id"]
+
+        response = self.client.post(
+            reverse(
+                "visitor-message-create",
+                kwargs={"public_key": public_key, "session_id": session_id},
+            ),
+            {"content": "Hello"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_chatbot_detail_uses_chatbot_query_parameter(self):
         response = self.client.get(

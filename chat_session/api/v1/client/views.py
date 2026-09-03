@@ -1,5 +1,5 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Count
+from django.db.models import Count, OuterRef, Q, Subquery
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
@@ -12,6 +12,7 @@ from chatbot.utils.choices import ChatbotPermissionTypes
 from chat_session.api.v1.client.serializers import (
     AgentMessageCreateSerializer,
     ChatMessageSerializer,
+    ChatSessionListSerializer,
     ChatSessionListQuerySerializer,
     ChatSessionObjectQuerySerializer,
     ChatSessionSerializer,
@@ -27,6 +28,10 @@ from chat_session.services.takeover import (
     reopen_session,
     resolve_session,
     take_over_session,
+)
+from chat_session.utils.choices import (
+    ChatMessageSenderType,
+    ChatMessageStatus,
 )
 
 
@@ -123,14 +128,31 @@ class ChatSessionListView(
     permission_classes = [IsChatbotUser]
     required_chatbot_permission = ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT
     query_serializer_class = ChatSessionListQuerySerializer
-    serializer_class = ChatSessionSerializer
+    serializer_class = ChatSessionListSerializer
 
     def get(self, request, *args, **kwargs):
         query = self.get_query()
+        last_message = ChatMessage.objects.filter(
+            chat_session=OuterRef("pk")
+        ).order_by("-created_at", "-id")
         queryset = (
             ChatSession.objects.filter(chatbot=self.get_chatbot())
             .select_related("lead", "assigned_to__user")
-            .annotate(message_count=Count("messages"))
+            .annotate(
+                unread_message_count=Count(
+                    "messages",
+                    filter=(
+                        Q(messages__sender_type=ChatMessageSenderType.VISITOR)
+                        & ~Q(messages__status=ChatMessageStatus.READ)
+                    ),
+                ),
+                last_message_sender=Subquery(
+                    last_message.values("sender_type")[:1]
+                ),
+                last_message_content=Subquery(
+                    last_message.values("content")[:1]
+                ),
+            )
         )
         if query.get("status"):
             queryset = queryset.filter(status=query["status"])

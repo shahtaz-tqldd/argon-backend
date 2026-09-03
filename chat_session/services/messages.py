@@ -13,6 +13,7 @@ def serialize_message_event(message):
             "user_id": str(message.sender.user_id),
             "name": message.sender.user.name,
             "email": message.sender.user.email,
+            "avatar": getattr(message.sender.user.profile, "avatar_url", ""),
         }
     return {
         "id": str(message.id),

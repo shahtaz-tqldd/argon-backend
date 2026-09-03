@@ -19,6 +19,21 @@ chatbot = [
     ),
     path("update/", views.ChatbotUpdateView.as_view(), name="chatbot-update"),
     path("delete/", views.ChatbotDeleteView.as_view(), name="chatbot-delete"),
+    path(
+        "<str:public_key>/conversations/",
+        views.VisitorConversationView.as_view(),
+        name="visitor-conversation",
+    ),
+    path(
+        "<str:public_key>/conversations/<uuid:session_id>/messages/",
+        views.VisitorMessageCreateView.as_view(),
+        name="visitor-message-create",
+    ),
+    path(
+        "<str:public_key>/",
+        views.PublicChatbotView.as_view(),
+        name="public-chatbot",
+    ),
 ]
 
 # chatbot team

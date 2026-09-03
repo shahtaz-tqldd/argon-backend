@@ -1,6 +1,10 @@
+import logging
 from types import SimpleNamespace
+from urllib.parse import urlencode
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
@@ -31,8 +35,28 @@ from chatbot.api.v1.client.serializers import (
     ChatbotWidgetDetailSerializer,
     ChatbotWidgetUpdateSerializer,
     InviteChatbotMemberSerializer,
+    PublicChatbotSerializer,
 )
 from chatbot.models import Chatbot, ChatbotInvitation, ChatbotUser
+from chat_session.api.v1.client.serializers import (
+    VisitorConversationCreateSerializer,
+    VisitorMessageCreateSerializer,
+    VisitorMessageSerializer,
+)
+from chat_session.models import ChatMessage
+from chat_session.services.events import publish_session_event
+from chat_session.services.visitor import (
+    create_or_resume_conversation,
+    get_public_chatbot,
+    get_visitor_chat_session,
+    require_allowed_widget_origin,
+    send_visitor_message,
+)
+from chat_session.services.visitor_tokens import (
+    InvalidConversationToken,
+    issue_conversation_token,
+)
+from chat_session.tasks import dispatch_ai_reply, is_ai_reply_enabled
 from chatbot.utils.choices import (
     ChatbotPermissionTypes,
     ChatbotRoleTypes,
@@ -43,6 +67,7 @@ from subscription.models import ChatbotSubscription
 from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 def first_error_message(errors, fallback="Request failed."):
@@ -240,6 +265,183 @@ class ChatbotWidgetDetailView(ChatbotObjectMixin, GenericAPIView):
         return APIResponse.success(
             data=self.get_serializer(self.get_chatbot()).data,
             message="Chatbot widget details fetched successfully.",
+        )
+
+
+class PublicChatbotView(GenericAPIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    serializer_class = PublicChatbotSerializer
+
+    def get(self, request, public_key, *args, **kwargs):
+        chatbot = get_public_chatbot(public_key)
+        return APIResponse.success(
+            data=self.get_serializer(chatbot).data,
+            message="Chatbot widget configuration fetched successfully.",
+        )
+
+
+class VisitorConversationView(GenericAPIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    serializer_class = VisitorConversationCreateSerializer
+
+    def post(self, request, public_key, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return validation_error_response(
+                serializer.errors,
+                "Conversation could not be started.",
+            )
+        chatbot = get_public_chatbot(public_key)
+        require_allowed_widget_origin(
+            chatbot,
+            request.headers.get("Origin", ""),
+        )
+        try:
+            chat_session, resumed = create_or_resume_conversation(
+                chatbot,
+                **serializer.validated_data,
+            )
+        except InvalidConversationToken as exc:
+            return APIResponse.error(
+                errors={"conversation_token": [str(exc)]},
+                message=str(exc),
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        messages = list(
+            ChatMessage.objects.filter(chat_session=chat_session)
+            .select_related("sender__user__profile")
+            .prefetch_related("attachments")
+            .order_by("-created_at")[:50]
+        )
+        messages.reverse()
+        token = issue_conversation_token(chat_session)
+        scheme = "wss" if request.is_secure() else "ws"
+        websocket_base_url = settings.WIDGET_WEBSOCKET_BASE_URL.rstrip("/")
+        if not websocket_base_url:
+            websocket_base_url = f"{scheme}://{request.get_host()}"
+        websocket_path = (
+            f"/ws/widget/chatbots/{public_key}/"
+            f"conversations/{chat_session.id}/"
+        )
+        return APIResponse.success(
+            data={
+                "session": {
+                    "id": str(chat_session.id),
+                    "visitor_id": chat_session.visitor_id,
+                    "status": chat_session.status,
+                    "ai_enabled": is_ai_reply_enabled(
+                        chat_session,
+                        chatbot,
+                    ),
+                },
+                "conversation_token": token,
+                "websocket_url": (
+                    f"{websocket_base_url}{websocket_path}"
+                    f"?{urlencode({'token': token})}"
+                ),
+                "resumed": resumed,
+                "messages": VisitorMessageSerializer(
+                    messages,
+                    many=True,
+                ).data,
+            },
+            message=(
+                "Conversation resumed successfully."
+                if resumed
+                else "Conversation created successfully."
+            ),
+            status=(status.HTTP_200_OK if resumed else status.HTTP_201_CREATED),
+        )
+
+
+class VisitorMessageCreateView(GenericAPIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    serializer_class = VisitorMessageCreateSerializer
+
+    @staticmethod
+    def _bearer_token(request):
+        authorization = request.headers.get("Authorization", "")
+        if authorization.lower().startswith("bearer "):
+            return authorization.split(" ", 1)[1].strip()
+        return ""
+
+    def post(self, request, public_key, session_id, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return validation_error_response(
+                serializer.errors,
+                "Message could not be sent.",
+            )
+        chatbot = get_public_chatbot(public_key)
+        require_allowed_widget_origin(
+            chatbot,
+            request.headers.get("Origin", ""),
+        )
+        token = self._bearer_token(request)
+        if not token:
+            return APIResponse.error(
+                message="A conversation bearer token is required.",
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        try:
+            chat_session = get_visitor_chat_session(
+                chatbot,
+                session_id,
+                token,
+            )
+        except InvalidConversationToken as exc:
+            return APIResponse.error(
+                message=str(exc),
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        try:
+            message, created = send_visitor_message(
+                chat_session,
+                content=serializer.validated_data["content"],
+                metadata=serializer.validated_data.get("metadata"),
+                external_id=serializer.validated_data.get(
+                    "client_message_id",
+                    "",
+                ),
+            )
+        except DjangoValidationError as exc:
+            return APIResponse.error(
+                errors={"non_field_errors": exc.messages},
+                message=next(iter(exc.messages), "Message could not be sent."),
+                status=status.HTTP_409_CONFLICT,
+            )
+        ai_queued = False
+        if created:
+            try:
+                dispatch_ai_reply(str(message.id))
+                ai_queued = True
+            except Exception:
+                logger.exception(
+                    "Could not queue AI reply for visitor message %s",
+                    message.id,
+                )
+                publish_session_event(
+                    chat_session.id,
+                    "ai.response.failed",
+                    {"code": "queue_unavailable", "retryable": True},
+                )
+        return APIResponse.success(
+            data={
+                "message": VisitorMessageSerializer(message).data,
+                "duplicate": not created,
+                "ai_queued": ai_queued,
+            },
+            message=(
+                "Message already accepted."
+                if not created
+                else "Message accepted successfully."
+            ),
+            status=(status.HTTP_200_OK if not created else status.HTTP_201_CREATED),
         )
 
 
