@@ -1,8 +1,9 @@
+from datetime import timedelta
+
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
-from django.utils.translation import gettext_lazy as _
 
 from app.base.models import BaseMinModel
 from chat_session.utils.choices import (
@@ -11,66 +12,21 @@ from chat_session.utils.choices import (
     ChatMessageStatus,
     ChatSessionChannel,
     ChatSessionStatus,
+    ChatSessionAttentionReason,
     ChatSessionTakeoverReleaseReason,
+    ChatSessionTransferStatus,
 )
 from chat_session.utils.validators import validate_json_object
 
 
 class ChatSession(BaseMinModel):
-    """A single conversation between a visitor and a chatbot."""
+    """A single conversation between a visitor and a chatbot"""
+
     chatbot = models.ForeignKey(
         "chatbot.Chatbot",
         on_delete=models.CASCADE,
         related_name="chat_sessions",
     )
-    channel = models.CharField(
-        max_length=20,
-        choices=ChatSessionChannel.choices,
-        default=ChatSessionChannel.WEB_WIDGET,
-    )
-    status = models.CharField(
-        max_length=24,
-        choices=ChatSessionStatus.choices,
-        default=ChatSessionStatus.ACTIVE,
-        db_index=True,
-    )
-
-    lead = models.ForeignKey(
-        "lead_capture.Lead",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="chat_sessions",
-        help_text=(
-            "Set once the visitor is identified (e.g. via a lead-capture form "
-            "or matched contact info). Null means the session is anonymous."
-        ),
-    )
-
-    assigned_to = models.ForeignKey(
-        "chatbot.ChatbotUser",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="assigned_chat_sessions",
-        help_text=(
-            "Denormalized pointer to the chatbot member currently responsible "
-            "for this session. Kept in sync with the latest open "
-            "ChatSessionTakeover row by the service layer."
-        ),
-    )
-
-    visitor_id = models.CharField(
-        max_length=255,
-        blank=True,
-        default="",
-        db_index=True,
-        help_text=(
-            "Anonymous fingerprint/cookie ID used to correlate sessions from "
-            "the same unidentified visitor. Ignored once `lead` is set."
-        ),
-    )
-
     external_thread_id = models.CharField(
         max_length=255,
         blank=True,
@@ -83,33 +39,123 @@ class ChatSession(BaseMinModel):
         ),
     )
 
+    channel = models.CharField(
+        max_length=20,
+        choices=ChatSessionChannel.choices,
+        default=ChatSessionChannel.WEB_WIDGET,
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=ChatSessionStatus.choices,
+        default=ChatSessionStatus.OPEN,
+        db_index=True,
+    )
+
+    # Human attention
+    requires_attention = models.BooleanField(default=False)
+    attention_reason = models.CharField(
+        max_length=30,
+        choices=ChatSessionAttentionReason.choices,
+        blank=True,
+        default="",
+    )
+    attention_requested_at = models.DateTimeField(null=True, blank=True)
+
+    # Ownership — the human agent currently responsible for this session.
+    # Kept in sync with ChatSessionTakeover (one active takeover row per
+    # session) by the service layer; denormalized here so inbox/agent-queue
+    # queries don't need a join against the takeover table.
+    assigned_to = models.ForeignKey(
+        "chatbot.ChatbotUser",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="assigned_chat_sessions",
+        help_text="Human agent currently responsible for this session, if any.",
+    )
+
+    # Activity
     last_activity_at = models.DateTimeField(default=timezone.now, db_index=True)
-    ended_at = models.DateTimeField(null=True, blank=True)
+    last_visitor_activity_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+    )
 
-    ai_enabled = models.BooleanField(default=True, verbose_name=_("AI Enabled"))
+    # Lifecycle timestamps
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
 
-    # add ip address, detected address, name or email if leads are not active
+    ai_enabled = models.BooleanField(default=True)
+
+    # Session User/Lead
+    visitor_id = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text=(
+            "Anonymous fingerprint/cookie ID used to correlate sessions from "
+            "the same unidentified visitor. Ignored once `lead` is set."
+        ),
+    )
+    lead = models.ForeignKey(
+        "lead_capture.Lead",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="chat_sessions",
+        help_text=(
+            "Set once the visitor is identified (e.g. via a lead-capture form "
+            "or matched contact info). Null means the session is anonymous."
+        ),
+    )
+
     user_metadata = models.JSONField(
         default=dict,
         blank=True,
         validators=[validate_json_object],
-        help_text="Channel-specific session context stored as a JSON object.",
+        help_text=(
+            "Visitor-side context captured before/without a Lead — IP, "
+            "detected location, name, email, browser, etc."
+        ),
     )
 
     metadata = models.JSONField(
         default=dict,
         blank=True,
         validators=[validate_json_object],
-        help_text="Channel-specific session context stored as a JSON object.",
+        help_text="Internal/channel-specific session context stored as a JSON object.",
     )
+
+    @property
+    def is_recently_active(self):
+        if not self.last_visitor_activity_at:
+            return False
+
+        return (
+            self.last_visitor_activity_at
+            >= timezone.now() - timedelta(minutes=10)
+        )
 
     class Meta:
         ordering = ["-last_activity_at", "-created_at"]
         indexes = [
+            # Primary inbox listing: all sessions for a chatbot, by status,
+            # newest activity first.
             models.Index(
                 fields=["chatbot", "status", "-last_activity_at"],
                 name="chat_session_inbox_idx",
             ),
+            # "Needs attention" queue — distinct from the general inbox
+            # because it's filtered/polled independently (e.g. dashboard
+            # badge, alerting) and status alone doesn't cover it.
+            models.Index(
+                fields=["chatbot", "requires_attention", "-last_activity_at"],
+                name="chat_session_attention_idx",
+            ),
+            # An agent's personal queue.
             models.Index(
                 fields=["assigned_to", "status", "-last_activity_at"],
                 name="chat_session_agent_idx",
@@ -118,16 +164,47 @@ class ChatSession(BaseMinModel):
                 fields=["chatbot", "visitor_id"],
                 name="chat_session_visitor_idx",
             ),
-            models.Index(
-                fields=["lead"],
-                name="chat_session_lead_idx",
-            ),
         ]
         constraints = [
             models.UniqueConstraint(
                 fields=["chatbot", "channel", "external_thread_id"],
                 condition=~Q(external_thread_id=""),
                 name="unique_external_thread_per_channel",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        requires_attention=False,
+                        attention_reason="",
+                        attention_requested_at__isnull=True,
+                    )
+                    | Q(
+                        requires_attention=True,
+                        attention_reason__gt="",
+                        attention_requested_at__isnull=False,
+                    )
+                ),
+                name="chat_session_attention_fields_consistent",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        status=ChatSessionStatus.OPEN,
+                        resolved_at__isnull=True,
+                        closed_at__isnull=True,
+                    )
+                    | Q(
+                        status=ChatSessionStatus.RESOLVED,
+                        resolved_at__isnull=False,
+                        closed_at__isnull=True,
+                    )
+                    | Q(
+                        status=ChatSessionStatus.CLOSED,
+                        resolved_at__isnull=True,
+                        closed_at__isnull=False,
+                    )
+                ),
+                name="chat_session_lifecycle_fields_consistent",
             ),
         ]
 
@@ -237,13 +314,26 @@ class ChatMessage(BaseMinModel):
 
     def clean(self):
         super().clean()
-        # content OR at least one attachment is required; enforced here
-        # rather than a DB CheckConstraint because it spans two tables.
         has_content = bool(self.content and self.content.strip())
-        has_attachments = self.pk and self.attachments.exists()
-        if not has_content and not has_attachments:
+
+        # Attachments are separate rows FK'd to this message, so they can
+        # only exist once this row has a pk. On update, we can genuinely
+        # check for at least one attachment. On creation, there's nothing
+        # to check yet — the caller (serializer/service) is responsible for
+        # ensuring content or attachments are supplied within the same
+        # transaction before commit.
+        if self.pk:
+            has_attachments = self.attachments.exists()
+            if not has_content and not has_attachments:
+                raise ValidationError(
+                    {"content": "Message must have content or at least one attachment."}
+                )
+        elif not has_content:
             raise ValidationError(
-                {"content": "Message must have content or at least one attachment."}
+                {"content": (
+                    "Message must have content, or have attachments created "
+                    "in the same transaction as this message."
+                )}
             )
 
         if self.sender_type == ChatMessageSenderType.AGENT:
@@ -274,11 +364,20 @@ class ChatMessage(BaseMinModel):
     def save(self, *args, **kwargs):
         is_new = self._state.adding
         super().save(*args, **kwargs)
-        if is_new:
-            ChatSession.objects.filter(
-                pk=self.chat_session_id,
-                last_activity_at__lt=self.created_at,
-            ).update(last_activity_at=self.created_at)
+        if not is_new:
+            return
+
+        # Bulk .update() instead of loading + saving the session: avoids a
+        # second SELECT, a full model save, and any save-signal cascade on
+        # what is the hottest write path in the schema.
+        updates = {"last_activity_at": self.created_at}
+        if self.sender_type == ChatMessageSenderType.VISITOR:
+            updates["last_visitor_activity_at"] = self.created_at
+
+        ChatSession.objects.filter(
+            pk=self.chat_session_id,
+            last_activity_at__lt=self.created_at,
+        ).update(**updates)
 
     def __str__(self):
         return f"{self.get_sender_type_display()} message in {self.chat_session_id}"
@@ -301,8 +400,6 @@ class ChatMessageAttachment(BaseMinModel):
     file_size = models.PositiveIntegerField(
         null=True, blank=True, help_text="Size in bytes."
     )
-    width = models.PositiveIntegerField(null=True, blank=True)
-    height = models.PositiveIntegerField(null=True, blank=True)
     duration_ms = models.PositiveIntegerField(
         null=True, blank=True, help_text="For audio/video attachments."
     )
@@ -310,39 +407,30 @@ class ChatMessageAttachment(BaseMinModel):
 
     class Meta:
         ordering = ["sort_order", "created_at"]
-        indexes = [
-            models.Index(
-                fields=["chat_message"],
-                name="chat_attachment_message_idx",
-            ),
-        ]
-
     def __str__(self):
         return self.file_name or self.file_url
 
 
 class ChatSessionTakeover(BaseMinModel):
     """
-    One period of an agent being responsible for a session, from take-over to
-    release. Release can be a handoff (REASSIGNED/MANUAL_RELEASE) or a
-    resolution (RESOLVED/CLOSED). A session can only be resolved while it has
-    an active (unreleased) takeover row — i.e. someone must own it to close it.
-    If a resolved session is reopened, that's recorded on this same row;
-    resolving it again requires a fresh takeover row.
+    Tracks human ownership of a session over time. Exactly one row per
+    session may be "active" (released_at is null) at a time — enforced by
+    unique_active_takeover_per_session below, which is what forces a
+    take-over-before-resolve workflow: resolving is just releasing this row.
     """
-
     chat_session = models.ForeignKey(
         ChatSession,
         on_delete=models.CASCADE,
         related_name="takeovers",
     )
+
     agent = models.ForeignKey(
         "chatbot.ChatbotUser",
         on_delete=models.CASCADE,
         related_name="chat_session_takeovers",
     )
 
-    # --- release (handoff or resolution) ---
+    # release
     released_at = models.DateTimeField(null=True, blank=True)
     release_reason = models.CharField(
         max_length=20,
@@ -350,17 +438,20 @@ class ChatSessionTakeover(BaseMinModel):
         blank=True,
         default="",
     )
-    resolution_note = models.TextField(blank=True, default="")
-
-    # --- reopen (only meaningful if release_reason was RESOLVED/CLOSED) ---
-    reopened_at = models.DateTimeField(null=True, blank=True)
-    reopened_by = models.ForeignKey(
+    released_to = models.ForeignKey(
         "chatbot.ChatbotUser",
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name="chat_session_reopenings",
+        related_name="incoming_chat_takeovers",
+        help_text="The agent this session was handed to, when release_reason=TRANSFERRED.",
     )
+    reopened_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Set if a session resolved/closed under this takeover was reopened.",
+    )
+    resolution_note = models.TextField(blank=True, default="")
 
     class Meta:
         ordering = ["-created_at"]
@@ -375,16 +466,13 @@ class ChatSessionTakeover(BaseMinModel):
             ),
         ]
         constraints = [
-            # Only one open takeover per session at a time. This is what
-            # forces "must take over before resolve" — resolving is just
-            # releasing this row, and you can't release a row that doesn't
-            # exist as the active one.
+            # Only one open takeover per session at a time.
             models.UniqueConstraint(
                 fields=["chat_session"],
                 condition=Q(released_at__isnull=True),
                 name="unique_active_takeover_per_session",
             ),
-            # released_at and release_reason must be set together
+            # released_at and release_reason must be set together.
             models.CheckConstraint(
                 condition=(
                     Q(released_at__isnull=True, release_reason="")
@@ -392,7 +480,7 @@ class ChatSessionTakeover(BaseMinModel):
                 ),
                 name="chat_takeover_release_fields_consistent",
             ),
-            # reopened_* only valid on rows released as RESOLVED/CLOSED
+            # reopened_* only valid on rows released as RESOLVED/CLOSED.
             models.CheckConstraint(
                 condition=(
                     Q(reopened_at__isnull=True)
@@ -404,6 +492,14 @@ class ChatSessionTakeover(BaseMinModel):
                     )
                 ),
                 name="chat_takeover_reopen_requires_resolution",
+            ),
+            # released_to is only meaningful for a TRANSFERRED release.
+            models.CheckConstraint(
+                condition=(
+                    Q(released_to__isnull=True)
+                    | Q(release_reason=ChatSessionTakeoverReleaseReason.TRANSFERRED)
+                ),
+                name="chat_takeover_released_to_requires_transfer",
             ),
         ]
 
@@ -425,11 +521,31 @@ class ChatSessionTakeover(BaseMinModel):
                 raise ValidationError(
                     {"agent": "The agent must belong to the session's chatbot."}
                 )
-        if self.released_at and self.created_at and self.released_at < self.created_at:
+        if self.released_to_id:
+            if self.release_reason != ChatSessionTakeoverReleaseReason.TRANSFERRED:
+                raise ValidationError(
+                    {"released_to": "Only set when release_reason is TRANSFERRED."}
+                )
+            if (
+                self.chat_session_id
+                and self.released_to.chatbot_id != self.chat_session.chatbot_id
+            ):
+                raise ValidationError(
+                    {"released_to": "The agent must belong to the session's chatbot."}
+                )
+        if (
+            self.released_at
+            and self.created_at
+            and self.released_at < self.created_at
+        ):
             raise ValidationError(
                 {"released_at": "Release time cannot be before takeover time."}
             )
-        if self.reopened_at and self.released_at and self.reopened_at < self.released_at:
+        if (
+            self.reopened_at
+            and self.released_at
+            and self.reopened_at < self.released_at
+        ):
             raise ValidationError(
                 {"reopened_at": "Reopen time cannot be before release time."}
             )
@@ -437,4 +553,122 @@ class ChatSessionTakeover(BaseMinModel):
     def __str__(self):
         if self.is_active:
             return f"{self.agent} — active on {self.chat_session_id}"
-        return f"{self.agent} — {self.get_release_reason_display()} on {self.chat_session_id}"
+        return (
+            f"{self.agent} — {self.get_release_reason_display()} "
+            f"on {self.chat_session_id}"
+        )
+
+
+class ChatSessionTransfer(BaseMinModel):
+    """A request to hand a session from one agent to another."""
+    chat_session = models.ForeignKey(
+        ChatSession,
+        on_delete=models.CASCADE,
+        related_name="transfers",
+    )
+
+    from_agent = models.ForeignKey(
+        "chatbot.ChatbotUser",
+        on_delete=models.CASCADE,
+        related_name="outgoing_chat_transfers",
+    )
+
+    to_agent = models.ForeignKey(
+        "chatbot.ChatbotUser",
+        on_delete=models.CASCADE,
+        related_name="incoming_chat_transfers",
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=ChatSessionTransferStatus.choices,
+        default=ChatSessionTransferStatus.PENDING,
+        db_index=True,
+    )
+
+    reason = models.TextField(blank=True, default="")
+
+    completed_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["chat_session", "-created_at"],
+                name="chat_transfer_session_idx",
+            ),
+            # An agent's incoming-transfer inbox.
+            models.Index(
+                fields=["to_agent", "status", "-created_at"],
+                name="chat_transfer_to_agent_idx",
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["chat_session"],
+                condition=Q(status=ChatSessionTransferStatus.PENDING),
+                name="unique_pending_transfer_per_session",
+            ),
+            models.CheckConstraint(
+                condition=~Q(from_agent=models.F("to_agent")),
+                name="chat_transfer_distinct_agents",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        status=ChatSessionTransferStatus.PENDING,
+                        completed_at__isnull=True,
+                    )
+                    | (
+                        ~Q(status=ChatSessionTransferStatus.PENDING)
+                        & Q(completed_at__isnull=False)
+                    )
+                ),
+                name="chat_transfer_completed_at_consistent",
+            ),
+        ]
+
+    @property
+    def is_expired(self):
+        return bool(
+            self.status == ChatSessionTransferStatus.PENDING
+            and self.expires_at
+            and self.expires_at < timezone.now()
+        )
+
+    def clean(self):
+        super().clean()
+        if (
+            self.from_agent_id
+            and self.to_agent_id
+            and self.from_agent_id == self.to_agent_id
+        ):
+            raise ValidationError(
+                {"to_agent": "Cannot transfer a session to the same agent."}
+            )
+        if self.chat_session_id:
+            if (
+                self.from_agent_id
+                and self.from_agent.chatbot_id != self.chat_session.chatbot_id
+            ):
+                raise ValidationError(
+                    {"from_agent": "The agent must belong to the session's chatbot."}
+                )
+            if (
+                self.to_agent_id
+                and self.to_agent.chatbot_id != self.chat_session.chatbot_id
+            ):
+                raise ValidationError(
+                    {"to_agent": "The agent must belong to the session's chatbot."}
+                )
+        if (
+            self.status != ChatSessionTransferStatus.PENDING
+            and not self.completed_at
+        ):
+            raise ValidationError(
+                {"completed_at": "Required once a transfer is no longer pending."}
+            )
+
+    def __str__(self):
+        return f"{self.from_agent} → {self.to_agent} ({self.get_status_display()})"

@@ -21,7 +21,7 @@ class AIBackendTests(SimpleTestCase):
     @override_settings(CHATBOT_AI_BACKEND="placeholder")
     def test_placeholder_is_enabled_when_session_ai_flag_is_off(self):
         session = SimpleNamespace(
-            status=ChatSessionStatus.ACTIVE,
+            status=ChatSessionStatus.OPEN,
             assigned_to_id=None,
             ai_enabled=False,
         )
@@ -32,7 +32,7 @@ class AIBackendTests(SimpleTestCase):
     @override_settings(CHATBOT_AI_BACKEND="placeholder")
     def test_placeholder_stays_off_during_human_takeover(self):
         session = SimpleNamespace(
-            status=ChatSessionStatus.ACTIVE,
+            status=ChatSessionStatus.OPEN,
             assigned_to_id=uuid4(),
             ai_enabled=False,
         )

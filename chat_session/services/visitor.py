@@ -25,8 +25,7 @@ PUBLIC_CHATBOT_EXCLUDED_STATUSES = (
     ChatbotStatusTypes.DISABLED_BY_ADMIN,
 )
 RESUMABLE_SESSION_STATUSES = (
-    ChatSessionStatus.ACTIVE,
-    ChatSessionStatus.NEED_ATTENTION,
+    ChatSessionStatus.OPEN,
 )
 
 

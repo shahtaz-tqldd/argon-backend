@@ -7,6 +7,7 @@ from chat_session.models import (
     ChatMessageAttachment,
     ChatSession,
     ChatSessionTakeover,
+    ChatSessionTransfer,
 )
 
 
@@ -94,6 +95,7 @@ class ChatSessionAdmin(admin.ModelAdmin):
         "chatbot",
         "channel",
         "status",
+        "requires_attention",
         "assigned_to",
         "ai_enabled",
         "last_activity_at",
@@ -101,6 +103,8 @@ class ChatSessionAdmin(admin.ModelAdmin):
     list_filter = (
         "status",
         "channel",
+        "requires_attention",
+        "attention_reason",
         "ai_enabled",
         "chatbot",
         ("assigned_to", admin.EmptyFieldListFilter),
@@ -143,6 +147,9 @@ class ChatSessionAdmin(admin.ModelAdmin):
                 "fields": (
                     "assigned_to",
                     "ai_enabled",
+                    "requires_attention",
+                    "attention_reason",
+                    "attention_requested_at",
                 ),
             },
         ),
@@ -151,7 +158,9 @@ class ChatSessionAdmin(admin.ModelAdmin):
             {
                 "fields": (
                     "last_activity_at",
-                    "ended_at",
+                    "last_visitor_activity_at",
+                    "resolved_at",
+                    "closed_at",
                 ),
             },
         ),
@@ -342,7 +351,7 @@ class ChatSessionTakeoverAdmin(admin.ModelAdmin):
         "resolution_note",
     )
     readonly_fields = ("created_at", "updated_at")
-    autocomplete_fields = ("chat_session", "agent", "reopened_by")
+    autocomplete_fields = ("chat_session", "agent", "released_to")
 
     fieldsets = (
         (
@@ -357,6 +366,7 @@ class ChatSessionTakeoverAdmin(admin.ModelAdmin):
                 "fields": (
                     "released_at",
                     "release_reason",
+                    "released_to",
                     "resolution_note",
                 ),
             },
@@ -367,7 +377,6 @@ class ChatSessionTakeoverAdmin(admin.ModelAdmin):
                 "classes": ("collapse",),
                 "fields": (
                     "reopened_at",
-                    "reopened_by",
                 ),
             },
         ),
@@ -387,4 +396,25 @@ class ChatSessionTakeoverAdmin(admin.ModelAdmin):
                 '<span style="color: #28a745; font-weight: bold;">Active</span>'
             )
         return format_html('<span style="color: #6c757d;">Released</span>')
-    
+
+
+@admin.register(ChatSessionTransfer)
+class ChatSessionTransferAdmin(admin.ModelAdmin):
+    list_display = (
+        "chat_session",
+        "from_agent",
+        "to_agent",
+        "status",
+        "created_at",
+        "completed_at",
+        "expires_at",
+    )
+    list_filter = ("status", "created_at", "completed_at")
+    search_fields = (
+        "chat_session__id",
+        "from_agent__user__email",
+        "to_agent__user__email",
+        "reason",
+    )
+    autocomplete_fields = ("chat_session", "from_agent", "to_agent")
+    readonly_fields = ("created_at", "updated_at")

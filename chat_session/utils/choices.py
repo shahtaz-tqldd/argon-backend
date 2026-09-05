@@ -2,7 +2,7 @@ from django.db import models
 
 
 class ChatSessionChannel(models.TextChoices):
-    WEB_WIDGET = "web_widget", "Web widget"
+    WEB_WIDGET = "web_widget", "Web Widget"
     MESSENGER = "messenger", "Messenger"
     INSTAGRAM = "instagram", "Instagram"
     WHATSAPP = "whatsapp", "WhatsApp"
@@ -10,10 +10,25 @@ class ChatSessionChannel(models.TextChoices):
 
 
 class ChatSessionStatus(models.TextChoices):
-    ACTIVE = "active", "Active"
-    NEED_ATTENTION = "need_attention", "Need Attention"
+    """
+    Lifecycle of the conversation/thread.
+    """
+    OPEN = "open", "Open"
     RESOLVED = "resolved", "Resolved"
     CLOSED = "closed", "Closed"
+
+
+class ChatSessionAttentionReason(models.TextChoices):
+    """
+    Why human attention was requested.
+
+    Blank value on ChatSession means no attention is currently required.
+    """
+    HUMAN_REQUESTED = "human_requested", "Human Requested"
+    AI_UNCERTAIN = "ai_uncertain", "AI Unable to Answer"
+    TOOL_FAILED = "tool_failed", "Tool Failed"
+    ESCALATED = "escalated", "Escalated"
+    OTHER = "other", "Other"
 
 
 class ChatMessageSenderType(models.TextChoices):
@@ -30,11 +45,6 @@ class ChatMessageStatus(models.TextChoices):
     FAILED = "failed", "Failed"
 
 
-class ChatSessionResolutionType(models.TextChoices):
-    RESOLVED = "resolved", "Resolved"
-    CLOSED = "closed", "Closed"
-
-
 class ChatMessageAttachmentType(models.TextChoices):
     IMAGE = "image", "Image"
     VIDEO = "video", "Video"
@@ -44,7 +54,18 @@ class ChatMessageAttachmentType(models.TextChoices):
 
 
 class ChatSessionTakeoverReleaseReason(models.TextChoices):
-    REASSIGNED = "reassigned", "Reassigned"
-    MANUAL_RELEASE = "manual_release", "Manual Release"
+    """
+    Why a human agent stopped owning the conversation.
+    """
+    TRANSFERRED = "transferred", "Transferred"
     RESOLVED = "resolved", "Resolved"
     CLOSED = "closed", "Closed"
+    RELEASED = "released", "Released"
+
+
+class ChatSessionTransferStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    ACCEPTED = "accepted", "Accepted"
+    DECLINED = "declined", "Declined"
+    CANCELLED = "cancelled", "Cancelled"
+    EXPIRED = "expired", "Expired"

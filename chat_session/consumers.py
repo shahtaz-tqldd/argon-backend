@@ -265,9 +265,16 @@ class VisitorChatSessionConsumer(AsyncJsonWebsocketConsumer):
                 }
         elif payload.get("type") in {
             "session.taken_over",
-            "session.reassigned",
+            "session.transferred",
         }:
             payload = {**payload, "data": {"ai_enabled": False}}
+        elif payload.get("type") in {
+            "session.transfer_requested",
+            "session.transfer_declined",
+            "session.transfer_cancelled",
+        }:
+            # Transfer workflow details are internal to chatbot agents.
+            return
         elif payload.get("type") in {
             "session.released",
             "session.reopened",
@@ -319,10 +326,7 @@ class VisitorChatSessionConsumer(AsyncJsonWebsocketConsumer):
                 pk=session_id,
                 chatbot=chatbot,
                 visitor_id=payload["visitor_id"],
-                status__in=(
-                    ChatSessionStatus.ACTIVE,
-                    ChatSessionStatus.NEED_ATTENTION,
-                ),
+                status=ChatSessionStatus.OPEN,
             )
         except ChatSession.DoesNotExist:
             return None, 4404

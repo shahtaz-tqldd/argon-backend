@@ -5,10 +5,12 @@ from chat_session.models import (
     ChatMessageAttachment,
     ChatSession,
     ChatSessionTakeover,
+    ChatSessionTransfer,
 )
 from chat_session.utils.choices import (
     ChatSessionStatus,
     ChatSessionTakeoverReleaseReason,
+    ChatSessionTransferStatus,
 )
 
 
@@ -30,6 +32,18 @@ class ChatSessionListQuerySerializer(ChatSessionQuerySerializer):
         default="all",
         required=False,
     )
+    requires_attention = serializers.BooleanField(required=False)
+
+
+class ChatSessionTransferObjectQuerySerializer(ChatSessionQuerySerializer):
+    transfer_id = serializers.UUIDField()
+
+
+class ChatSessionTransferListQuerySerializer(ChatSessionQuerySerializer):
+    status = serializers.ChoiceField(
+        choices=ChatSessionTransferStatus.choices,
+        required=False,
+    )
 
 
 class ChatbotAgentSerializer(serializers.Serializer):
@@ -49,8 +63,6 @@ class ChatMessageAttachmentSerializer(serializers.ModelSerializer):
             "file_name",
             "mime_type",
             "file_size",
-            "width",
-            "height",
             "duration_ms",
             "sort_order",
             "created_at",
@@ -99,7 +111,13 @@ class ChatSessionSerializer(serializers.ModelSerializer):
             "visitor_id",
             "external_thread_id",
             "last_activity_at",
-            "ended_at",
+            "last_visitor_activity_at",
+            "requires_attention",
+            "attention_reason",
+            "attention_requested_at",
+            "resolved_at",
+            "closed_at",
+            "is_recently_active",
             "ai_enabled",
             "user_metadata",
             "metadata",
@@ -114,6 +132,7 @@ class ChatSessionListSerializer(serializers.ModelSerializer):
     user_data = serializers.SerializerMethodField()
     unread_message_count = serializers.IntegerField(read_only=True)
     last_message = serializers.SerializerMethodField()
+    assigned_to = ChatbotAgentSerializer(read_only=True)
 
     class Meta:
         model = ChatSession
@@ -124,8 +143,10 @@ class ChatSessionListSerializer(serializers.ModelSerializer):
             "unread_message_count",
             "last_message",
             "ai_enabled",
+            "is_recently_active",
             "status",
-            "ended_at",
+            "assigned_to",
+            "requires_attention",
             "last_activity_at",
         )
         read_only_fields = fields
@@ -138,22 +159,18 @@ class ChatSessionListSerializer(serializers.ModelSerializer):
         lead = obj.lead
         lead_fields = lead.collected_fields if lead else {}
         user_metadata = obj.user_metadata or {}
-        metadata = obj.metadata or {}
-
-        return {
-            "name": self._first_value(
-                lead_fields.get("name"),
-                user_metadata.get("name"),
-                metadata.get("name"),
-            ),
-            "detected_country": self._first_value(
-                lead.detected_country_code if lead else "",
-                user_metadata.get("detected_country"),
-                user_metadata.get("detected_country_code"),
-                metadata.get("detected_country"),
-                metadata.get("detected_country_code"),
-            )
-        }
+        user_data = {**user_metadata, **lead_fields}
+        user_data["name"] = self._first_value(
+            lead_fields.get("name"),
+            user_metadata.get("name"),
+        )
+        user_data["detected_country"] = self._first_value(
+            lead.detected_country_code if lead else "",
+            user_metadata.get("detected_country"),
+            user_metadata.get("detected_country_code"),
+        )
+        user_data.pop("detected_country_code", None)
+        return user_data
 
     def get_last_message(self, obj):
         if obj.last_message_sender is None:
@@ -167,7 +184,7 @@ class ChatSessionListSerializer(serializers.ModelSerializer):
 class ChatSessionTakeoverSerializer(serializers.ModelSerializer):
     chat_session_id = serializers.UUIDField(read_only=True)
     agent = ChatbotAgentSerializer(read_only=True)
-    reopened_by = ChatbotAgentSerializer(read_only=True)
+    released_to = ChatbotAgentSerializer(read_only=True)
 
     class Meta:
         model = ChatSessionTakeover
@@ -177,9 +194,9 @@ class ChatSessionTakeoverSerializer(serializers.ModelSerializer):
             "agent",
             "released_at",
             "release_reason",
+            "released_to",
             "resolution_note",
             "reopened_at",
-            "reopened_by",
             "created_at",
             "updated_at",
         )
@@ -259,8 +276,37 @@ class VisitorMessageSerializer(ChatMessageSerializer):
         }
 
 
-class ReassignSessionSerializer(serializers.Serializer):
-    agent_id = serializers.UUIDField()
+class ChatSessionTransferSerializer(serializers.ModelSerializer):
+    chat_session_id = serializers.UUIDField(read_only=True)
+    from_agent = ChatbotAgentSerializer(read_only=True)
+    to_agent = ChatbotAgentSerializer(read_only=True)
+
+    class Meta:
+        model = ChatSessionTransfer
+        fields = (
+            "id",
+            "chat_session_id",
+            "from_agent",
+            "to_agent",
+            "status",
+            "reason",
+            "completed_at",
+            "expires_at",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+
+class TransferSessionSerializer(serializers.Serializer):
+    to_agent_id = serializers.UUIDField()
+    reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        max_length=5000,
+    )
+    expires_at = serializers.DateTimeField(required=False, allow_null=True)
 
 
 class ResolveSessionSerializer(serializers.Serializer):
