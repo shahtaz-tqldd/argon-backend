@@ -18,7 +18,8 @@ from chatbot.models import (
 )
 from chatbot.services import create_chatbot
 from chatbot.utils.choices import ChatbotPermissionTypes, ChatbotRoleTypes
-from chat_session.models import ChatMessage
+from chat_session.models import ChatMessage, ChatSession
+from lead_capture.models import Lead, LeadCaptureConfig
 from subscription.choices import (
     BillingInterval,
     PaymentProvider,
@@ -87,6 +88,58 @@ class ChatbotClientAPITests(APITestCase):
         self.assertNotIn("id", data)
         self.assertNotIn("public_key", data["widget_settings"])
         self.assertNotIn("allowed_urls", data)
+        self.assertIsNone(data["lead_config"])
+
+    def test_public_chatbot_returns_enabled_lead_config(self):
+        lead_config = LeadCaptureConfig.objects.create(
+            chatbot=self.chatbot,
+            is_enabled=True,
+            intro_message="Tell us about yourself.",
+            require_consent=True,
+            consent_message="May we save your details?",
+        )
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get(
+            reverse(
+                "public-chatbot",
+                kwargs={
+                    "public_key": self.chatbot.widget_settings.public_key,
+                },
+            )
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["data"]["lead_config"],
+            {
+                "is_enabled": True,
+                "collectable_fields": lead_config.collectable_fields,
+                "auto_collect": True,
+                "intro_message": "Tell us about yourself.",
+                "require_consent": True,
+                "consent_message": "May we save your details?",
+            },
+        )
+
+    def test_public_chatbot_hides_disabled_lead_config(self):
+        LeadCaptureConfig.objects.create(
+            chatbot=self.chatbot,
+            is_enabled=False,
+        )
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get(
+            reverse(
+                "public-chatbot",
+                kwargs={
+                    "public_key": self.chatbot.widget_settings.public_key,
+                },
+            )
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data["data"]["lead_config"])
 
     def test_public_chatbot_returns_not_found_for_unknown_key(self):
         self.client.force_authenticate(user=None)
@@ -182,6 +235,151 @@ class ChatbotClientAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertIn("conversation_token", response.data["errors"])
+
+    def test_visitor_conversation_creates_lead_from_lead_data(self):
+        LeadCaptureConfig.objects.create(
+            chatbot=self.chatbot,
+            is_enabled=True,
+        )
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(
+            reverse(
+                "visitor-conversation",
+                kwargs={
+                    "public_key": self.chatbot.widget_settings.public_key,
+                },
+            ),
+            {
+                "lead_data": {
+                    "name": "Ada Lovelace",
+                    "email": "ADA@EXAMPLE.COM",
+                },
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        session = ChatSession.objects.get(
+            pk=response.data["data"]["session"]["id"]
+        )
+        self.assertIsNotNone(session.lead_id)
+        self.assertEqual(session.lead.source, "web_widget")
+        self.assertEqual(
+            session.lead.collected_fields,
+            {"name": "Ada Lovelace", "email": "ada@example.com"},
+        )
+
+    def test_visitor_conversation_accepts_existing_lead(self):
+        lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "Existing visitor"},
+        )
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(
+            reverse(
+                "visitor-conversation",
+                kwargs={
+                    "public_key": self.chatbot.widget_settings.public_key,
+                },
+            ),
+            {"lead_id": str(lead.id)},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        session = ChatSession.objects.get(
+            pk=response.data["data"]["session"]["id"]
+        )
+        self.assertEqual(session.lead_id, lead.id)
+
+    def test_visitor_conversation_rejects_invalid_lead_data(self):
+        LeadCaptureConfig.objects.create(
+            chatbot=self.chatbot,
+            is_enabled=True,
+        )
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(
+            reverse(
+                "visitor-conversation",
+                kwargs={
+                    "public_key": self.chatbot.widget_settings.public_key,
+                },
+            ),
+            {"lead_data": {"name": "Missing required email"}},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("lead_data", response.data["errors"])
+        self.assertFalse(Lead.objects.filter(chatbot=self.chatbot).exists())
+
+    def test_public_visitor_details_and_sessions_include_linked_lead(self):
+        LeadCaptureConfig.objects.create(
+            chatbot=self.chatbot,
+            is_enabled=True,
+        )
+        self.client.force_authenticate(user=None)
+        conversation_url = reverse(
+            "visitor-conversation",
+            kwargs={"public_key": self.chatbot.widget_settings.public_key},
+        )
+        first_response = self.client.post(
+            conversation_url,
+            {
+                "user_metadata": {"locale": "en-US"},
+                "lead_data": {
+                    "name": "Ada Lovelace",
+                    "email": "ada@example.com",
+                },
+            },
+            format="json",
+        )
+        first_session = ChatSession.objects.get(
+            pk=first_response.data["data"]["session"]["id"]
+        )
+        second_response = self.client.post(
+            conversation_url,
+            {"lead_id": str(first_session.lead_id)},
+            format="json",
+        )
+        visitor_id = first_session.visitor_id
+        url_kwargs = {
+            "public_key": self.chatbot.widget_settings.public_key,
+            "visitor_id": visitor_id,
+        }
+
+        detail_response = self.client.get(
+            reverse("public-visitor-detail", kwargs=url_kwargs)
+        )
+        sessions_response = self.client.get(
+            reverse("public-visitor-sessions", kwargs=url_kwargs)
+        )
+
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            detail_response.data["data"],
+            {
+                "visitor_id": visitor_id,
+                "lead_id": str(first_session.lead_id),
+                "lead_data": {
+                    "name": "Ada Lovelace",
+                    "email": "ada@example.com",
+                },
+                "user_metadata": {"locale": "en-US"},
+            },
+        )
+        self.assertEqual(sessions_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(sessions_response.data["data"]), 2)
+        self.assertEqual(
+            {item["id"] for item in sessions_response.data["data"]},
+            {
+                first_response.data["data"]["session"]["id"],
+                second_response.data["data"]["session"]["id"],
+            },
+        )
 
     def test_visitor_conversation_enforces_configured_origin(self):
         ChatbotAllowedOrigin.objects.create(

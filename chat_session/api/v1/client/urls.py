@@ -5,16 +5,13 @@ from chat_session.api.v1.client import views
 
 session_patterns = [
     path("list/", views.ChatSessionListView.as_view(), name="chat-session-list"),
-    path(
-        "details/",
-        views.ChatSessionDetailView.as_view(),
-        name="chat-session-detail",
-    ),
+    path("details/", views.ChatSessionDetailView.as_view(), name="chat-session-detail"),
     path(
         "mark-read/",
         views.ChatSessionMarkReadView.as_view(),
         name="chat-session-mark-read",
     ),
+    path("delete/", views.ChatSessionDeleteView.as_view(), name="chat-session-delete"),
 ]
 
 message_patterns = [

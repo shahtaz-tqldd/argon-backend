@@ -226,6 +226,15 @@ class VisitorConversationCreateSerializer(serializers.Serializer):
     )
     user_metadata = serializers.JSONField(required=False)
     metadata = serializers.JSONField(required=False)
+    lead_id = serializers.UUIDField(required=False)
+    lead_data = serializers.JSONField(required=False)
+
+    def validate(self, attrs):
+        if "lead_id" in attrs and "lead_data" in attrs:
+            raise serializers.ValidationError(
+                "Provide either lead_id or lead_data, not both."
+            )
+        return attrs
 
     def validate_user_metadata(self, value):
         if not isinstance(value, dict):
@@ -236,6 +245,35 @@ class VisitorConversationCreateSerializer(serializers.Serializer):
         if not isinstance(value, dict):
             raise serializers.ValidationError("Must be a JSON object.")
         return value
+
+    def validate_lead_data(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Must be a JSON object.")
+        return value
+
+
+class PublicVisitorSerializer(serializers.Serializer):
+    visitor_id = serializers.CharField(read_only=True)
+    lead_id = serializers.UUIDField(read_only=True, allow_null=True)
+    lead_data = serializers.JSONField(read_only=True)
+    user_metadata = serializers.JSONField(read_only=True)
+
+
+class PublicVisitorSessionSerializer(serializers.ModelSerializer):
+    lead_id = serializers.UUIDField(read_only=True, allow_null=True)
+
+    class Meta:
+        model = ChatSession
+        fields = (
+            "id",
+            "visitor_id",
+            "lead_id",
+            "status",
+            "ai_enabled",
+            "last_activity_at",
+            "created_at",
+        )
+        read_only_fields = fields
 
 
 class VisitorMessageCreateSerializer(serializers.Serializer):

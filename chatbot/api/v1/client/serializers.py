@@ -3,7 +3,10 @@ from uuid import UUID, uuid4
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
-from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.exceptions import (
+    ObjectDoesNotExist,
+    ValidationError as DjangoValidationError,
+)
 from django.db import transaction
 from rest_framework import serializers
 
@@ -32,6 +35,7 @@ from chatbot.utils.validation import (
     normalize_widget_origin,
     validate_unique_chatbot_name,
 )
+from lead_capture.models import LeadCaptureConfig
 from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
 from workspace.models import Workspace, WorkspaceUser
 
@@ -470,21 +474,47 @@ class PublicChatbotWidgetSettingsSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class PublicLeadCaptureConfigSerializer(serializers.ModelSerializer):
+    """Serialize lead capture settings required by the public widget."""
+
+    class Meta:
+        model = LeadCaptureConfig
+        fields = (
+            "is_enabled",
+            "collectable_fields",
+            "auto_collect",
+            "intro_message",
+            "require_consent",
+            "consent_message",
+        )
+        read_only_fields = fields
+
+
 class PublicChatbotSerializer(serializers.ModelSerializer):
     """Serialize the public configuration consumed by an embedded widget."""
 
     widget_settings = PublicChatbotWidgetSettingsSerializer(read_only=True)
+    lead_config = serializers.SerializerMethodField()
+
+    def get_lead_config(self, obj):
+        try:
+            config = obj.lead_capture_config
+        except ObjectDoesNotExist:
+            return None
+
+        if not config.is_enabled:
+            return None
+        return PublicLeadCaptureConfigSerializer(config).data
 
     class Meta:
         model = Chatbot
         fields = (
             "chatbot_name",
-            "business_name",
-            "description",
             "logo",
-            "welcome_message",
             "language",
+            "welcome_message",
             "widget_settings",
+            "lead_config",
         )
         read_only_fields = fields
 

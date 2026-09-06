@@ -232,6 +232,17 @@ class ChatSessionMarkReadView(ChatSessionObjectMixin, GenericAPIView):
             message="Chat messages marked as read successfully.",
         )
 
+class ChatSessionDeleteView(ChatSessionObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT
+
+    def delete(self, request, *args, **kwargs):
+        chat_session = self.get_chat_session()
+        chat_session.delete()
+        return APIResponse.success(
+            message="Chat session deleted successfully.",
+        )
+
 
 class ChatMessageListView(
     ChatSessionObjectMixin,

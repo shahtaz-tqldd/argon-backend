@@ -2,6 +2,7 @@ from uuid import uuid4
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
+from django.db.models import Q
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 
@@ -18,6 +19,7 @@ from chat_session.utils.choices import (
     ChatSessionChannel,
     ChatSessionStatus,
 )
+from lead_capture.models import Lead, LeadCaptureConfig
 
 
 PUBLIC_CHATBOT_EXCLUDED_STATUSES = (
@@ -31,7 +33,11 @@ RESUMABLE_SESSION_STATUSES = (
 
 def get_public_chatbot(public_key):
     return get_object_or_404(
-        Chatbot.objects.select_related("workspace", "widget_settings")
+        Chatbot.objects.select_related(
+            "workspace",
+            "widget_settings",
+            "lead_capture_config",
+        )
         .filter(
             is_deleted=False,
             workspace__is_active=True,
@@ -59,21 +65,105 @@ def require_allowed_widget_origin(chatbot, origin):
         raise PermissionDenied("The widget origin is not allowed.")
 
 
+def _get_visitor_sessions(chatbot, visitor_id):
+    direct_sessions = ChatSession.objects.filter(
+        chatbot=chatbot,
+        visitor_id=visitor_id,
+        channel=ChatSessionChannel.WEB_WIDGET,
+    )
+    anchor = direct_sessions.select_related("lead").first()
+    if anchor is None:
+        raise Http404("Visitor not found.")
+
+    lead_session = (
+        direct_sessions.filter(lead__isnull=False)
+        .select_related("lead")
+        .first()
+    )
+    lead = lead_session.lead if lead_session is not None else None
+    filters = Q(visitor_id=visitor_id)
+    if lead is not None:
+        filters |= Q(lead=lead)
+    sessions = ChatSession.objects.filter(
+        filters,
+        chatbot=chatbot,
+        channel=ChatSessionChannel.WEB_WIDGET,
+    )
+    return anchor, lead, sessions
+
+
+def get_public_visitor_details(chatbot, visitor_id):
+    anchor, lead, _sessions = _get_visitor_sessions(chatbot, visitor_id)
+    return {
+        "visitor_id": visitor_id,
+        "lead_id": lead.id if lead is not None else None,
+        "lead_data": lead.collected_fields if lead is not None else {},
+        "user_metadata": anchor.user_metadata or {},
+    }
+
+
+def get_public_visitor_sessions(chatbot, visitor_id):
+    _anchor, _lead, sessions = _get_visitor_sessions(chatbot, visitor_id)
+    return sessions.select_related("lead")
+
+
+def _resolve_conversation_lead(chatbot, *, lead_id=None, lead_data=None):
+    if lead_id is not None:
+        try:
+            return Lead.objects.get(pk=lead_id, chatbot=chatbot)
+        except Lead.DoesNotExist as exc:
+            raise ValidationError(
+                {"lead_id": "The lead does not belong to this chatbot."}
+            ) from exc
+
+    if lead_data is None:
+        return None
+    try:
+        config = chatbot.lead_capture_config
+    except LeadCaptureConfig.DoesNotExist as exc:
+        raise ValidationError(
+            {"lead_data": "Lead collection is not enabled."}
+        ) from exc
+    if not config.is_enabled:
+        raise ValidationError({"lead_data": "Lead collection is not enabled."})
+
+    lead = Lead(
+        chatbot=chatbot,
+        collected_fields=lead_data,
+        source="web_widget",
+    )
+    try:
+        lead.full_clean()
+    except ValidationError as exc:
+        messages = getattr(exc, "message_dict", {}).get(
+            "collected_fields",
+            exc.messages,
+        )
+        raise ValidationError({"lead_data": messages}) from exc
+    lead.save()
+    return lead
+
+
+@transaction.atomic
 def create_or_resume_conversation(
     chatbot,
     *,
     conversation_token="",
     user_metadata=None,
     metadata=None,
+    lead_id=None,
+    lead_data=None,
 ):
     session = None
     resumed = False
+    visitor_id = uuid4().hex
     if conversation_token:
         payload = decode_conversation_token(conversation_token)
         if payload["chatbot_id"] != str(chatbot.id):
             raise InvalidConversationToken(
                 "The conversation token does not belong to this chatbot."
             )
+        visitor_id = payload["visitor_id"]
         session = ChatSession.objects.filter(
             pk=payload["session_id"],
             chatbot=chatbot,
@@ -83,16 +173,26 @@ def create_or_resume_conversation(
         ).first()
         resumed = session is not None
 
+    lead = _resolve_conversation_lead(
+        chatbot,
+        lead_id=lead_id,
+        lead_data=lead_data,
+    )
     if session is None:
         session = ChatSession.objects.create(
             chatbot=chatbot,
             channel=ChatSessionChannel.WEB_WIDGET,
-            visitor_id=uuid4().hex,
+            visitor_id=visitor_id,
+            lead=lead,
             ai_enabled=chatbot.ai_enabled,
             user_metadata=user_metadata or {},
             metadata=metadata or {},
         )
-    elif user_metadata is not None or metadata is not None:
+    elif (
+        user_metadata is not None
+        or metadata is not None
+        or lead is not None
+    ):
         update_fields = ["updated_at"]
         if user_metadata is not None:
             session.user_metadata = user_metadata
@@ -100,6 +200,10 @@ def create_or_resume_conversation(
         if metadata is not None:
             session.metadata = metadata
             update_fields.append("metadata")
+        if lead is not None:
+            session.lead = lead
+            update_fields.append("lead")
+        session.full_clean()
         session.save(update_fields=update_fields)
     return session, resumed
 
