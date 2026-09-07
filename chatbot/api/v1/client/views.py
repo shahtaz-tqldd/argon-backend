@@ -39,6 +39,8 @@ from chatbot.api.v1.client.serializers import (
 )
 from chatbot.models import Chatbot, ChatbotInvitation, ChatbotUser
 from chat_session.api.v1.client.serializers import (
+    PublicVisitorSerializer,
+    PublicVisitorSessionSerializer,
     VisitorConversationCreateSerializer,
     VisitorMessageCreateSerializer,
     VisitorMessageSerializer,
@@ -48,6 +50,8 @@ from chat_session.services.events import publish_session_event
 from chat_session.services.visitor import (
     create_or_resume_conversation,
     get_public_chatbot,
+    get_public_visitor_details,
+    get_public_visitor_sessions,
     get_visitor_chat_session,
     require_allowed_widget_origin,
     send_visitor_message,
@@ -309,6 +313,12 @@ class VisitorConversationView(GenericAPIView):
                 message=str(exc),
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        except DjangoValidationError as exc:
+            errors = getattr(exc, "message_dict", {"lead_data": exc.messages})
+            return validation_error_response(
+                errors,
+                "Conversation could not be started.",
+            )
 
         messages = list(
             ChatMessage.objects.filter(chat_session=chat_session)
@@ -354,6 +364,42 @@ class VisitorConversationView(GenericAPIView):
                 else "Conversation created successfully."
             ),
             status=(status.HTTP_200_OK if resumed else status.HTTP_201_CREATED),
+        )
+
+
+class PublicVisitorDetailView(GenericAPIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    serializer_class = PublicVisitorSerializer
+
+    def get(self, request, public_key, visitor_id, *args, **kwargs):
+        chatbot = get_public_chatbot(public_key)
+        require_allowed_widget_origin(
+            chatbot,
+            request.headers.get("Origin", ""),
+        )
+        visitor = get_public_visitor_details(chatbot, visitor_id)
+        return APIResponse.success(
+            data=self.get_serializer(visitor).data,
+            message="Visitor details fetched successfully.",
+        )
+
+
+class PublicVisitorSessionListView(GenericAPIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    serializer_class = PublicVisitorSessionSerializer
+
+    def get(self, request, public_key, visitor_id, *args, **kwargs):
+        chatbot = get_public_chatbot(public_key)
+        require_allowed_widget_origin(
+            chatbot,
+            request.headers.get("Origin", ""),
+        )
+        sessions = get_public_visitor_sessions(chatbot, visitor_id)
+        return APIResponse.success(
+            data=self.get_serializer(sessions, many=True).data,
+            message="Visitor sessions fetched successfully.",
         )
 
 

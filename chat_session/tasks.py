@@ -17,15 +17,10 @@ SUPPORTED_AI_BACKENDS = {"placeholder", "gemini"}
 
 
 def is_ai_reply_enabled(session, chatbot=None):
-    if session.status not in (
-        ChatSessionStatus.ACTIVE,
-        ChatSessionStatus.NEED_ATTENTION,
-    ):
+    if session.status != ChatSessionStatus.OPEN:
         return False
     if session.assigned_to_id:
         return False
-    if settings.CHATBOT_AI_BACKEND == "placeholder":
-        return True
     chatbot = chatbot or session.chatbot
     return bool(session.ai_enabled and chatbot.ai_enabled)
 
