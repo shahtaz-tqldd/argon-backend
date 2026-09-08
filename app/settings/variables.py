@@ -23,14 +23,14 @@ SECURE_PROXY_SSL_HEADER = (
 )
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-LOG_LEVEL = env("LOG_LEVEL", "INFO")
+LOG_LEVEL = env("LOG_LEVEL", "INFO").strip().upper()
 
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
         "console": {
-            "format": "%(levelname)s %(asctime)s %(name)s %(message)s",
+            "format": "%(levelname)s %(asctime)s %(name)s %(filename)s:%(lineno)d %(message)s",
         },
     },
     "handlers": {

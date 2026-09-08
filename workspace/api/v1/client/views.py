@@ -9,12 +9,9 @@ from django.utils import timezone
 from rest_framework import serializers as drf_serializers
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated
 
-from accounts.api.v1.client.serializers import (
-    UserSerializer,
-    build_auth_token_payload,
-)
+from accounts.api.v1.client.serializers import UserSerializer
 from app.services.r2 import schedule_delete_image
 from app.utils.pagination import CustomPagination
 from app.utils.permission import IsWorkspaceUser
@@ -193,11 +190,13 @@ class WorkspaceCreateView(GenericAPIView):
         )
 
 
-class WorkspaceDetailView(GenericAPIView):
+class WorkspaceDetailView(WorkspaceObjectMixin, GenericAPIView):
     permission_classes = [IsWorkspaceUser]
     serializer_class = WorkspaceDetailSerializer
 
     def get_workspace(self):
+        if "workspace" in self.request.query_params:
+            return super().get_workspace()
         workspace = (
             Workspace.objects.select_related("owner")
             .filter(
@@ -476,8 +475,7 @@ class InviteWorkspaceMemberView(WorkspaceObjectMixin, GenericAPIView):
 
 
 class AcceptWorkspaceInvitationView(GenericAPIView):
-    permission_classes = [AllowAny]
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
     serializer_class = AcceptWorkspaceInvitationSerializer
 
     def post(self, request, *args, **kwargs):
@@ -488,7 +486,7 @@ class AcceptWorkspaceInvitationView(GenericAPIView):
                 "Invitation acceptance failed.",
             )
         try:
-            user, membership = serializer.save()
+            membership = serializer.save()
         except drf_serializers.ValidationError as exc:
             return validation_error_response(
                 exc.detail,
@@ -497,13 +495,12 @@ class AcceptWorkspaceInvitationView(GenericAPIView):
 
         return APIResponse.success(
             data={
-                "user": UserSerializer(user).data,
+                "user": UserSerializer(request.user).data,
                 "workspace": WorkspaceDetailSerializer(
                     membership.workspace,
                     context={"request": request},
                 ).data,
-                "tokens": build_auth_token_payload(user),
             },
-            message="Account created and workspace joined successfully.",
+            message="Workspace invitation accepted successfully.",
             status=status.HTTP_201_CREATED,
         )

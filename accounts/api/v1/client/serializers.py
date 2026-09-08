@@ -36,6 +36,17 @@ def get_or_create_profile(user):
     return profile
 
 
+def is_unclaimed_invitation_account(user):
+    """Identify passwordless accounts created by the legacy invitation flow."""
+    return bool(
+        user
+        and user.is_active
+        and user.provider == AccountProvider.PASSWORD
+        and not user.is_email_verified
+        and not user.has_usable_password()
+    )
+
+
 def build_auth_token_payload(user):
     refresh = RefreshToken.for_user(user)
     return {
@@ -210,7 +221,8 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def validate_email(self, value):
         email = User.objects.normalize_email(value).strip().casefold()
-        if User.objects.filter(email__iexact=email).exists():
+        existing_user = User.objects.filter(email__iexact=email).first()
+        if existing_user and not is_unclaimed_invitation_account(existing_user):
             raise serializers.ValidationError("A user with this email already exists.")
         return email
 
@@ -232,11 +244,33 @@ class RegisterSerializer(serializers.ModelSerializer):
 
         try:
             with transaction.atomic():
-                user = User.objects.create_user(
-                    password=password,
-                    provider=AccountProvider.PASSWORD,
-                    **validated_data,
+                user = (
+                    User.objects.select_for_update()
+                    .filter(email__iexact=validated_data["email"])
+                    .first()
                 )
+                if user is None:
+                    user = User.objects.create_user(
+                        password=password,
+                        provider=AccountProvider.PASSWORD,
+                        **validated_data,
+                    )
+                else:
+                    if not is_unclaimed_invitation_account(user):
+                        raise serializers.ValidationError(
+                            {"email": "A user with this email already exists."}
+                        )
+                    user.name = validated_data.get("name", "")
+                    user.provider = AccountProvider.PASSWORD
+                    user.set_password(password)
+                    user.save(
+                        update_fields=[
+                            "name",
+                            "provider",
+                            "password",
+                            "updated_at",
+                        ]
+                    )
                 profile = get_or_create_profile(user)
                 profile.phone = phone
                 profile.save(update_fields=["phone"])
@@ -394,7 +428,7 @@ class GoogleLoginSerializer(serializers.Serializer):
     def save(self, **kwargs):
         email = self.validated_data["email"]
         firebase_uid = self.validated_data["firebase_uid"]
-        is_new_user = False
+        is_new_or_unclaimed_account = False
 
         try:
             with transaction.atomic():
@@ -411,7 +445,7 @@ class GoogleLoginSerializer(serializers.Serializer):
                     )
 
                 if user is None:
-                    is_new_user = True
+                    is_new_or_unclaimed_account = True
                     user = User.objects.create_user(
                         email=email,
                         password=None,
@@ -427,6 +461,7 @@ class GoogleLoginSerializer(serializers.Serializer):
                     )
                     profile = get_or_create_profile(user)
                 else:
+                    is_new_or_unclaimed_account = is_unclaimed_invitation_account(user)
                     profile = get_or_create_profile(user)
                     if profile.status == AccountStatus.SUSPENDED:
                         raise serializers.ValidationError(
@@ -473,7 +508,7 @@ class GoogleLoginSerializer(serializers.Serializer):
                     ]
                 )
                 profile.save(update_fields=["phone", "avatar_url"])
-                if is_new_user:
+                if is_new_or_unclaimed_account:
                     provision_direct_signup(user)
         except IntegrityError as exc:
             raise serializers.ValidationError(

@@ -2,7 +2,7 @@ Hello,
 
 {{ inviter_name }} invited you to join {{ workspace_name }} on Argon Chatbot.
 
-Register and join the workspace using this link:
+Sign in or create your account, then join the workspace using this link:
 {{ invitation_link }}
 
 Invitation token: {{ token }}

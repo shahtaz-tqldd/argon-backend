@@ -1,4 +1,4 @@
-import logging
+from app.utils.logger import logger
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -12,9 +12,8 @@ from django.utils import timezone
 from rest_framework import serializers as drf_serializers
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 
-from accounts.api.v1.client.serializers import build_auth_token_payload
 from app.services.r2 import schedule_delete_image
 from app.utils.pagination import CustomPagination
 from app.utils.permission import IsChatbotUser
@@ -25,6 +24,7 @@ from chatbot.api.v1.client.serializers import (
     ChatbotDeleteSerializer,
     ChatbotDetailSerializer,
     ChatbotInvitationSerializer,
+    ChatbotListQuerySerializer,
     ChatbotListSerializer,
     ChatbotMemberListSerializer,
     ChatbotMemberPermissionUpdateSerializer,
@@ -69,9 +69,9 @@ from chatbot.utils.choices import (
 from chatbot.utils.permissions import available_chatbot_permissions
 from subscription.models import ChatbotSubscription
 from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
+from workspace.models import WorkspaceRole
 
 User = get_user_model()
-logger = logging.getLogger(__name__)
 
 
 def first_error_message(errors, fallback="Request failed."):
@@ -178,7 +178,11 @@ class ChatbotListView(PaginatedListMixin, GenericAPIView):
     serializer_class = ChatbotListSerializer
 
     def get_queryset(self):
-        return (
+        query_serializer = ChatbotListQuerySerializer(
+            data=self.request.query_params,
+        )
+        query_serializer.is_valid(raise_exception=True)
+        queryset = (
             Chatbot.objects.select_related(
                 "workspace",
                 "created_by__profile",
@@ -206,6 +210,7 @@ class ChatbotListView(PaginatedListMixin, GenericAPIView):
                 Q(
                     workspace__memberships__user=self.request.user,
                     workspace__memberships__is_active=True,
+                    workspace__memberships__role=WorkspaceRole.ADMIN,
                 )
                 | Q(
                     memberships__user=self.request.user,
@@ -217,6 +222,10 @@ class ChatbotListView(PaginatedListMixin, GenericAPIView):
             .distinct()
             .order_by("-created_at")
         )
+        workspace_slug = query_serializer.validated_data.get("workspace")
+        if workspace_slug:
+            queryset = queryset.filter(workspace__slug=workspace_slug)
+        return queryset
 
     def get(self, request, *args, **kwargs):
         return self.paginated_response(
@@ -252,7 +261,7 @@ class ChatbotCreateView(GenericAPIView):
 class ChatbotDetailView(ChatbotObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     serializer_class = ChatbotDetailSerializer
-    allow_workspace_member = True
+    allow_workspace_admin = True
 
     def get(self, request, *args, **kwargs):
         return APIResponse.success(
@@ -726,8 +735,6 @@ class RemoveChatbotMemberView(ChatbotMemberObjectMixin, GenericAPIView):
         membership = self.get_chatbot_member()
         member = membership.user
         membership.delete()
-        member.is_orphan = True
-        member.save(update_fields=["is_orphan", "updated_at"])
         return APIResponse.success(
             data={"member_email": member.email},
             message="Chatbot member removed successfully.",
@@ -770,8 +777,7 @@ class InviteChatbotMemberView(ChatbotObjectMixin, GenericAPIView):
 
 
 class AcceptChatbotInvitationView(GenericAPIView):
-    permission_classes = [AllowAny]
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
     serializer_class = AcceptChatbotInvitationSerializer
 
     def post(self, request, *args, **kwargs):
@@ -788,10 +794,8 @@ class AcceptChatbotInvitationView(GenericAPIView):
                 exc.detail,
                 "Invitation acceptance failed.",
             )
-        auth_tokens = build_auth_token_payload(membership.user)
         return APIResponse.success(
             data={
-                **auth_tokens,
                 "chatbot": ChatbotDetailSerializer(
                     membership.chatbot,
                     context={"request": request},

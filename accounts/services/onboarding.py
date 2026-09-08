@@ -1,42 +1,38 @@
-from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.utils import timezone
 
-from workspace.services.membership import (
-    ensure_personal_workspace,
-    join_workspace_from_invitation,
-)
-
-User = get_user_model()
+from workspace.services.membership import ensure_personal_workspace
 
 
 def provision_direct_signup(user):
-    """Provision the personal workspace required for a direct signup."""
+    """Create a starter workspace only when the new account has no access path."""
+    from chatbot.models import ChatbotInvitation, ChatbotUser
+    from chatbot.utils.choices import ChatbotStatusTypes
+    from workspace.models import Workspace, WorkspaceInvitation, WorkspaceUser
+
+    if (
+        Workspace.objects.filter(owner=user, is_active=True).exists()
+        or WorkspaceUser.objects.filter(user=user, is_active=True).exists()
+        or ChatbotUser.objects.filter(user=user, is_active=True).exists()
+        or WorkspaceInvitation.objects.filter(
+            email__iexact=user.email,
+            accepted_at__isnull=True,
+            expires_at__gt=timezone.now(),
+            workspace__is_active=True,
+        ).exists()
+        or ChatbotInvitation.objects.filter(
+            email__iexact=user.email,
+            accepted_at__isnull=True,
+            expires_at__gt=timezone.now(),
+            chatbot__is_deleted=False,
+            chatbot__workspace__is_active=True,
+        )
+        .exclude(
+            chatbot__status__in=(
+                ChatbotStatusTypes.DISABLED,
+                ChatbotStatusTypes.DISABLED_BY_ADMIN,
+            )
+        )
+        .exists()
+    ):
+        return None
     return ensure_personal_workspace(user)
-
-
-@transaction.atomic
-def create_user_from_workspace_invitation(
-    *,
-    workspace,
-    email,
-    password=None,
-    invited_by=None,
-    **extra_fields,
-):
-    """
-    Create a user for a previously validated workspace invitation.
-
-    This is intentionally separate from direct signup: it creates only the
-    invited workspace membership and never creates a personal workspace.
-    """
-    user = User.objects.create_user(
-        email=email,
-        password=password,
-        **extra_fields,
-    )
-    membership = join_workspace_from_invitation(
-        workspace=workspace,
-        user=user,
-        invited_by=invited_by,
-    )
-    return user, membership

@@ -1,4 +1,4 @@
-import logging
+from app.utils.logger import logger
 from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
@@ -22,9 +22,6 @@ from chat_session.services.visitor_tokens import (
 )
 from chat_session.tasks import dispatch_ai_reply, is_ai_reply_enabled
 from chat_session.utils.choices import ChatSessionStatus
-
-
-logger = logging.getLogger(__name__)
 
 
 class ChatSessionConsumer(AsyncJsonWebsocketConsumer):

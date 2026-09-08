@@ -1,4 +1,4 @@
-import logging
+from app.utils.logger import logger
 
 from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
@@ -39,9 +39,6 @@ from subscription.services.subscriptions import (
     start_stripe_checkout,
 )
 from subscription.services.webhooks import StripeWebhookProcessor
-
-
-logger = logging.getLogger("app.subscription.api")
 
 
 def _available_plan_queryset():

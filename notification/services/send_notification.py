@@ -1,4 +1,4 @@
-import logging
+from app.utils.logger import logger
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -11,9 +11,6 @@ from notification.models import (
     NotificationRecipientType,
     NotificationType,
 )
-
-logger = logging.getLogger(__name__)
-
 
 def notification_group(recipient_type, target_id=None):
     """

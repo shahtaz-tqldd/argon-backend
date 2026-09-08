@@ -15,6 +15,6 @@ MIDDLEWARE = BASE_MIDDLEWARES + CUSTOM_MIDDLEWARES
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "app.base.authentication.SafeJWTAuthentication",
+        "app.utils.jwt.SafeJWTAuthentication",
     ),
 }

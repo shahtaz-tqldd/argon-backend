@@ -1,4 +1,4 @@
-import logging
+from app.utils.logger import logger
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -19,9 +19,6 @@ from subscription.models import (
     PaymentWebhookEvent,
 )
 from subscription.services.stripe import StripeBillingService
-
-
-logger = logging.getLogger("app.subscription.webhooks")
 
 
 def _apply_subscription_capacity(subscription):

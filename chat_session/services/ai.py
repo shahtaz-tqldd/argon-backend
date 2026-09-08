@@ -1,4 +1,4 @@
-import logging
+from app.utils.logger import logger
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -8,9 +8,6 @@ from google.genai import types
 from chat_session.models import ChatMessage
 from chat_session.utils.choices import ChatMessageSenderType
 from vector_store.services.vectorize import KnowledgeVectorService
-
-
-logger = logging.getLogger(__name__)
 
 
 class GeminiChatService:

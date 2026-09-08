@@ -27,7 +27,7 @@ from subscription.choices import (
     SubscriptionStatus,
 )
 from subscription.models import ChatbotSubscription, PlanPrice, SubscriptionPlan
-from workspace.models import Workspace, WorkspaceUser
+from workspace.models import Workspace
 from workspace.services import add_workspace_user, ensure_personal_workspace
 
 User = get_user_model()
@@ -896,16 +896,12 @@ class ChatbotClientAPITests(APITestCase):
             ],
         )
 
-    def test_workspace_member_can_list_and_open_every_workspace_chatbot(self):
+    def test_workspace_member_lists_and_opens_only_assigned_chatbots(self):
         workspace_chatbot = create_chatbot(
             workspace=self.workspace,
             chatbot_name="Workspace Bot",
             created_by=self.owner,
         )
-        ChatbotUser.objects.filter(
-            chatbot=self.chatbot,
-            user=self.member,
-        ).delete()
         self.client.force_authenticate(self.member)
 
         response = self.client.get(
@@ -916,14 +912,22 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(
             {item["slug"] for item in response.data["data"]},
-            {self.chatbot.slug, workspace_chatbot.slug},
+            {self.chatbot.slug},
+        )
+        self.assertEqual(
+            response.data["data"][0]["workspace"],
+            {
+                "id": str(self.workspace.id),
+                "name": self.workspace.name,
+                "slug": self.workspace.slug,
+            },
         )
 
         response = self.client.get(
             reverse("chatbot-detail"),
             {"chatbot": workspace_chatbot.slug},
         )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
         response = self.client.patch(
             (
@@ -965,6 +969,56 @@ class ChatbotClientAPITests(APITestCase):
             {"chatbot": other_chatbot.slug},
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_user_can_access_multiple_chatbots_across_workspaces_and_filter_them(self):
+        user = User.objects.create_user(
+            email="multi-chatbot@example.com",
+            password="StrongPass123!",
+        )
+        same_workspace_chatbot = create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Same Workspace Bot",
+            created_by=self.owner,
+        )
+        other_owner = User.objects.create_user(
+            email="other-owner@example.com",
+            password="StrongPass123!",
+        )
+        other_workspace = ensure_personal_workspace(other_owner)
+        other_workspace_chatbot = create_chatbot(
+            workspace=other_workspace,
+            chatbot_name="Other Workspace Bot",
+            created_by=other_owner,
+        )
+        ChatbotUser.objects.bulk_create(
+            [
+                ChatbotUser(chatbot=self.chatbot, user=user),
+                ChatbotUser(chatbot=same_workspace_chatbot, user=user),
+                ChatbotUser(chatbot=other_workspace_chatbot, user=user),
+            ]
+        )
+        self.client.force_authenticate(user)
+
+        response = self.client.get(
+            reverse("chatbot-list"),
+            {"page_size": 10},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 3)
+        self.assertEqual(
+            {item["workspace"]["slug"] for item in response.data["data"]},
+            {self.workspace.slug, other_workspace.slug},
+        )
+
+        response = self.client.get(
+            reverse("chatbot-list"),
+            {"workspace": self.workspace.slug, "page_size": 10},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            {item["slug"] for item in response.data["data"]},
+            {self.chatbot.slug, same_workspace_chatbot.slug},
+        )
 
     def test_chatbot_member_list_returns_page_metadata(self):
         response = self.client.get(
@@ -1072,10 +1126,8 @@ class ChatbotClientAPITests(APITestCase):
             invited_by=self.owner,
         )
 
-    def test_invited_permissions_are_applied_when_invitation_is_accepted(self):
+    def test_invitation_is_account_independent_and_applies_permissions(self):
         invitee_email = "invitee@example.com"
-        invitee_name = "Invited Member"
-        invitee_password = "StrongInvitePass123!"
         permissions = [
             ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT,
             ChatbotPermissionTypes.SETUP_CONFIGURATION,
@@ -1097,12 +1149,7 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["data"]["permissions"], permissions)
         invited_at = response.data["data"]["invited_at"]
-        invitee = User.objects.get(email=invitee_email)
-        self.assertFalse(invitee.has_usable_password())
-        self.assertFalse(
-            WorkspaceUser.objects.filter(user=invitee).exists()
-        )
-        self.assertFalse(Workspace.objects.filter(owner=invitee).exists())
+        self.assertFalse(User.objects.filter(email=invitee_email).exists())
         token = deliver.call_args.kwargs["token"]
 
         response = self.client.get(
@@ -1126,38 +1173,37 @@ class ChatbotClientAPITests(APITestCase):
 
         self.client.force_authenticate(user=None)
         response = self.client.post(
-            reverse("accept-chatbot-invitation"),
+            reverse("register"),
             {
-                "name": invitee_name,
-                "password": invitee_password,
-                "confirm_password": invitee_password,
-                "token": token,
+                "email": invitee_email,
+                "name": "Invited Chatbot User",
+                "password": "ExistingPassword123!",
+                "confirm_password": "ExistingPassword123!",
             },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        invitee = User.objects.get(email=invitee_email)
+        self.assertFalse(Workspace.objects.filter(owner=invitee).exists())
+
+        self.client.force_authenticate(invitee)
+        response = self.client.post(
+            reverse("accept-chatbot-invitation"),
+            {"token": token},
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertIn("access_token", response.data["data"])
-        self.assertIn("refresh_token", response.data["data"])
+        self.assertNotIn("access_token", response.data["data"])
+        self.assertNotIn("refresh_token", response.data["data"])
         membership = ChatbotUser.objects.get(
             chatbot=self.chatbot,
             user=invitee,
         )
         self.assertEqual(membership.permissions, permissions)
         invitee.refresh_from_db()
-        self.assertEqual(invitee.name, invitee_name)
-        self.assertTrue(invitee.check_password(invitee_password))
-        self.assertTrue(invitee.is_email_verified)
-        self.assertIsNotNone(invitee.last_login)
-        self.assertFalse(
-            WorkspaceUser.objects.filter(user=invitee).exists()
-        )
-
-        self.client.credentials(
-            HTTP_AUTHORIZATION=(
-                f'Bearer {response.data["data"]["access_token"]}'
-            )
-        )
+        self.assertEqual(invitee.name, "Invited Chatbot User")
+        self.assertTrue(invitee.check_password("ExistingPassword123!"))
         response = self.client.get(
             reverse("chatbot-detail"),
             {"chatbot": self.chatbot.slug},
@@ -1190,8 +1236,8 @@ class ChatbotClientAPITests(APITestCase):
         self.assertTrue(accepted_members[0]["is_active"])
         self.assertEqual(accepted_members[0]["invited_at"], invited_at)
 
-    def test_invitation_acceptance_rejects_mismatched_passwords(self):
-        invitee_email = "password-mismatch@example.com"
+    def test_invitation_acceptance_rejects_a_different_authenticated_user(self):
+        invitee_email = "different-account@example.com"
         query = urlencode({"chatbot": self.chatbot.slug})
         with patch(
             "chatbot.services.invitations._deliver_chatbot_invitation"
@@ -1205,33 +1251,21 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         token = deliver.call_args.kwargs["token"]
 
-        self.client.force_authenticate(user=None)
+        self.client.force_authenticate(self.owner)
         response = self.client.post(
             reverse("accept-chatbot-invitation"),
-            {
-                "name": "Invited Member",
-                "password": "StrongInvitePass123!",
-                "confirm_password": "DifferentPass123!",
-                "token": token,
-            },
+            {"token": token},
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("confirm_password", response.data["errors"])
+        self.assertIn("token", response.data["errors"])
         invitation = ChatbotInvitation.objects.get(
             chatbot=self.chatbot,
             email=invitee_email,
         )
         self.assertIsNone(invitation.accepted_at)
-        invitee = User.objects.get(email=invitee_email)
-        self.assertFalse(invitee.has_usable_password())
-        self.assertFalse(
-            ChatbotUser.objects.filter(
-                chatbot=self.chatbot,
-                user=invitee,
-            ).exists()
-        )
+        self.assertFalse(User.objects.filter(email=invitee_email).exists())
 
     def test_jwt_activity_updates_last_active(self):
         self.client.force_authenticate(user=None)
@@ -1244,7 +1278,7 @@ class ChatbotClientAPITests(APITestCase):
         self.owner.refresh_from_db()
         self.assertIsNotNone(self.owner.last_active)
 
-    def test_remove_member_deletes_only_membership_and_marks_account_orphan(self):
+    def test_remove_member_deletes_only_membership_without_changing_account(self):
         query = urlencode(
             {
                 "chatbot": self.chatbot.slug,
@@ -1263,8 +1297,6 @@ class ChatbotClientAPITests(APITestCase):
             ).exists()
         )
         self.assertTrue(User.objects.filter(pk=self.member.pk).exists())
-        self.member.refresh_from_db()
-        self.assertTrue(self.member.is_orphan)
 
     def test_member_detail_requires_both_query_parameters(self):
         response = self.client.get(

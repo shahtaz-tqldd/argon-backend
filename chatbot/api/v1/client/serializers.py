@@ -2,7 +2,6 @@ from uuid import UUID, uuid4
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import (
     ObjectDoesNotExist,
     ValidationError as DjangoValidationError,
@@ -44,6 +43,10 @@ User = get_user_model()
 
 class ChatbotQuerySerializer(serializers.Serializer):
     chatbot = serializers.SlugField()
+
+
+class ChatbotListQuerySerializer(serializers.Serializer):
+    workspace = serializers.SlugField(required=False)
 
 
 class ChatbotMemberQuerySerializer(ChatbotQuerySerializer):
@@ -309,6 +312,7 @@ class ChatbotListSerializer(serializers.ModelSerializer):
     """Serialize compact chatbot summaries returned by the list endpoint."""
 
     created_by = serializers.SerializerMethodField()
+    workspace = ChatbotWorkspaceSerializer(read_only=True)
     members = serializers.SerializerMethodField()
     current_user_role = serializers.SerializerMethodField()
     subscription_plan_name = serializers.SerializerMethodField()
@@ -317,6 +321,7 @@ class ChatbotListSerializer(serializers.ModelSerializer):
         model = Chatbot
         fields = (
             "slug",
+            "workspace",
             "chatbot_name",
             "business_name",
             "description",
@@ -881,40 +886,26 @@ class InviteChatbotMemberSerializer(serializers.Serializer):
 
 
 class AcceptChatbotInvitationSerializer(serializers.Serializer):
-    name = serializers.CharField(max_length=50)
-    password = serializers.CharField(write_only=True, min_length=8)
-    confirm_password = serializers.CharField(write_only=True)
     token = serializers.CharField(write_only=True)
 
     def validate(self, attrs):
-        if attrs["password"] != attrs["confirm_password"]:
-            raise serializers.ValidationError(
-                {"confirm_password": "Passwords do not match."}
-            )
-
         try:
             invitation = get_valid_chatbot_invitation(attrs["token"])
         except InvalidChatbotInvitation as exc:
             raise serializers.ValidationError({"token": str(exc)}) from exc
 
-        user = User.objects.filter(
-            email__iexact=invitation.email,
-            is_active=True,
-        ).first()
-        if user is None:
+        user = self.context["request"].user
+        if user.email.strip().casefold() != invitation.email.strip().casefold():
             raise serializers.ValidationError(
-                {"token": "The invited user account is no longer active."}
+                {"token": "This invitation was sent to a different email address."}
             )
-        user.name = attrs["name"]
-        validate_password(attrs["password"], user)
         return attrs
 
     def create(self, validated_data):
         try:
             return accept_chatbot_invitation(
                 token=validated_data["token"],
-                name=validated_data["name"],
-                password=validated_data["password"],
+                user=self.context["request"].user,
             )
         except InvalidChatbotInvitation as exc:
             raise serializers.ValidationError({"token": str(exc)}) from exc

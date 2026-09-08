@@ -1,5 +1,37 @@
 # argon backend
 
+## Logging
+
+Import the shared logger anywhere in the application:
+
+```python
+from app.utils.logger import logger
+
+logger.info("Training started for chatbot %s", chatbot.id)
+logger.warning("Retrying upload %s", upload.id)
+logger.error("Upload failed for file %s", filename)
+```
+
+For module names in the output, use `get_logger(__name__)`:
+
+```python
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+try:
+    process_upload()
+except Exception:
+    logger.exception("Upload processing failed")  # Includes the traceback.
+```
+
+Logs go to the console (stderr) with the level, timestamp, logger name, source
+file and line number. Django configures logging at startup for the web app,
+management commands, and Celery tasks. Set `LOG_LEVEL=DEBUG`, `INFO` (default),
+`WARNING`, `ERROR`, or `CRITICAL` in `.env` and restart the process to change
+verbosity. `logger.debug()` and `logger.critical()` are also available.
+Avoid logging passwords, tokens, or sensitive user data.
+
 ## Cloudflare R2 storage
 
 The application uses the `argon-chatbot` R2 bucket with this object layout:
@@ -79,5 +111,4 @@ chunks limit: 7500
 - Leads
 - Appointment
 - Chat Session
-
 

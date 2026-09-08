@@ -64,6 +64,32 @@ class WorkspaceClientAPITests(APITestCase):
             ).exists()
         )
 
+    def test_registration_claims_legacy_passwordless_invitation_account(self):
+        shell_user = User.objects.create_user(
+            email="legacy-invite@example.com",
+            password=None,
+        )
+        self.assertFalse(shell_user.has_usable_password())
+
+        self.client.force_authenticate(user=None)
+        response = self.client.post(
+            reverse("register"),
+            {
+                "email": shell_user.email,
+                "name": "Claimed User",
+                "password": "ClaimedPass123!",
+                "confirm_password": "ClaimedPass123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(User.objects.filter(email=shell_user.email).count(), 1)
+        shell_user.refresh_from_db()
+        self.assertEqual(shell_user.name, "Claimed User")
+        self.assertTrue(shell_user.check_password("ClaimedPass123!"))
+        self.assertTrue(Workspace.objects.filter(owner=shell_user).exists())
+
     def test_workspace_slug_is_generated_and_unique(self):
         second_owner = User.objects.create_user(
             email="second@example.com",
@@ -292,7 +318,7 @@ class WorkspaceClientAPITests(APITestCase):
         response = self.client.delete(remove_url)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_invited_user_registers_from_one_time_token_and_joins_workspace(self):
+    def test_invitation_does_not_create_account_and_authenticated_user_joins(self):
         self.client.force_authenticate(self.owner)
         with patch(
             "workspace.services.invitations._deliver_workspace_invitation"
@@ -306,6 +332,7 @@ class WorkspaceClientAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertNotIn("token", response.data["data"])
+        self.assertFalse(User.objects.filter(email="invited@example.com").exists())
         token = deliver.call_args.kwargs["token"]
 
         response = self.client.get(
@@ -323,17 +350,28 @@ class WorkspaceClientAPITests(APITestCase):
         self.assertFalse(pending_member["invitation_request_accepted"])
 
         self.client.force_authenticate(user=None)
+        response = self.client.post(
+            reverse("register"),
+            {
+                "email": "invited@example.com",
+                "name": "Invited User",
+                "password": "OriginalPass123!",
+                "confirm_password": "OriginalPass123!",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        invited_user = User.objects.get(email="invited@example.com")
+        self.assertFalse(Workspace.objects.filter(owner=invited_user).exists())
+
+        self.client.force_authenticate(invited_user)
         accept_url = reverse("accept-workspace-invitation")
-        payload = {
-            "token": token,
-            "name": "Invited User",
-            "password": "StrongPass123!",
-            "confirm_password": "StrongPass123!",
-        }
+        payload = {"token": token}
         with CaptureQueriesContext(connection) as queries:
             response = self.client.post(accept_url, payload, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertNotIn("tokens", response.data["data"])
         invitation_lock_query = next(
             query["sql"]
             for query in queries.captured_queries
@@ -344,9 +382,9 @@ class WorkspaceClientAPITests(APITestCase):
             'FOR UPDATE OF "workspace_workspaceinvitation"',
             invitation_lock_query,
         )
-        invited_user = User.objects.get(email="invited@example.com")
-        self.assertTrue(invited_user.is_email_verified)
-        self.assertFalse(Workspace.objects.filter(owner=invited_user).exists())
+        invited_user.refresh_from_db()
+        self.assertEqual(invited_user.name, "Invited User")
+        self.assertTrue(invited_user.check_password("OriginalPass123!"))
         self.assertTrue(
             WorkspaceUser.objects.filter(
                 workspace=self.workspace,
@@ -355,12 +393,70 @@ class WorkspaceClientAPITests(APITestCase):
                 is_active=True,
             ).exists()
         )
+        response = self.client.get(
+            reverse("workspace-list"),
+            {"page_size": 10},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            {item["slug"] for item in response.data["data"]},
+            {self.workspace.slug},
+        )
+        response = self.client.get(
+            reverse("workspace-detail"),
+            {"workspace": self.workspace.slug},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"]["slug"], self.workspace.slug)
         invitation = WorkspaceInvitation.objects.get(
             workspace=self.workspace,
             email="invited@example.com",
         )
         self.assertIsNotNone(invitation.accepted_at)
-        self.assertIn("access_token", response.data["data"]["tokens"])
-
         response = self.client.post(accept_url, payload, format="json")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_existing_user_can_be_invited_and_wrong_account_cannot_accept(self):
+        invitee = User.objects.create_user(
+            email="existing@example.com",
+            password="ExistingPass123!",
+        )
+        self.client.force_authenticate(self.owner)
+        with patch(
+            "workspace.services.invitations._deliver_workspace_invitation"
+        ) as deliver:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    self.invite_url,
+                    {"email": invitee.email},
+                    format="json",
+                )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        token = deliver.call_args.kwargs["token"]
+        response = self.client.post(
+            reverse("accept-workspace-invitation"),
+            {"token": token},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        invitation = WorkspaceInvitation.objects.get(
+            workspace=self.workspace,
+            email=invitee.email,
+        )
+        self.assertIsNone(invitation.accepted_at)
+
+        self.client.force_authenticate(invitee)
+        response = self.client.post(
+            reverse("accept-workspace-invitation"),
+            {"token": token},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(
+            WorkspaceUser.objects.filter(
+                workspace=self.workspace,
+                user=invitee,
+                is_active=True,
+            ).exists()
+        )

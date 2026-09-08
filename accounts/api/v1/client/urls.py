@@ -22,9 +22,7 @@ profile_apis = [
 ]
 
 settings_apis = [
-    path(
-        "change-password/", views.ChangePasswordView.as_view(), name="change-password"
-    ),
+    path("change-password/", views.ChangePasswordView.as_view(), name="change-password"),
     path("delete-account/", views.DeleteAccountView.as_view(), name="delete-account"),
 ]
 

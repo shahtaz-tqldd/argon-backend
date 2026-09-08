@@ -1,13 +1,10 @@
-import logging
+from app.utils.logger import logger
 from decimal import Decimal
 
 import stripe
 from django.conf import settings
 
 from subscription.choices import BillingInterval
-
-
-logger = logging.getLogger("app.subscription.stripe")
 
 
 STRIPE_ZERO_DECIMAL_CURRENCIES = {

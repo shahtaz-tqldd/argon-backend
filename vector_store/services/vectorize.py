@@ -1,4 +1,4 @@
-import logging
+from app.utils.logger import logger
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -11,9 +11,6 @@ from app.base.models import ArgonChatbotConfig
 from vector_store.models import VectorDocument
 
 from .gemini_embeddings import GeminiEmbeddingService
-
-logger = logging.getLogger(__name__)
-
 
 @dataclass(slots=True)
 class VectorSearchResult:

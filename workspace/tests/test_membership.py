@@ -1,9 +1,8 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from accounts.services.onboarding import create_user_from_workspace_invitation
 from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
-from workspace.services import ensure_personal_workspace
+from workspace.services import ensure_personal_workspace, join_workspace_from_invitation
 
 User = get_user_model()
 
@@ -30,25 +29,33 @@ class WorkspaceOnboardingTests(TestCase):
         self.assertEqual(membership.role, WorkspaceRole.ADMIN)
         self.assertTrue(membership.is_active)
 
-    def test_invited_new_user_gets_membership_without_personal_workspace(self):
+    def test_existing_user_keeps_personal_workspace_when_joining_another(self):
         inviter = User.objects.create_user(
             email="admin@example.com",
             password="StrongPass123!",
         )
         workspace = ensure_personal_workspace(inviter)
 
-        invited_user, membership = create_user_from_workspace_invitation(
-            workspace=workspace,
+        invited_user = User.objects.create_user(
             email="invited@example.com",
             password="StrongPass123!",
+        )
+        personal_workspace = ensure_personal_workspace(invited_user)
+        membership = join_workspace_from_invitation(
+            workspace=workspace,
+            user=invited_user,
             invited_by=inviter,
         )
 
         self.assertEqual(membership.workspace, workspace)
         self.assertEqual(membership.user, invited_user)
         self.assertEqual(membership.role, WorkspaceRole.MEMBER)
-        self.assertFalse(
-            Workspace.objects.filter(
-                owner=invited_user,
-            ).exists()
+        self.assertEqual(
+            set(
+                WorkspaceUser.objects.filter(
+                    user=invited_user,
+                    is_active=True,
+                ).values_list("workspace_id", flat=True)
+            ),
+            {personal_workspace.id, workspace.id},
         )

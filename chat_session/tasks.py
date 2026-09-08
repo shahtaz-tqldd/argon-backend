@@ -1,4 +1,4 @@
-import logging
+from app.utils.logger import logger
 
 from celery import shared_task
 from django.conf import settings
@@ -11,8 +11,6 @@ from chat_session.services.ai import GeminiChatService
 from chat_session.services.events import publish_session_event
 from chat_session.utils.choices import ChatMessageSenderType, ChatSessionStatus
 
-
-logger = logging.getLogger(__name__)
 SUPPORTED_AI_BACKENDS = {"placeholder", "gemini"}
 
 
