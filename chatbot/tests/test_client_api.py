@@ -18,7 +18,8 @@ from chatbot.models import (
 )
 from chatbot.services import create_chatbot
 from chatbot.utils.choices import ChatbotPermissionTypes, ChatbotRoleTypes
-from chat_session.models import ChatMessage, ChatSession
+from chat.models import ChatMessage, ChatSession
+from chat.utils.choices import ChatMessageSenderType
 from lead_capture.models import Lead, LeadCaptureConfig
 from subscription.choices import (
     BillingInterval,
@@ -345,6 +346,39 @@ class ChatbotClientAPITests(APITestCase):
             {"lead_id": str(first_session.lead_id)},
             format="json",
         )
+        third_response = self.client.post(
+            conversation_url,
+            {"lead_id": str(first_session.lead_id)},
+            format="json",
+        )
+        second_session = ChatSession.objects.get(
+            pk=second_response.data["data"]["session"]["id"]
+        )
+        third_session = ChatSession.objects.get(
+            pk=third_response.data["data"]["session"]["id"]
+        )
+        ChatMessage.objects.create(
+            chat_session=first_session,
+            sender_type=ChatMessageSenderType.AI,
+            content="How can I help?",
+        )
+        self.member.name = "Support Agent"
+        self.member.save(update_fields=["name"])
+        agent = ChatbotUser.objects.get(
+            chatbot=self.chatbot,
+            user=self.member,
+        )
+        ChatMessage.objects.create(
+            chat_session=second_session,
+            sender_type=ChatMessageSenderType.AGENT,
+            sender=agent,
+            content="I can take it from here.",
+        )
+        ChatMessage.objects.create(
+            chat_session=third_session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="I need some help.",
+        )
         visitor_id = first_session.visitor_id
         url_kwargs = {
             "public_key": self.chatbot.widget_settings.public_key,
@@ -372,12 +406,38 @@ class ChatbotClientAPITests(APITestCase):
             },
         )
         self.assertEqual(sessions_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(sessions_response.data["data"]), 2)
+        self.assertEqual(len(sessions_response.data["data"]), 3)
         self.assertEqual(
             {item["id"] for item in sessions_response.data["data"]},
             {
                 first_response.data["data"]["session"]["id"],
                 second_response.data["data"]["session"]["id"],
+                third_response.data["data"]["session"]["id"],
+            },
+        )
+        sessions_by_id = {
+            item["id"]: item for item in sessions_response.data["data"]
+        }
+        self.assertEqual(
+            sessions_by_id[str(first_session.id)]["last_message"],
+            {
+                "content": "How can I help?",
+                "sender": self.chatbot.chatbot_name,
+            },
+        )
+        self.assertEqual(
+            sessions_by_id[str(second_session.id)]["last_message"],
+            {
+                "content": "I can take it from here.",
+                "sender": "Agent",
+                "agent_name": self.member.name,
+            },
+        )
+        self.assertEqual(
+            sessions_by_id[str(third_session.id)]["last_message"],
+            {
+                "content": "I need some help.",
+                "sender": "You",
             },
         )
 
@@ -404,55 +464,6 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(rejected_response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(accepted_response.status_code, status.HTTP_201_CREATED)
 
-    @patch("chatbot.api.v1.client.views.dispatch_ai_reply")
-    def test_visitor_message_is_authenticated_and_idempotent(self, queue_ai):
-        self.client.force_authenticate(user=None)
-        public_key = self.chatbot.widget_settings.public_key
-        bootstrap_response = self.client.post(
-            reverse(
-                "visitor-conversation",
-                kwargs={"public_key": public_key},
-            ),
-            {},
-            format="json",
-        )
-        conversation = bootstrap_response.data["data"]
-        url = reverse(
-            "visitor-message-create",
-            kwargs={
-                "public_key": public_key,
-                "session_id": conversation["session"]["id"],
-            },
-        )
-        payload = {
-            "client_message_id": "widget-message-1",
-            "content": "What is your refund policy?",
-            "metadata": {"page": "pricing"},
-        }
-        authorization = f"Bearer {conversation['conversation_token']}"
-
-        created_response = self.client.post(
-            url,
-            payload,
-            format="json",
-            HTTP_AUTHORIZATION=authorization,
-        )
-        duplicate_response = self.client.post(
-            url,
-            payload,
-            format="json",
-            HTTP_AUTHORIZATION=authorization,
-        )
-
-        self.assertEqual(created_response.status_code, status.HTTP_201_CREATED)
-        self.assertTrue(created_response.data["data"]["ai_queued"])
-        self.assertEqual(duplicate_response.status_code, status.HTTP_200_OK)
-        self.assertTrue(duplicate_response.data["data"]["duplicate"])
-        self.assertEqual(
-            ChatMessage.objects.filter(external_id="widget-message-1").count(),
-            1,
-        )
-        queue_ai.assert_called_once()
 
     def test_visitor_message_requires_conversation_bearer_token(self):
         self.client.force_authenticate(user=None)

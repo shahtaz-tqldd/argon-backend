@@ -117,7 +117,7 @@ class NotificationGroupTests(SimpleTestCase):
         )
 
         with patch(
-            "notification.services.send_notification.get_channel_layer",
+            "base.socket.services.broadcaster.get_channel_layer",
             return_value=channel_layer,
         ):
             emit_notification(notification)

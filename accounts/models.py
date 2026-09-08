@@ -12,7 +12,7 @@ from accounts.choices import (
     AccountProvider,
     AccountStatus,
 )
-from app.base.models import BaseMinModel
+from app.core.models import BaseMinModel
 from app.utils.validators import validate_timezone_name
 
 phone_regex = RegexValidator(

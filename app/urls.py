@@ -3,15 +3,12 @@ from django.urls import path, include
 from django.conf.urls.static import static
 from django.conf import settings
 
-from app.api.v1.urls import admin_urlpatterns as config_admin_urls
-from app.api.v1.urls import client_urlpatterns as config_client_urls
-
 v1_client_urls = [
-    path("config/", include(config_client_urls)),
+    path("base/", include("base.api.v1.client.urls")),
     path("accounts/", include("accounts.api.v1.client.urls")),
     path("workspaces/", include("workspace.api.v1.client.urls")),
     path("chatbots/", include("chatbot.api.v1.client.urls")),
-    path("chat-sessions/", include("chat_session.api.v1.client.urls")),
+    path("chat/", include("chat.api.v1.client.urls")),
     path("knowledge/", include("knowledge.api.v1.client.urls")),
     path("lead-captures/", include("lead_capture.api.v1.client.urls")),
     path(
@@ -23,7 +20,7 @@ v1_client_urls = [
 ]
 
 v1_admin_urls = [
-    path("config/", include(config_admin_urls)),
+    path("base/", include("base.api.v1.admin.urls")),
     path("accounts/", include("accounts.api.v1.admin.urls")),
     path("subscriptions/", include("subscription.api.v1.admin.urls")),
     # path("analytics/", include("analytics.api.v1.admin.urls")),

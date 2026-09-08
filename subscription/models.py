@@ -7,7 +7,7 @@ from django.db import models
 from django.db.models import Q
 from django.utils.text import slugify
 
-from app.base.models import BaseMinModel, BaseModel
+from app.core.models import BaseMinModel, BaseModel
 from subscription.choices import (
     BillingInterval,
     PaymentProvider,

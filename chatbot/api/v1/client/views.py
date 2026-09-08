@@ -38,16 +38,16 @@ from chatbot.api.v1.client.serializers import (
     PublicChatbotSerializer,
 )
 from chatbot.models import Chatbot, ChatbotInvitation, ChatbotUser
-from chat_session.api.v1.client.serializers import (
+from chat.api.v1.client.serializers import (
     PublicVisitorSerializer,
     PublicVisitorSessionSerializer,
     VisitorConversationCreateSerializer,
     VisitorMessageCreateSerializer,
     VisitorMessageSerializer,
 )
-from chat_session.models import ChatMessage
-from chat_session.services.events import publish_session_event
-from chat_session.services.visitor import (
+from chat.models import ChatMessage
+from chat.services.events import publish_session_event
+from chat.services.visitor import (
     create_or_resume_conversation,
     get_public_chatbot,
     get_public_visitor_details,
@@ -56,11 +56,11 @@ from chat_session.services.visitor import (
     require_allowed_widget_origin,
     send_visitor_message,
 )
-from chat_session.services.visitor_tokens import (
+from chat.services.visitor_tokens import (
     InvalidConversationToken,
     issue_conversation_token,
 )
-from chat_session.tasks import dispatch_ai_reply, is_ai_reply_enabled
+from chat.tasks import dispatch_ai_reply, is_ai_reply_enabled
 from chatbot.utils.choices import (
     ChatbotPermissionTypes,
     ChatbotRoleTypes,

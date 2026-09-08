@@ -19,11 +19,12 @@ THIRD_PARTY_APPS = [
 
 
 MODULER_APPS = [
-    "app.base.apps.BaseConfig",
+    "base.socket.apps.SocketConfig",
+    "base.apps.BaseConfig",
     "accounts.apps.AccountsConfig",
     "workspace.apps.WorkspaceConfig",
     "chatbot.apps.ChatbotConfig",
-    "chat_session.apps.ChatSessionConfig",
+    "chat.apps.ChatConfig",
     "lead_capture.apps.LeadCaptureConfig",
     "appointment_booking.apps.AppointmentBookingAppConfig",
     "subscription.apps.SubscriptionConfig",
@@ -31,7 +32,6 @@ MODULER_APPS = [
     "notification.apps.NotificationConfig",
     "knowledge.apps.KnowledgeConfig",
     "vector_store.apps.VectorStoreConfig",
-    # "analytics.apps.AnalyticsConfig",
 ]
 
 INSTALLED_APPS = DJANGO_BASE_APPS + THIRD_PARTY_APPS + MODULER_APPS

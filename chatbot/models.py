@@ -5,7 +5,7 @@ from django.db import models
 from django.utils import timezone
 from django.utils.text import slugify
 
-from app.base.models import BaseModel, BaseMinModel
+from app.core.models import BaseModel, BaseMinModel
 from app.utils.validators import validate_timezone_name
 
 from chatbot.utils.choices import (

@@ -4,7 +4,7 @@ from django.db import models
 from django.db.models import Q
 from django.utils.dateparse import parse_date
 
-from app.base.models import BaseMinModel, BaseModel
+from app.core.models import BaseMinModel, BaseModel
 from lead_capture.utils.choices import LeadCaptureFieldMode, LeadStatusType
 from lead_capture.utils.validators import (
     MAX_CAPTURE_FIELDS,

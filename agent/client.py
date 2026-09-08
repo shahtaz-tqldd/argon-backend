@@ -16,15 +16,14 @@ class AgentClient:
     """
     app_name = "argon_agents"
 
-    def __init__(self, *, session_service=None, model=None, vector_service=None):
+    def __init__(self, *, session_service=None, vector_service=None):
         self.session_service = session_service if session_service is not None else (
             DatabaseSessionService(db_url=settings.ADK_DB_URL)
             if settings.ADK_DB_URL else InMemorySessionService()
         )
-        self.model = model
         self.vector_service = vector_service
 
-    async def call(self, *, chatbot, user_id, session_id, message):
+    async def chat(self, *, chatbot, user_id, session_id, message):
         if not message or not message.strip():
             raise ValueError("message must not be empty.")
         if not user_id or not session_id:
@@ -41,7 +40,7 @@ class AgentClient:
             await self.session_service.create_session(
                 app_name=self.app_name, user_id=scoped_user, session_id=session_id,
             )
-        root = create_root_agent(chatbot, session_id, model=self.model, vector_service=self.vector_service)
+        root = create_root_agent(chatbot, session_id)
         runner = Runner(agent=root, app_name=self.app_name, session_service=self.session_service)
         reply = ""
         async for event in runner.run_async(
@@ -56,6 +55,6 @@ class AgentClient:
                     reply = text.strip()
         return reply or chatbot.fallback_message
 
-    def call_sync(self, **kwargs):
-        """Synchronous entry point; use call() from async code."""
-        return async_to_sync(self.call)(**kwargs)
+    def chat_sync(self, **kwargs):
+        """Synchronous entry point; use chat() from async code."""
+        return async_to_sync(self.chat)(**kwargs)

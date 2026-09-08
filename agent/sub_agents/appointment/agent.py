@@ -1,13 +1,15 @@
 from google.adk.agents import LlmAgent
 
 from agent.helpers.load_instruction import load_sub_agent_instruction
+from django.conf import settings
 
-
-def appointment_agent(model, common_instruction, tools):
+def appointment_agent(chatbot, session) -> LlmAgent:
     instruction = load_sub_agent_instruction("appointment")
+    tools = [] 
     return LlmAgent(
-        name="appointment_agent", model=model,
+        name="appointment_agent", 
+        model=settings.GEMINI_MODEL,
         description="Handles appointment interest, collects configured details, checks slots, and books appointments.",
-        instruction=f"{common_instruction}\n{instruction}",
-        tools=list(tools),
+        instruction=instruction,
+        tools=tools,
     )

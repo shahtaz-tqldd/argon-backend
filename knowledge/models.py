@@ -1,7 +1,7 @@
 from django.db import models
 from django.db.models import Q
 
-from app.base.models import BaseModel, BaseMinModel
+from app.core.models import BaseModel, BaseMinModel
 from knowledge.utils.choices import (
     KnowledgeSourceTypes, 
     KnowledgeTrainingStageTypes,

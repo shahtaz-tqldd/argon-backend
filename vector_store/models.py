@@ -3,7 +3,7 @@ from django.contrib.postgres.search import SearchVector, SearchVectorField
 from django.db import models
 from pgvector.django import HnswIndex, VectorField
 
-from app.base.models import BaseMinModel
+from app.core.models import BaseMinModel
 
 
 class VectorDocument(BaseMinModel):

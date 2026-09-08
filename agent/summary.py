@@ -12,7 +12,7 @@ from agent.utils.schema import ConversationAnalysis
 
 
 def _closed_transcript(chat_session_id, min_user_messages):
-    from chat_session.models import ChatSession
+    from chat.models import ChatSession
 
     session = ChatSession.objects.get(pk=chat_session_id)
     if session.status != "closed":

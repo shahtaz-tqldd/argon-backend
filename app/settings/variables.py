@@ -89,11 +89,16 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = env("CELERY_TIMEZONE", "UTC")
 CELERY_RESULT_EXTENDED = True
 CELERY_IMPORTS = (
+    "base.socket.tasks",
     "accounts.tasks",
-    "chat_session.tasks",
+    "chat.tasks",
     "knowledge.tasks",
 )
 CELERY_BEAT_SCHEDULE = {
+    "expire-dashboard-presence": {
+        "task": "base.socket.tasks.sweep_presence",
+        "schedule": 15.0,
+    },
     "permanently-delete-expired-accounts-daily": {
         "task": "accounts.tasks.permanently_delete_expired_accounts",
         "schedule": 60 * 60 * 24,
@@ -118,6 +123,12 @@ else:
             "BACKEND": "channels.layers.InMemoryChannelLayer",
         },
     }
+
+# Presence remains Redis-backed even when Channels uses an in-memory test layer.
+PRESENCE_REDIS_URL = env("PRESENCE_REDIS_URL", CHANNEL_REDIS_URL)
+PRESENCE_REDIS_PREFIX = env("PRESENCE_REDIS_PREFIX", "presence")
+PRESENCE_HEARTBEAT_SECONDS = 25
+PRESENCE_TIMEOUT_SECONDS = 75
 
 # ADK
 ADK_DB_URL = env("ADK_DB_URL")

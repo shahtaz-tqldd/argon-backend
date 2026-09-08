@@ -1,6 +1,6 @@
 from django.db import models
 
-from app.base.models import BaseMinModel
+from app.core.models import BaseMinModel
 from analytics.choices import AIUsageType
 from analytics.validators import validate_ai_usage_metadata
 

@@ -5,7 +5,7 @@ from django.db.models import F, Q
 from django.db.models.functions import Lower
 from django.utils import timezone
 
-from app.base.models import BaseModel
+from app.core.models import BaseModel
 from coupon.choices import DiscountDuration, DiscountType
 
 

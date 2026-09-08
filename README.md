@@ -112,3 +112,15 @@ chunks limit: 7500
 - Appointment
 - Chat Session
 
+
+---
+What I have used
+- R2 from cloudflare to Upload Image and Files // third party services
+- Gemini API // LLM
+- Gemini Embedding // Embedding 
+- Google Firebase // Google Authentication
+- Stripe // payment gateway -> has webhook
+
+- postgres + pgvector - db + vector database // self hosted -> HSNW index, 1536 dimension
+- Playwright for web scrapping // open source
+- google ADK // open source framework

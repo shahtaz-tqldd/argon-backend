@@ -7,7 +7,7 @@ from django.db import close_old_connections, transaction
 from django.db.models import F
 from pgvector.django import CosineDistance
 
-from app.base.models import ArgonChatbotConfig
+from base.models import ArgonChatbotConfig
 from vector_store.models import VectorDocument
 
 from .gemini_embeddings import GeminiEmbeddingService
