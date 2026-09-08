@@ -29,18 +29,17 @@ socket is still appropriate for:
 If the dashboard sends agent messages through the REST API, the single dashboard
 socket is sufficient for receiving all resulting events.
 
-## Current backend behavior
+## Backend behavior
 
 | Endpoint | Audience | Current events |
 | --- | --- | --- |
-| `/ws/notifications/` | Authenticated dashboard user | Persisted notification events for authorized global, user, workspace, and chatbot groups |
+| `/ws/notifications/` | Authenticated dashboard user | Persisted notifications and chat events for authorized global, user, workspace, and chatbot groups |
 | `/ws/chat-sessions/{session_id}/` | Authenticated chatbot agent | Live events for one chat session; also accepts agent message commands |
 | `/ws/widget/chatbots/{public_key}/conversations/{session_id}/` | Public visitor widget | Sanitized live events for one visitor conversation |
 
-At present, `message.created` is published only to the session-specific group.
-Therefore, the notification connection cannot yet receive chat messages by itself.
-The backend must additionally fan each message event out to its chatbot dashboard
-group before the dashboard can use only one connection.
+Chat events are published to both the session-specific group and the relevant
+chatbot dashboard group. The notification connection can therefore receive events
+for every chatbot the authenticated user is actively assigned to.
 
 ## Authentication
 
@@ -128,6 +127,7 @@ The same dashboard connection can deliver session state changes:
 
 Supported session event names include:
 
+- `session.created`
 - `session.taken_over`
 - `session.released`
 - `session.resolved`
@@ -249,9 +249,9 @@ Choose one sending transport and use it consistently:
 
 The agent must own the active takeover before the backend accepts an agent message.
 
-## Backend fan-out required
+## Backend fan-out
 
-For the single-connection design, each newly created `ChatMessage` should be emitted
+For the single-connection design, each chat-session event is emitted
 to both:
 
 ```text

@@ -10,6 +10,7 @@ from chatbot.models import Chatbot, ChatbotAllowedOrigin
 from chatbot.utils.choices import ChatbotStatusTypes
 from chatbot.utils.validation import normalize_widget_origin
 from chat_session.models import ChatMessage, ChatSession
+from chat_session.services.events import publish_session_event
 from chat_session.services.visitor_tokens import (
     InvalidConversationToken,
     decode_conversation_token,
@@ -187,6 +188,18 @@ def create_or_resume_conversation(
             ai_enabled=chatbot.ai_enabled,
             user_metadata=user_metadata or {},
             metadata=metadata or {},
+        )
+        transaction.on_commit(
+            lambda: publish_session_event(
+                session.id,
+                chatbot.id,
+                "session.created",
+                {
+                    "chatbot_id": str(chatbot.id),
+                    "channel": session.channel,
+                    "status": session.status,
+                },
+            )
         )
     elif (
         user_metadata is not None

@@ -88,6 +88,7 @@ def take_over_session(chat_session, agent):
         transaction.on_commit(
             lambda: publish_session_event(
                 chat_session.id,
+                chat_session.chatbot_id,
                 "session.taken_over",
                 {"takeover_id": str(takeover.id), "agent_id": str(agent.id)},
             )
@@ -124,6 +125,7 @@ def request_transfer(
         transaction.on_commit(
             lambda: publish_session_event(
                 chat_session.id,
+                chat_session.chatbot_id,
                 "session.transfer_requested",
                 {
                     "transfer_id": str(transfer.id),
@@ -195,6 +197,7 @@ def accept_transfer(transfer, agent):
             transaction.on_commit(
                 lambda: publish_session_event(
                     chat_session.id,
+                    chat_session.chatbot_id,
                     "session.transferred",
                     {
                         "transfer_id": str(transfer.id),
@@ -232,6 +235,7 @@ def decline_transfer(transfer, agent):
             transaction.on_commit(
                 lambda: publish_session_event(
                     chat_session.id,
+                    chat_session.chatbot_id,
                     "session.transfer_declined",
                     {"transfer_id": str(transfer.id)},
                 )
@@ -257,6 +261,7 @@ def cancel_transfer(transfer, agent):
         transaction.on_commit(
             lambda: publish_session_event(
                 chat_session.id,
+                chat_session.chatbot_id,
                 "session.transfer_cancelled",
                 {"transfer_id": str(transfer.id)},
             )
@@ -293,6 +298,7 @@ def release_session(chat_session, agent):
         transaction.on_commit(
             lambda: publish_session_event(
                 chat_session.id,
+                chat_session.chatbot_id,
                 "session.released",
                 {"takeover_id": str(active.id)},
             )
@@ -352,6 +358,7 @@ def resolve_session(chat_session, agent, resolution_type, note=""):
         transaction.on_commit(
             lambda: publish_session_event(
                 chat_session.id,
+                chat_session.chatbot_id,
                 f"session.{resolution_type}",
                 {"takeover_id": str(active.id), "status": resolution_type},
             )
@@ -410,6 +417,7 @@ def reopen_session(chat_session, agent):
         transaction.on_commit(
             lambda: publish_session_event(
                 chat_session.id,
+                chat_session.chatbot_id,
                 "session.reopened",
                 {"reopened_by_id": str(agent.id)},
             )

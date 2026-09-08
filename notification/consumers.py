@@ -30,6 +30,9 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
     async def notification_created(self, event):
         await self.send_json(event["notification"])
 
+    async def chat_session_event(self, event):
+        await self.send_json(event["event"])
+
     @database_sync_to_async
     def get_group_names(self, user_id):
         workspace_ids = WorkspaceUser.objects.filter(

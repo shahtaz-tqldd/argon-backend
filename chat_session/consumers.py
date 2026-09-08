@@ -9,7 +9,7 @@ from django.http import Http404
 from chatbot.models import ChatbotUser
 from chatbot.utils.choices import ChatbotPermissionTypes
 from chat_session.models import ChatSession
-from chat_session.services.events import chat_session_group
+from chat_session.services.events import chat_session_group, publish_session_event
 from chat_session.services.messages import send_agent_message
 from chat_session.services.visitor import (
     get_public_chatbot,
@@ -242,12 +242,11 @@ class VisitorChatSessionConsumer(AsyncJsonWebsocketConsumer):
                     "Could not queue AI reply for visitor message %s",
                     message.id,
                 )
-                await self.send_json(
-                    {
-                        "type": "ai.response.failed",
-                        "session_id": str(self.chat_session.id),
-                        "data": {"code": "queue_unavailable", "retryable": True},
-                    }
+                await database_sync_to_async(publish_session_event)(
+                    self.chat_session.id,
+                    self.chat_session.chatbot_id,
+                    "ai.response.failed",
+                    {"code": "queue_unavailable", "retryable": True},
                 )
 
     async def chat_session_event(self, event):

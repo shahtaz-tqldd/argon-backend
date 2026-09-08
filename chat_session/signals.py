@@ -12,9 +12,12 @@ def publish_new_chat_message(sender, instance, created, **kwargs):
     if not created:
         return
     event_data = serialize_message_event(instance)
+    session_id = instance.chat_session_id
+    chatbot_id = instance.chat_session.chatbot_id
     transaction.on_commit(
         lambda: publish_session_event(
-            instance.chat_session_id,
+            session_id,
+            chatbot_id,
             "message.created",
             event_data,
         )

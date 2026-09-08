@@ -193,6 +193,11 @@ class ChatSessionListView(
             queryset = queryset.filter(
                 requires_attention=query["requires_attention"]
             )
+        queryset = queryset.order_by(
+            "-last_activity_at",
+            "-created_at",
+            "-id",
+        )
         return self.paginated_response(
             queryset,
             message="Chat sessions fetched successfully.",

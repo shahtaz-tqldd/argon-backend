@@ -482,6 +482,7 @@ class VisitorMessageCreateView(GenericAPIView):
                 )
                 publish_session_event(
                     chat_session.id,
+                    chat_session.chatbot_id,
                     "ai.response.failed",
                     {"code": "queue_unavailable", "retryable": True},
                 )

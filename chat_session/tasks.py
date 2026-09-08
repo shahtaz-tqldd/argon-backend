@@ -112,6 +112,7 @@ def generate_ai_reply_task(self, visitor_message_id):
     if capacity_reserved and not _reserve_ai_message(chatbot.id):
         publish_session_event(
             session.id,
+            chatbot.id,
             "ai.response.failed",
             {"code": "message_limit_reached", "retryable": False},
         )
@@ -119,6 +120,7 @@ def generate_ai_reply_task(self, visitor_message_id):
 
     publish_session_event(
         session.id,
+        chatbot.id,
         "ai.response.started",
         {"in_reply_to": str(visitor_message.id)},
     )
@@ -152,6 +154,7 @@ def generate_ai_reply_task(self, visitor_message_id):
         if self.request.retries >= 2:
             publish_session_event(
                 session.id,
+                chatbot.id,
                 "ai.response.failed",
                 {"code": "generation_failed", "retryable": True},
             )

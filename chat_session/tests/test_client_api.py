@@ -123,6 +123,30 @@ class ChatSessionClientAPITests(APITestCase):
             {"sender": "ai", "content": "Latest answer"},
         )
 
+    def test_session_list_orders_newest_message_activity_first(self):
+        older_session = ChatSession.objects.create(chatbot=self.chatbot)
+        newest_session = ChatSession.objects.create(chatbot=self.chatbot)
+        ChatMessage.objects.create(
+            chat_session=older_session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="Older message",
+        )
+        ChatMessage.objects.create(
+            chat_session=newest_session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="Newest message",
+        )
+
+        response = self.client.get(
+            f'{reverse("chat-session-list")}?chatbot_slug={self.chatbot.slug}'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [item["id"] for item in response.data["data"]],
+            [str(newest_session.id), str(older_session.id)],
+        )
+
     def test_mark_read_marks_only_unread_visitor_messages(self):
         session = ChatSession.objects.create(chatbot=self.chatbot)
         unread_visitor_message = ChatMessage.objects.create(
