@@ -147,6 +147,30 @@ class ChatSessionClientAPITests(APITestCase):
             [str(newest_session.id), str(older_session.id)],
         )
 
+    def test_session_detail_returns_nested_chatbot(self):
+        self.chatbot.logo = "https://example.com/support-bot.png"
+        self.chatbot.save(update_fields=("logo", "updated_at"))
+        session = ChatSession.objects.create(chatbot=self.chatbot)
+
+        response = self.client.get(
+            reverse("chat-session-detail"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn("chatbot_id", response.data["data"])
+        self.assertEqual(
+            response.data["data"]["chatbot"],
+            {
+                "slug": self.chatbot.slug,
+                "chatbot_name": self.chatbot.chatbot_name,
+                "logo": self.chatbot.logo,
+            },
+        )
+
     def test_mark_read_marks_only_unread_visitor_messages(self):
         session = ChatSession.objects.create(chatbot=self.chatbot)
         unread_visitor_message = ChatMessage.objects.create(

@@ -54,6 +54,12 @@ class ChatbotAgentSerializer(serializers.Serializer):
     email = serializers.EmailField(source="user.email", read_only=True)
 
 
+class ChatSessionChatbotSerializer(serializers.Serializer):
+    slug = serializers.SlugField(read_only=True)
+    chatbot_name = serializers.CharField(read_only=True)
+    logo = serializers.URLField(read_only=True)
+
+
 class ChatMessageAttachmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatMessageAttachment
@@ -95,7 +101,7 @@ class ChatMessageSerializer(serializers.ModelSerializer):
 
 
 class ChatSessionSerializer(serializers.ModelSerializer):
-    chatbot_id = serializers.UUIDField(read_only=True)
+    chatbot = ChatSessionChatbotSerializer(read_only=True)
     lead_id = serializers.UUIDField(read_only=True)
     assigned_to = ChatbotAgentSerializer(read_only=True)
     message_count = serializers.IntegerField(read_only=True, required=False)
@@ -104,13 +110,12 @@ class ChatSessionSerializer(serializers.ModelSerializer):
         model = ChatSession
         fields = (
             "id",
-            "chatbot_id",
+            "chatbot",
             "channel",
             "status",
             "lead_id",
             "assigned_to",
             "visitor_id",
-            "external_thread_id",
             "last_activity_at",
             "last_visitor_activity_at",
             "requires_attention",
