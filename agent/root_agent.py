@@ -7,7 +7,7 @@ from agent.sub_agents import (
 )
 
 
-def create_root_agent(chatbot, session):
+def root_agent(chatbot, session):
     common = (
         f"You are {chatbot.chatbot_name}, assistant for {chatbot.business_name}.\n"
         f"Language: {chatbot.language}. Timezone: {chatbot.timezone}.\n"

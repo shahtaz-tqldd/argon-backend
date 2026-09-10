@@ -120,7 +120,85 @@ class ChatSessionClientAPITests(APITestCase):
         self.assertEqual(item["unread_message_count"], 1)
         self.assertEqual(
             item["last_message"],
-            {"sender": "ai", "content": "Latest answer"},
+            {"sender": self.chatbot.chatbot_name, "content": "Latest answer"},
+        )
+
+    def test_session_list_returns_display_name_for_each_sender_type(self):
+        self.user.name = "Support Agent"
+        self.user.save(update_fields=["name"])
+
+        agent_session = ChatSession.objects.create(chatbot=self.chatbot)
+        named_visitor_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            user_metadata={"name": "Jamie"},
+        )
+        anonymous_visitor_session = ChatSession.objects.create(chatbot=self.chatbot)
+        system_session = ChatSession.objects.create(chatbot=self.chatbot)
+
+        messages = (
+            (agent_session, ChatMessageSenderType.AGENT, self.agent, "Agent reply"),
+            (
+                named_visitor_session,
+                ChatMessageSenderType.VISITOR,
+                None,
+                "Named visitor reply",
+            ),
+            (
+                anonymous_visitor_session,
+                ChatMessageSenderType.VISITOR,
+                None,
+                "Anonymous visitor reply",
+            ),
+            (system_session, ChatMessageSenderType.SYSTEM, None, "System update"),
+        )
+        for session, sender_type, sender, content in messages:
+            ChatMessage.objects.create(
+                chat_session=session,
+                sender_type=sender_type,
+                sender=sender,
+                content=content,
+            )
+
+        response = self.client.get(
+            f'{reverse("chat-session-list")}?chatbot_slug={self.chatbot.slug}'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = {item["id"]: item for item in response.data["data"]}
+        self.assertEqual(
+            results[str(agent_session.id)]["last_message"]["sender"],
+            "Support Agent",
+        )
+        self.assertEqual(
+            results[str(named_visitor_session.id)]["last_message"]["sender"],
+            "Jamie",
+        )
+        self.assertEqual(
+            results[str(anonymous_visitor_session.id)]["last_message"]["sender"],
+            "visitor",
+        )
+        self.assertEqual(
+            results[str(system_session.id)]["last_message"]["sender"],
+            "system",
+        )
+
+    def test_session_list_returns_assigned_agent_avatar_url(self):
+        avatar_url = "https://example.com/agents/support.png"
+        self.user.profile.avatar_url = avatar_url
+        self.user.profile.save(update_fields=["avatar_url"])
+        ChatSession.objects.create(
+            chatbot=self.chatbot,
+            assigned_to=self.agent,
+        )
+
+        response = self.client.get(
+            f'{reverse("chat-session-list")}?chatbot_slug={self.chatbot.slug}'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["data"][0]["assigned_to"]["avatar_url"],
+            avatar_url,
         )
 
     def test_session_list_orders_newest_message_activity_first(self):

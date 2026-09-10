@@ -141,7 +141,10 @@ def request_transfer(
 def _locked_pending_transfer(transfer):
     locked = (
         ChatSessionTransfer.objects.select_for_update()
-        .select_related("from_agent__user", "to_agent__user")
+        .select_related(
+            "from_agent__user__profile",
+            "to_agent__user__profile",
+        )
         .get(pk=transfer.pk)
     )
     if locked.status != ChatSessionTransferStatus.PENDING:

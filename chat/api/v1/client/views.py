@@ -101,7 +101,10 @@ class ChatSessionChatbotMixin:
     def get_chatbot_user(self):
         if self._chatbot_user is None:
             self._chatbot_user = get_object_or_404(
-                ChatbotUser.objects.select_related("chatbot", "user"),
+                ChatbotUser.objects.select_related(
+                    "chatbot",
+                    "user__profile",
+                ),
                 chatbot=self.get_chatbot(),
                 user=self.request.user,
                 user__is_active=True,
@@ -119,7 +122,7 @@ class ChatSessionObjectMixin(ChatSessionChatbotMixin):
                 ChatSession.objects.select_related(
                     "chatbot__workspace",
                     "lead",
-                    "assigned_to__user",
+                    "assigned_to__user__profile",
                 ),
                 pk=self.get_query()["session_id"],
                 chatbot=self.get_chatbot(),
@@ -137,8 +140,8 @@ class ChatSessionTransferObjectMixin(ChatSessionChatbotMixin):
             self._transfer = get_object_or_404(
                 ChatSessionTransfer.objects.select_related(
                     "chat_session",
-                    "from_agent__user",
-                    "to_agent__user",
+                    "from_agent__user__profile",
+                    "to_agent__user__profile",
                 ),
                 pk=self.get_query()["transfer_id"],
                 chat_session__chatbot=self.get_chatbot(),
@@ -163,7 +166,11 @@ class ChatSessionListView(
         ).order_by("-created_at", "-id")
         queryset = (
             ChatSession.objects.filter(chatbot=self.get_chatbot())
-            .select_related("lead", "assigned_to__user")
+            .select_related(
+                "chatbot",
+                "lead",
+                "assigned_to__user__profile",
+            )
             .annotate(
                 unread_message_count=Count(
                     "messages",
@@ -177,6 +184,9 @@ class ChatSessionListView(
                 ),
                 last_message_content=Subquery(
                     last_message.values("content")[:1]
+                ),
+                last_message_agent_name=Subquery(
+                    last_message.values("sender__user__name")[:1]
                 ),
             )
         )
@@ -261,7 +271,7 @@ class ChatMessageListView(
     def get(self, request, *args, **kwargs):
         queryset = (
             ChatMessage.objects.filter(chat_session=self.get_chat_session())
-            .select_related("sender__user")
+            .select_related("sender__user__profile")
             .prefetch_related("attachments")
         )
         return self.paginated_response(
@@ -321,7 +331,7 @@ class TransferSessionView(ChatSessionObjectMixin, GenericAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         to_agent = get_object_or_404(
-            ChatbotUser.objects.select_related("user"),
+            ChatbotUser.objects.select_related("user__profile"),
             pk=serializer.validated_data["to_agent_id"],
             chatbot=self.get_chatbot(),
             user__is_active=True,
@@ -362,7 +372,9 @@ class IncomingTransferListView(
         )
         expire_pending_transfers(queryset)
         queryset = queryset.select_related(
-            "chat_session", "from_agent__user", "to_agent__user"
+            "chat_session",
+            "from_agent__user__profile",
+            "to_agent__user__profile",
         )
         if query.get("status"):
             queryset = queryset.filter(status=query["status"])

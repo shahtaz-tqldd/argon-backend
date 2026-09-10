@@ -49,9 +49,13 @@ class ChatSessionTransferListQuerySerializer(ChatSessionQuerySerializer):
 
 class ChatbotAgentSerializer(serializers.Serializer):
     id = serializers.UUIDField(read_only=True)
-    user_id = serializers.UUIDField(source="user.id", read_only=True)
     name = serializers.CharField(source="user.name", read_only=True)
     email = serializers.EmailField(source="user.email", read_only=True)
+    avatar_url = serializers.URLField(
+        source="user.profile.avatar_url",
+        read_only=True,
+        default="",
+    )
 
 
 class ChatSessionChatbotSerializer(serializers.Serializer):
@@ -181,8 +185,20 @@ class ChatSessionListSerializer(serializers.ModelSerializer):
     def get_last_message(self, obj):
         if obj.last_message_sender is None:
             return None
+
+        if obj.last_message_sender == ChatMessageSenderType.AI:
+            sender = obj.chatbot.chatbot_name
+        elif obj.last_message_sender == ChatMessageSenderType.AGENT:
+            sender = obj.last_message_agent_name or "agent"
+        elif obj.last_message_sender == ChatMessageSenderType.VISITOR:
+            sender = self.get_user_data(obj).get("name") or "visitor"
+        elif obj.last_message_sender == ChatMessageSenderType.SYSTEM:
+            sender = "system"
+        else:
+            sender = obj.last_message_sender
+
         return {
-            "sender": obj.last_message_sender,
+            "sender": sender,
             "content": obj.last_message_content,
         }
 
