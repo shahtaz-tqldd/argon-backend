@@ -1,8 +1,47 @@
+from datetime import date as Date, datetime
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
-class ConversationAnalysis(BaseModel):
-    summary: str = Field(description="Concise factual summary of the conversation.")
-    lead_score: int = Field(ge=0, le=100, description="Commercial intent score, 0 to 100.")
-    lead_score_reason: str
-    next_steps: list[str] = Field(default_factory=list)
+class TokenUsageSchema(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0  # Includes billable thinking tokens.
+    thinking_tokens: int = 0
+    cached_input_tokens: int = 0
+    total_tokens: int = 0
+
+
+class KnowledgeBaseAgentOutputSchema(BaseModel):
+    content: str = Field(min_length=1)
+    source_ids: list[str] = Field(default_factory=list)
+
+
+class AppointmentSchema(BaseModel):
+    status: Literal["available", "unavailable", "disabled", "invalid", "booking_recorded"]
+    available: bool = False
+    requested_date: Date | None = None
+    date: Date | None = None
+    searched_through: Date | None = None
+    next_search_date: Date | None = None
+    timezone: str | None = None
+    appointment_id: str | None = None
+    appointment_status: str | None = None
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+
+
+class LeadSummaryAgentOutputSchema(BaseModel):
+    score: int = Field(ge=0, le=100, strict=True)
+    summary: str = Field(min_length=1)
+
+
+class AgentResultSchema(KnowledgeBaseAgentOutputSchema):
+    appointment: AppointmentSchema | None = None
+    lead_summary: LeadSummaryAgentOutputSchema | None = None
+
+
+class AgentResponseSchema(BaseModel):
+    result: AgentResultSchema
+    token: TokenUsageSchema = Field(default_factory=TokenUsageSchema)
+    cost: float = 0.0  # Estimated USD from configured model rates.

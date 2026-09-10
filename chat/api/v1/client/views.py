@@ -1,5 +1,8 @@
+from datetime import datetime, time, timedelta
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count, OuterRef, Q, Subquery
+from django.db.models.functions import TruncDate
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -22,6 +25,7 @@ from chat.api.v1.client.serializers import (
     ChatSessionTransferObjectQuerySerializer,
     ChatSessionTransferSerializer,
     ResolveSessionSerializer,
+    SessionOverviewQuerySerializer,
     TransferSessionSerializer,
 )
 from chat.models import ChatMessage, ChatSession, ChatSessionTransfer
@@ -52,6 +56,19 @@ def validation_error_response(exc):
         message=next(iter(exc.messages), "Request failed."),
         status=status.HTTP_400_BAD_REQUEST,
     )
+
+
+def _aware_start(value):
+    return timezone.make_aware(
+        datetime.combine(value, time.min),
+        timezone.get_current_timezone(),
+    )
+
+
+def _percentage_change(current_count, previous_count):
+    if previous_count == 0:
+        return 100.0 if current_count else 0.0
+    return round(((current_count - previous_count) / previous_count) * 100, 2)
 
 
 class PaginatedChatSessionMixin:
@@ -211,6 +228,127 @@ class ChatSessionListView(
         return self.paginated_response(
             queryset,
             message="Chat sessions fetched successfully.",
+        )
+
+
+class SessionStatsAPIView(ChatSessionChatbotMixin, GenericAPIView):
+    """Chatbot session/message totals and rolling 30-day comparisons."""
+
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT
+
+    def get(self, request, *args, **kwargs):
+        chatbot = self.get_chatbot()
+        now = timezone.now()
+        current_period_start = now - timedelta(days=30)
+        previous_period_start = now - timedelta(days=60)
+
+        sessions = ChatSession.objects.filter(chatbot=chatbot)
+        messages = ChatMessage.objects.filter(chat_session__chatbot=chatbot)
+
+        session_counts = sessions.aggregate(
+            total=Count("id"),
+            current=Count(
+                "id",
+                filter=Q(
+                    created_at__gte=current_period_start,
+                    created_at__lt=now,
+                ),
+            ),
+            previous=Count(
+                "id",
+                filter=Q(
+                    created_at__gte=previous_period_start,
+                    created_at__lt=current_period_start,
+                ),
+            ),
+        )
+        message_counts = messages.aggregate(
+            total=Count("id"),
+            current=Count(
+                "id",
+                filter=Q(
+                    created_at__gte=current_period_start,
+                    created_at__lt=now,
+                ),
+            ),
+            previous=Count(
+                "id",
+                filter=Q(
+                    created_at__gte=previous_period_start,
+                    created_at__lt=current_period_start,
+                ),
+            ),
+        )
+
+        return APIResponse.success(
+            data={
+                "total_sessions": session_counts["total"],
+                "total_messages": message_counts["total"],
+                "sessions_last_30_days": session_counts["current"],
+                "messages_last_30_days": message_counts["current"],
+                "session_percentage_change": _percentage_change(
+                    session_counts["current"],
+                    session_counts["previous"],
+                ),
+                "message_percentage_change": _percentage_change(
+                    message_counts["current"],
+                    message_counts["previous"],
+                ),
+            },
+            message="Session stats fetched successfully.",
+        )
+
+
+class SessionOverviewAPIView(ChatSessionChatbotMixin, GenericAPIView):
+    """Daily chatbot session counts for an inclusive date range."""
+
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT
+    query_serializer_class = SessionOverviewQuerySerializer
+
+    def get(self, request, *args, **kwargs):
+        query = self.get_query()
+        today = timezone.localdate()
+        end_date = query.get("end_date", today)
+        start_date = query.get("start_date", end_date - timedelta(days=13))
+
+        if start_date > end_date:
+            raise DjangoValidationError(
+                {"end_date": "end_date must be on or after start_date."}
+            )
+
+        counts = {
+            item["date"]: item["session_count"]
+            for item in ChatSession.objects.filter(
+                chatbot=self.get_chatbot(),
+                created_at__gte=_aware_start(start_date),
+                created_at__lt=_aware_start(end_date + timedelta(days=1)),
+            )
+            .annotate(date=TruncDate("created_at"))
+            .values("date")
+            .annotate(session_count=Count("id"))
+            .order_by("date")
+        }
+
+        points = []
+        current_date = start_date
+        while current_date <= end_date:
+            points.append(
+                {
+                    "date": current_date.isoformat(),
+                    "session_count": counts.get(current_date, 0),
+                }
+            )
+            current_date += timedelta(days=1)
+
+        return APIResponse.success(
+            data={
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "points": points,
+            },
+            message="Session overview fetched successfully.",
         )
 
 

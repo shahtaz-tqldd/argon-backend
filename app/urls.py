@@ -23,7 +23,7 @@ v1_admin_urls = [
     path("base/", include("base.api.v1.admin.urls")),
     path("accounts/", include("accounts.api.v1.admin.urls")),
     path("subscriptions/", include("subscription.api.v1.admin.urls")),
-    # path("analytics/", include("analytics.api.v1.admin.urls")),
+    path("analytics/", include("analytics.api.v1.admin.urls")),
     # path("vector-store/", include("vector_store.api.v1.admin.urls")),
 ]
 

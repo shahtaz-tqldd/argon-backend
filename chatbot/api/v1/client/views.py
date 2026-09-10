@@ -471,7 +471,7 @@ class VisitorMessageCreateView(GenericAPIView):
                 status=status.HTTP_409_CONFLICT,
             )
         ai_queued = False
-        if created:
+        if created and is_ai_reply_enabled(chat_session, chatbot):
             try:
                 dispatch_ai_reply(str(message.id))
                 ai_queued = True

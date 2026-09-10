@@ -28,9 +28,15 @@ transfer_patterns = [
     path("cancel/", views.CancelTransferView.as_view(), name="transfer-cancel"),
 ]
 
+analytics_patterns = [
+    path("stats/", views.SessionStatsAPIView.as_view(), name="session-stats"),
+    path("overview/", views.SessionOverviewAPIView.as_view(), name="session-overview"),
+]
+
 urlpatterns = [
     path("sessions/", include(session_patterns)),
     path("messages/", include(message_patterns)),
     path("takeovers/", include(takeover_patterns)),
     path("transfers/", include(transfer_patterns)),
+    path("analytics/", include(analytics_patterns)),
 ]

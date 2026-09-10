@@ -2,16 +2,15 @@ from app.utils.logger import logger
 
 from celery import shared_task
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 
+from agent.client import AgentClient
+from analytics.choices import AIUsageType
+from analytics.services.ai_usage import record_ai_usage
 from chatbot.models import ChatbotCapacity
 from chat.models import ChatMessage, ChatSession
-from chat.services.ai import GeminiChatService
 from chat.services.events import publish_session_event
 from chat.utils.choices import ChatMessageSenderType, ChatSessionStatus
-
-SUPPORTED_AI_BACKENDS = {"placeholder", "gemini"}
 
 
 def is_ai_reply_enabled(session, chatbot=None):
@@ -20,36 +19,25 @@ def is_ai_reply_enabled(session, chatbot=None):
     if session.assigned_to_id:
         return False
     chatbot = chatbot or session.chatbot
-    return bool(session.ai_enabled and chatbot.ai_enabled)
+    return bool(session.ai_enabled and chatbot.ai_enabled and chatbot.is_active)
 
 
 def _generate_reply(session, visitor_message):
-    backend = settings.CHATBOT_AI_BACKEND
-    if backend == "placeholder":
-        return settings.CHATBOT_PLACEHOLDER_REPLY, {
-            "model": "placeholder",
-            "in_reply_to": str(visitor_message.id),
-        }
-    if backend == "gemini":
-        return GeminiChatService().generate_reply(
-            session,
-            visitor_message,
-        )
-    raise ImproperlyConfigured(
-        "CHATBOT_AI_BACKEND must be one of: "
-        f"{', '.join(sorted(SUPPORTED_AI_BACKENDS))}."
+    response = AgentClient(session.chatbot, session).chat_sync(
+        message=visitor_message.content,
+        user_id=session.visitor_id or str(session.id),
     )
+    result = response["result"]
+    metadata = {
+        "in_reply_to": str(visitor_message.id),
+        "source_ids": result.get("source_ids", []),
+        "appointment": result.get("appointment"),
+    }
+    return result["content"], metadata, response["token"], response["cost"]
 
 
 def dispatch_ai_reply(visitor_message_id):
-    """Run placeholders immediately; queue real model work in Celery."""
-
-    if settings.CHATBOT_AI_BACKEND == "placeholder":
-        result = generate_ai_reply_task.apply(
-            args=[str(visitor_message_id)],
-            throw=True,
-        )
-        return result.successful()
+    """Queue an AgentClient response for a visitor message."""
     generate_ai_reply_task.delay(str(visitor_message_id))
     return True
 
@@ -108,7 +96,7 @@ def generate_ai_reply_task(self, visitor_message_id):
     if not is_ai_reply_enabled(session, chatbot):
         return None
 
-    capacity_reserved = settings.CHATBOT_AI_BACKEND != "placeholder"
+    capacity_reserved = True
     if capacity_reserved and not _reserve_ai_message(chatbot.id):
         publish_session_event(
             session.id,
@@ -125,7 +113,7 @@ def generate_ai_reply_task(self, visitor_message_id):
         {"in_reply_to": str(visitor_message.id)},
     )
     try:
-        content, metadata = _generate_reply(
+        content, metadata, token_usage, cost = _generate_reply(
             session,
             visitor_message,
         )
@@ -146,7 +134,17 @@ def generate_ai_reply_task(self, visitor_message_id):
             )
             message.full_clean()
             message.save()
+            record_ai_usage(
+                chatbot=chatbot,
+                chat_session=locked_session,
+                chat_message=message,
+                usage_type=AIUsageType.CHAT,
+                cost=cost,
+                token_usage=token_usage,
+                model=settings.GEMINI_CHAT_MODEL,
+            )
         return str(message.id)
+    
     except Exception:
         if capacity_reserved:
             _release_ai_message(chatbot.id)

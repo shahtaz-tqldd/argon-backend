@@ -1,5 +1,8 @@
+from datetime import datetime, time, timedelta
+
 from django.contrib.auth import get_user_model
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -483,3 +486,164 @@ class ChatSessionClientAPITests(APITestCase):
         )
         session.refresh_from_db()
         self.assertEqual(session.assigned_to, self.agent)
+
+    @staticmethod
+    def _set_created_at(instance, value):
+        type(instance).objects.filter(pk=instance.pk).update(created_at=value)
+
+    def test_session_stats_returns_chatbot_totals_and_30_day_changes(self):
+        now = timezone.now()
+
+        old_session = ChatSession.objects.create(chatbot=self.chatbot)
+        previous_sessions = [
+            ChatSession.objects.create(chatbot=self.chatbot)
+            for _ in range(2)
+        ]
+        current_session = ChatSession.objects.create(chatbot=self.chatbot)
+        self._set_created_at(old_session, now - timedelta(days=70))
+        for session in previous_sessions:
+            self._set_created_at(session, now - timedelta(days=45))
+        self._set_created_at(current_session, now - timedelta(days=10))
+
+        old_message = ChatMessage.objects.create(
+            chat_session=old_session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="Old",
+        )
+        previous_messages = [
+            ChatMessage.objects.create(
+                chat_session=previous_sessions[0],
+                sender_type=ChatMessageSenderType.VISITOR,
+                content="Previous",
+            )
+            for _ in range(2)
+        ]
+        current_messages = [
+            ChatMessage.objects.create(
+                chat_session=current_session,
+                sender_type=ChatMessageSenderType.VISITOR,
+                content="Current",
+            )
+            for _ in range(3)
+        ]
+        self._set_created_at(old_message, now - timedelta(days=70))
+        for message in previous_messages:
+            self._set_created_at(message, now - timedelta(days=45))
+        for message in current_messages:
+            self._set_created_at(message, now - timedelta(days=10))
+
+        other_chatbot = Chatbot.objects.create(
+            workspace=self.workspace,
+            chatbot_name="Other Bot",
+            created_by=self.user,
+        )
+        ChatSession.objects.create(chatbot=other_chatbot)
+
+        response = self.client.get(
+            reverse("session-stats"),
+            query_params={"chatbot_slug": self.chatbot.slug},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["data"],
+            {
+                "total_sessions": 4,
+                "total_messages": 6,
+                "sessions_last_30_days": 1,
+                "messages_last_30_days": 3,
+                "session_percentage_change": -50.0,
+                "message_percentage_change": 50.0,
+            },
+        )
+
+    def test_session_stats_uses_defined_zero_baseline_percentage(self):
+        session = ChatSession.objects.create(chatbot=self.chatbot)
+        ChatMessage.objects.create(
+            chat_session=session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="Current",
+        )
+
+        response = self.client.get(
+            reverse("session-stats"),
+            query_params={"chatbot_slug": self.chatbot.slug},
+        )
+
+        self.assertEqual(
+            response.data["data"]["session_percentage_change"],
+            100.0,
+        )
+        self.assertEqual(
+            response.data["data"]["message_percentage_change"],
+            100.0,
+        )
+
+    def test_session_overview_defaults_to_14_days_and_fills_empty_days(self):
+        today = timezone.localdate()
+        two_days_ago = today - timedelta(days=2)
+        timestamp = timezone.make_aware(
+            datetime.combine(two_days_ago, time(hour=12)),
+            timezone.get_current_timezone(),
+        )
+        for _ in range(2):
+            session = ChatSession.objects.create(chatbot=self.chatbot)
+            self._set_created_at(session, timestamp)
+
+        response = self.client.get(
+            reverse("session-overview"),
+            query_params={"chatbot_slug": self.chatbot.slug},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["data"]
+        self.assertEqual(
+            data["start_date"],
+            (today - timedelta(days=13)).isoformat(),
+        )
+        self.assertEqual(data["end_date"], today.isoformat())
+        self.assertEqual(len(data["points"]), 14)
+        counts = {
+            point["date"]: point["session_count"]
+            for point in data["points"]
+        }
+        self.assertEqual(counts[two_days_ago.isoformat()], 2)
+        self.assertEqual(counts[(today - timedelta(days=1)).isoformat()], 0)
+
+    def test_session_overview_accepts_an_inclusive_custom_date_range(self):
+        today = timezone.localdate()
+        start_date = today - timedelta(days=4)
+        end_date = today - timedelta(days=2)
+
+        response = self.client.get(
+            reverse("session-overview"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [point["date"] for point in response.data["data"]["points"]],
+            [
+                (start_date + timedelta(days=offset)).isoformat()
+                for offset in range(3)
+            ],
+        )
+
+    def test_session_overview_rejects_an_inverted_date_range(self):
+        today = timezone.localdate()
+
+        response = self.client.get(
+            reverse("session-overview"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "start_date": today.isoformat(),
+                "end_date": (today - timedelta(days=1)).isoformat(),
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("end_date", response.data)

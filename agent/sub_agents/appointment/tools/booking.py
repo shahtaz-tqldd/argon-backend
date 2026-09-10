@@ -1,8 +1,7 @@
-"""Chatbot-scoped availability and transactional appointment creation."""
+"""Chatbot-scoped availability and verification of bookings saved by the UI."""
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 from zoneinfo import ZoneInfo
 
-from django.db import transaction
 from django.utils import timezone
 
 from appointment_booking.models import Appointment, AppointmentBookingConfig
@@ -69,33 +68,60 @@ def booking_schedule(chatbot_id, requested_date):
     return {"status": "ok", "timezone": config.chatbot.timezone, "slots": available_slots(config, day)}
 
 
-@transaction.atomic
-def create_booking(chatbot_id, session_id, starts_at, collected_fields):
-    # Serialize agent bookings for a chatbot, then recheck current availability.
-    config = AppointmentBookingConfig.objects.select_for_update().select_related("chatbot").get(chatbot_id=chatbot_id)
-    if not config.is_enabled:
-        return {"status": "disabled"}
-    start = datetime.fromisoformat(starts_at)
-    if start.tzinfo is None:
-        raise ValueError("starts_at must include a timezone offset.")
-    existing = Appointment.objects.filter(
-        chatbot_id=chatbot_id, starts_at=start, status__in=OPEN_STATUSES,
-        metadata__agent_session_id=str(session_id),
+def find_availability(chatbot_id, requested_date):
+    """Check an inclusive seven-day window, stopping at the first available day."""
+    config = get_config(chatbot_id)
+    if config is None:
+        return {"status": "disabled", "available": False}
+    zone = ZoneInfo(config.chatbot.timezone)
+    now = timezone.now()
+    today = now.astimezone(zone).date()
+    last_allowed = today + timedelta(days=config.maximum_advance_days)
+    try:
+        day = date.fromisoformat(requested_date)
+        if day.isoformat() != requested_date:
+            raise ValueError
+    except (TypeError, ValueError):
+        return {"status": "invalid", "available": False,
+                "message": "Use a valid YYYY-MM-DD date."}
+    base = {"available": False, "requested_date": day.isoformat(),
+            "date": None, "timezone": config.chatbot.timezone}
+    if not today <= day <= last_allowed:
+        return {**base, "status": "invalid",
+                "message": f"Choose a date between {today} and {last_allowed}."}
+    end = min(day + timedelta(days=6), last_allowed)
+    cursor = day
+    while cursor <= end:
+        if available_slots(config, cursor, now=now):
+            return {**base, "status": "available", "available": True,
+                    "date": cursor.isoformat(), "searched_through": cursor.isoformat()}
+        cursor += timedelta(days=1)
+    return {**base, "status": "unavailable", "searched_through": end.isoformat(),
+            "next_search_date": cursor.isoformat() if cursor <= last_allowed else None,
+            "message": ("No availability in this seven-day window. Ask about next week."
+                        if end == day + timedelta(days=6) and cursor <= last_allowed
+                        else "No availability before the booking horizon. Ask for an earlier date.")}
+
+
+def verified_booking(chatbot_id, session_id, appointment_id):
+    """Read a saved booking; tenant and conversation identity are never model inputs."""
+    appointment = Appointment.objects.filter(
+        pk=appointment_id, chatbot_id=chatbot_id,
+        metadata__chat_session_id=str(session_id), status__in=OPEN_STATUSES,
     ).first()
-    if existing:
-        return {"status": "booked", "appointment_id": str(existing.id), "appointment_status": existing.status}
-    day = start.astimezone(ZoneInfo(config.chatbot.timezone)).date()
-    slot = next((s for s in available_slots(config, day) if datetime.fromisoformat(s["starts_at"]) == start), None)
-    if slot is None:
-        return {"status": "unavailable", "message": "Refresh the schedule and choose an available slot."}
-    appointment = Appointment(
-        chatbot_id=chatbot_id, starts_at=start,
-        ends_at=datetime.fromisoformat(slot["ends_at"]),
-        collected_fields=collected_fields,
-        metadata={"agent_session_id": str(session_id)},
-    )
-    appointment.full_clean()
-    appointment.save()
-    return {"status": "booked", "appointment_id": str(appointment.id),
-            "appointment_status": appointment.status, **slot,
-            "message": config.confirmation_message}
+    if appointment is None:
+        raise ValueError("No pending or confirmed booking belongs to this conversation.")
+    return {
+        "status": "booking_recorded", "available": False,
+        "appointment_id": str(appointment.id),
+        "appointment_status": appointment.status,
+        "starts_at": appointment.starts_at.isoformat(),
+        "ends_at": appointment.ends_at.isoformat(),
+    }
+
+
+def conversation_bookings(chatbot_id, session_id):
+    """Read saved appointment outcomes for an admin conversation analysis."""
+    return list(Appointment.objects.filter(
+        chatbot_id=chatbot_id, metadata__chat_session_id=str(session_id),
+    ).order_by("starts_at", "id").values("id", "status", "starts_at", "ends_at"))
