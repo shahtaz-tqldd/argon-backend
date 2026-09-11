@@ -19,6 +19,7 @@ from chat.api.v1.client.serializers import (
     ChatSessionListSerializer,
     ChatSessionListQuerySerializer,
     ChatSessionObjectQuerySerializer,
+    ChatSessionQuerySerializer,
     ChatSessionSerializer,
     ChatSessionTakeoverSerializer,
     ChatSessionTransferListQuerySerializer,
@@ -236,6 +237,7 @@ class SessionStatsAPIView(ChatSessionChatbotMixin, GenericAPIView):
 
     permission_classes = [IsChatbotUser]
     required_chatbot_permission = ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT
+    query_serializer_class = ChatSessionQuerySerializer
 
     def get(self, request, *args, **kwargs):
         chatbot = self.get_chatbot()
