@@ -72,7 +72,6 @@ class LeadCaptureClientAPITests(APITestCase):
                         "type": "text",
                     },
                 ],
-                "intro_message": "Tell us about yourself.",
             },
             format="json",
         )
@@ -88,12 +87,11 @@ class LeadCaptureClientAPITests(APITestCase):
 
         response = self.client.patch(
             self.url("lead-config-update"),
-            {"intro_message": "Updated introduction."},
+            {},
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         config.refresh_from_db()
-        self.assertEqual(config.intro_message, "Updated introduction.")
 
     def test_feature_is_required(self):
         self.capacity.active_features = []

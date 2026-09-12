@@ -14,6 +14,7 @@ from app.utils.storage_fields import R2ImageField
 from chatbot.models import (
     Chatbot,
     ChatbotAllowedOrigin,
+    ChatbotCapacity,
     ChatbotInvitation,
     ChatbotUser,
     ChatbotWidgetSettings,
@@ -35,6 +36,7 @@ from chatbot.utils.validation import (
     validate_unique_chatbot_name,
 )
 from lead_capture.models import LeadCaptureConfig
+from subscription.choices import PlanFeature
 from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
 from workspace.models import Workspace, WorkspaceUser
 
@@ -393,6 +395,100 @@ class ChatbotDetailSerializer(ChatbotBaseSerializer):
     """Serialize the complete details of a chatbot."""
 
 
+class ChatbotBaseWorkspaceSerializer(serializers.ModelSerializer):
+    """Serialize the workspace identity used by the chatbot shell."""
+
+    class Meta:
+        model = Workspace
+        fields = ("name", "slug")
+        read_only_fields = fields
+
+
+class ChatbotCapacitySerializer(serializers.ModelSerializer):
+    """Serialize the cached limits, usage, and entitlements for a chatbot."""
+
+    class Meta:
+        model = ChatbotCapacity
+        fields = (
+            "ai_message_limit",
+            "current_ai_message_count",
+            "file_size_limit_bytes",
+            "current_file_size_bytes",
+            "knowledge_chunk_limit",
+            "current_knowledge_chunk_count",
+            "active_features",
+        )
+        read_only_fields = fields
+
+
+class ChatbotCurrentSubscriptionPlanSerializer(serializers.Serializer):
+    """Serialize the plan and billing state for the current subscription."""
+
+    name = serializers.CharField(source="get_plan_name", read_only=True)
+    is_free = serializers.BooleanField(source="is_free_plan", read_only=True)
+    billing_interval = serializers.CharField(
+        source="get_billing_interval",
+        read_only=True,
+    )
+    status = serializers.CharField(read_only=True)
+    current_period_start = serializers.DateTimeField(read_only=True)
+    current_period_end = serializers.DateTimeField(read_only=True)
+    cancel_at_period_end = serializers.BooleanField(read_only=True)
+
+
+class ChatbotBaseResponseSerializer(serializers.ModelSerializer):
+    """Serialize chatbot identity and subscription-backed capabilities."""
+
+    workspace = ChatbotBaseWorkspaceSerializer(read_only=True)
+    capacity = ChatbotCapacitySerializer(read_only=True)
+    features = serializers.SerializerMethodField()
+    current_subscription_plan = serializers.SerializerMethodField()
+
+    def get_features(self, obj):
+        capacity = getattr(obj, "capacity", None)
+
+        def enabled(feature):
+            return bool(capacity and capacity.has_feature(feature))
+
+        return {
+            "knowledge_base_enabled": enabled(PlanFeature.KNOWLEDGE_BASE),
+            "human_handoff_enabled": enabled(PlanFeature.HUMAN_HANDOFF),
+            "appointment_booking_enabled": enabled(
+                PlanFeature.APPOINTMENT_BOOKING
+            ),
+            "lead_captures_enabled": enabled(PlanFeature.LEAD_CAPTURE),
+        }
+
+    def get_current_subscription_plan(self, obj):
+        subscriptions = getattr(obj, "open_subscriptions", None)
+        if subscriptions is None:
+            subscription = obj.subscriptions.filter(
+                status__in=OPEN_SUBSCRIPTION_STATUSES,
+            ).first()
+        else:
+            subscription = subscriptions[0] if subscriptions else None
+        if subscription is None:
+            return None
+        return ChatbotCurrentSubscriptionPlanSerializer(subscription).data
+
+    class Meta:
+        model = Chatbot
+        fields = (
+            "workspace",
+            "chatbot_name",
+            "slug",
+            "language",
+            "timezone",
+            "features",
+            "capacity",
+            "current_subscription_plan",
+            "ai_enabled",
+            "logo",
+            "status",
+        )
+        read_only_fields = fields
+
+
 
 class ChatbotWidgetSettingsSerializer(serializers.ModelSerializer):
     """Serialize the configuration used to render a chatbot widget."""
@@ -488,7 +584,6 @@ class PublicLeadCaptureConfigSerializer(serializers.ModelSerializer):
             "is_enabled",
             "collectable_fields",
             "auto_collect",
-            "intro_message",
             "require_consent",
             "consent_message",
         )

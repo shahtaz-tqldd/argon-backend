@@ -34,6 +34,7 @@ class ChatSessionListQuerySerializer(ChatSessionQuerySerializer):
         required=False,
     )
     requires_attention = serializers.BooleanField(required=False)
+    is_recently_active = serializers.BooleanField(required=False)
 
 
 class SessionOverviewQuerySerializer(ChatSessionQuerySerializer):
@@ -171,6 +172,7 @@ class ChatSessionListSerializer(serializers.ModelSerializer):
             "status",
             "assigned_to",
             "requires_attention",
+            "attention_reason",
             "last_activity_at",
         )
         read_only_fields = fields

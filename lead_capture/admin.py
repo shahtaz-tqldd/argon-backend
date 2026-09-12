@@ -35,7 +35,6 @@ class LeadCaptureConfigAdmin(admin.ModelAdmin):
             "Consent & Messaging",
             {
                 "fields": (
-                    "intro_message",
                     "require_consent",
                     "consent_message",
                 ),

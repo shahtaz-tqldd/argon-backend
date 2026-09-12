@@ -11,6 +11,7 @@ from chatbot.models import Chatbot
 from chat.models import ChatMessage, ChatSession
 from chat.tasks import generate_ai_reply_task
 from chat.utils.choices import ChatMessageSenderType
+from notification.models import NotificationRecipientType, NotificationType
 from workspace.models import Workspace
 
 
@@ -102,6 +103,47 @@ class GenerateAIReplyTaskTests(TestCase):
         self.assertEqual(usage.cached_input_tokens, 5)
         self.assertEqual(usage.cost, Decimal("0.00010500"))
         self.assertEqual(usage.model, "gemini-2.5-flash")
+
+    @patch("chat.tasks.create_notification")
+    @patch("chat.tasks.AgentClient")
+    def test_escalation_creates_attention_notification(
+        self,
+        agent_client,
+        create_notification,
+    ):
+        escalation = {
+            "requires_attention": True,
+            "escalation_reason": "Visitor explicitly requested a human.",
+        }
+        agent_client.return_value.chat_sync.return_value = {
+            "result": {
+                "content": "I have requested human assistance.",
+                "source_ids": [],
+                "appointment": None,
+                "lead_score": None,
+                "escalation": escalation,
+            },
+            "token": {"total_tokens": 12},
+            "cost": 0.0001,
+        }
+
+        generate_ai_reply_task.apply(
+            args=[str(self.visitor_message.id)],
+            throw=True,
+        )
+
+        create_notification.assert_called_once_with(
+            recipient_type=NotificationRecipientType.CHATBOT,
+            notification_type=NotificationType.AI_NOTIFICATION,
+            chatbot=self.chatbot,
+            title="Attention required",
+            message="Visitor explicitly requested a human.",
+            metadata={
+                "chat_session_id": str(self.session.id),
+                "escalation_reason": "Visitor explicitly requested a human.",
+                "source": "chat_agent",
+            },
+        )
 
     @patch("chat.tasks.AgentClient")
     def test_disabled_session_does_not_call_agent(self, agent_client):

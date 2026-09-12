@@ -13,6 +13,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from chatbot.models import (
     Chatbot,
     ChatbotAllowedOrigin,
+    ChatbotCapacity,
     ChatbotInvitation,
     ChatbotUser,
 )
@@ -24,6 +25,7 @@ from lead_capture.models import Lead, LeadCaptureConfig
 from subscription.choices import (
     BillingInterval,
     PaymentProvider,
+    PlanFeature,
     RenewalMode,
     SubscriptionStatus,
 )
@@ -57,6 +59,83 @@ class ChatbotClientAPITests(APITestCase):
         )
         ChatbotUser.objects.create(chatbot=self.chatbot, user=self.member)
         self.client.force_authenticate(self.owner)
+
+    def test_chatbot_base_returns_subscription_backed_capabilities(self):
+        capacity = ChatbotCapacity.objects.get(chatbot=self.chatbot)
+        capacity.active_features = [
+            PlanFeature.KNOWLEDGE_BASE,
+            PlanFeature.HUMAN_HANDOFF,
+            PlanFeature.APPOINTMENT_BOOKING,
+            PlanFeature.LEAD_CAPTURE,
+        ]
+        capacity.save(update_fields=["active_features", "updated_at"])
+        subscription = self.chatbot.subscriptions.get(
+            status=SubscriptionStatus.ACTIVE
+        )
+
+        response = self.client.get(
+            reverse("chatbot-base"),
+            {"chatbot": self.chatbot.slug},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["message"], "Chatbot fetched successfully.")
+        self.assertEqual(
+            response.data["data"],
+            {
+                "workspace": {
+                    "name": self.workspace.name,
+                    "slug": self.workspace.slug,
+                },
+                "chatbot_name": self.chatbot.chatbot_name,
+                "slug": self.chatbot.slug,
+                "language": self.chatbot.language,
+                "timezone": self.chatbot.timezone,
+                "features": {
+                    "knowledge_base_enabled": True,
+                    "human_handoff_enabled": True,
+                    "appointment_booking_enabled": True,
+                    "lead_captures_enabled": True,
+                },
+                "capacity": {
+                    "ai_message_limit": capacity.ai_message_limit,
+                    "current_ai_message_count": capacity.current_ai_message_count,
+                    "file_size_limit_bytes": capacity.file_size_limit_bytes,
+                    "current_file_size_bytes": capacity.current_file_size_bytes,
+                    "knowledge_chunk_limit": capacity.knowledge_chunk_limit,
+                    "current_knowledge_chunk_count": (
+                        capacity.current_knowledge_chunk_count
+                    ),
+                    "active_features": capacity.active_features,
+                },
+                "current_subscription_plan": {
+                    "name": subscription.get_plan_name(),
+                    "is_free": subscription.is_free_plan(),
+                    "billing_interval": subscription.get_billing_interval(),
+                    "status": subscription.status,
+                    "current_period_start": subscription.current_period_start,
+                    "current_period_end": subscription.current_period_end,
+                    "cancel_at_period_end": subscription.cancel_at_period_end,
+                },
+                "ai_enabled": self.chatbot.ai_enabled,
+                "logo": self.chatbot.logo,
+                "status": self.chatbot.status,
+            },
+        )
+
+    def test_chatbot_base_rejects_non_member(self):
+        outsider = User.objects.create_user(
+            email="outsider@example.com",
+            password="StrongPass123!",
+        )
+        self.client.force_authenticate(outsider)
+
+        response = self.client.get(
+            reverse("chatbot-base"),
+            {"chatbot": self.chatbot.slug},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_public_chatbot_returns_widget_configuration_by_public_key(self):
         widget_settings = self.chatbot.widget_settings
@@ -95,7 +174,6 @@ class ChatbotClientAPITests(APITestCase):
         lead_config = LeadCaptureConfig.objects.create(
             chatbot=self.chatbot,
             is_enabled=True,
-            intro_message="Tell us about yourself.",
             require_consent=True,
             consent_message="May we save your details?",
         )
@@ -117,7 +195,6 @@ class ChatbotClientAPITests(APITestCase):
                 "is_enabled": True,
                 "collectable_fields": lead_config.collectable_fields,
                 "auto_collect": True,
-                "intro_message": "Tell us about yourself.",
                 "require_consent": True,
                 "consent_message": "May we save your details?",
             },

@@ -11,7 +11,7 @@ from agent.utils.schema import KnowledgeBaseAgentOutputSchema
 
 def appointment_agent(chatbot) -> LlmAgent:
     async def instruction(context):
-        confirmation = context.state.get("temp:booking_confirmation")
+        confirmation = context.state.get("current_booking_confirmation")
         return (
             business_instruction(chatbot)
             + load_sub_agent_instruction("appointment")

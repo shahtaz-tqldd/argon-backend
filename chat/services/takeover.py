@@ -9,7 +9,6 @@ from chat.models import (
 )
 from chat.services.events import publish_session_event
 from chat.utils.choices import (
-    ChatSessionAttentionReason,
     ChatSessionStatus,
     ChatSessionTakeoverReleaseReason,
     ChatSessionTransferStatus,
@@ -402,7 +401,7 @@ def reopen_session(chat_session, agent):
         chat_session.resolved_at = None
         chat_session.closed_at = None
         chat_session.requires_attention = True
-        chat_session.attention_reason = ChatSessionAttentionReason.OTHER
+        chat_session.attention_reason = "Session reopened and requires human review."
         chat_session.attention_requested_at = now
         chat_session.ai_enabled = chat_session.chatbot.ai_enabled
         chat_session.save(

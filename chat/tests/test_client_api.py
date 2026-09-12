@@ -228,6 +228,88 @@ class ChatSessionClientAPITests(APITestCase):
             [str(newest_session.id), str(older_session.id)],
         )
 
+    def test_session_list_filters_by_recent_visitor_activity(self):
+        now = timezone.now()
+        recent_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            last_visitor_activity_at=now - timedelta(minutes=5),
+            requires_attention=True,
+            attention_reason="Visitor requested human support.",
+            attention_requested_at=now - timedelta(minutes=4),
+        )
+        ChatSession.objects.create(
+            chatbot=self.chatbot,
+            last_visitor_activity_at=now - timedelta(minutes=11),
+        )
+        ChatSession.objects.create(chatbot=self.chatbot)
+
+        unfiltered_response = self.client.get(
+            reverse("chat-session-list"),
+            query_params={"chatbot_slug": self.chatbot.slug},
+        )
+        false_filter_response = self.client.get(
+            reverse("chat-session-list"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "is_recently_active": False,
+            },
+        )
+        response = self.client.get(
+            reverse("chat-session-list"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "is_recently_active": True,
+            },
+        )
+
+        self.assertEqual(unfiltered_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(unfiltered_response.data["meta"]["count"], 3)
+        self.assertEqual(false_filter_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(false_filter_response.data["meta"]["count"], 3)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 1)
+        self.assertEqual(response.data["data"][0]["id"], str(recent_session.id))
+
+    def test_session_list_only_filters_attention_when_true(self):
+        now = timezone.now()
+        attention_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            requires_attention=True,
+            attention_reason="Visitor requested human support.",
+            attention_requested_at=now,
+        )
+        regular_session = ChatSession.objects.create(chatbot=self.chatbot)
+
+        for requires_attention in (None, False):
+            query_params = {"chatbot_slug": self.chatbot.slug}
+            if requires_attention is not None:
+                query_params["requires_attention"] = requires_attention
+            response = self.client.get(
+                reverse("chat-session-list"),
+                query_params=query_params,
+            )
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(
+                {item["id"] for item in response.data["data"]},
+                {str(attention_session.id), str(regular_session.id)},
+            )
+
+        filtered_response = self.client.get(
+            reverse("chat-session-list"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "requires_attention": True,
+            },
+        )
+
+        self.assertEqual(filtered_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(filtered_response.data["meta"]["count"], 1)
+        self.assertEqual(
+            filtered_response.data["data"][0]["id"],
+            str(attention_session.id),
+        )
+
     def test_session_detail_returns_nested_chatbot(self):
         self.chatbot.logo = "https://example.com/support-bot.png"
         self.chatbot.save(update_fields=("logo", "updated_at"))

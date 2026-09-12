@@ -13,7 +13,6 @@ from pydantic import Field
 
 from agent.client import AgentClient
 from agent.sub_agents.appointment.tools import booking
-from agent.sub_agents.lead_summary.agent import lead_summary_agent
 
 
 class ScriptedModel(BaseLlm):
@@ -47,7 +46,10 @@ def call(name, **args):
 
 
 def answer(content="Hello", source_ids=None):
-    return call("set_model_response", content=content, source_ids=source_ids or [])
+    return response(types.Part.from_text(text=json.dumps({
+        "content": content,
+        "source_ids": source_ids or [],
+    })))
 
 
 def inline_async(func, **kwargs):
@@ -63,7 +65,12 @@ class ClientTests(IsolatedAsyncioTestCase):
     def setUp(self):
         self.enterContext(override_settings(GEMINI_CHAT_MODEL="gemini-2.5-flash",
                           GEMINI_INPUT_COST_PER_MILLION=0.3, GEMINI_OUTPUT_COST_PER_MILLION=2.5))
-        for module in ["agent.client", "agent.sub_agents.knowledge.tools", "agent.sub_agents.appointment.tools.availability"]:
+        for module in [
+            "agent.client",
+            "agent.sub_agents.knowledge.tools",
+            "agent.sub_agents.appointment.tools.availability",
+            "agent.tools.conversation",
+        ]:
             self.enterContext(patch(f"{module}.sync_to_async", side_effect=inline_async))
         self.bot = SimpleNamespace(
             id="bot-1", chatbot_name="Assistant", business_name="Business",
@@ -104,14 +111,20 @@ class ClientTests(IsolatedAsyncioTestCase):
                                                 user_id="bot-1:visitor", session_id="session-1")
         self.assertIsNotNone(session)
 
-    def test_coordinator_has_only_specialist_delegations(self):
+    def test_app_and_coordinator_configuration(self):
         root = self.client.chat_agent
         self.assertEqual(root.mode, "chat")
+        self.assertIs(self.client.runner.app, self.client.app)
+        self.assertIs(self.client.app.root_agent, root)
+        self.assertEqual(self.client.app.events_compaction_config.compaction_interval, 3)
+        self.assertEqual(self.client.app.events_compaction_config.overlap_size, 1)
+        self.assertEqual(self.client.app.context_cache_config.min_tokens, 2048)
         self.assertEqual([agent.name for agent in root.sub_agents],
                          ["knowledge_agent", "appointment_agent"])
         self.assertTrue(all(agent.mode == "single_turn" for agent in root.sub_agents))
         self.assertEqual([tool.name for tool in root.tools],
-                         ["knowledge_agent", "appointment_agent"])
+                         ["record_lead_score", "request_human_escalation",
+                          "knowledge_agent", "appointment_agent"])
         self.assertEqual([tool.name for tool in root.sub_agents[0].tools], ["search_knowledge"])
         self.assertEqual([tool.name for tool in root.sub_agents[1].tools], ["find_appointment_availability"])
 
@@ -201,30 +214,48 @@ class ClientTests(IsolatedAsyncioTestCase):
         await self.client.chat("Is my booking confirmed?")
         self.assertIn("Backend-verified booking event for this turn: null", model.requests[4].config.system_instruction)
         names = [tool.name for tool in self.client.chat_agent.tools]
-        self.assertEqual(names, ["knowledge_agent", "appointment_agent"])
+        self.assertEqual(names, ["record_lead_score", "request_human_escalation",
+                                 "knowledge_agent", "appointment_agent"])
 
-    async def test_lead_analysis_uses_full_django_history_in_isolated_runner(self):
-        rows = [dict(id=str(i), sender_type="visitor" if i % 2 else "ai", content=f"Message {i}",
-                     created_at="2026-06-16") for i in range(40)]
-        self.conversation.messages.order_by.return_value.values.return_value = rows
-        model = ScriptedModel(model="gemini-2.5-flash", responses=[response(
-            types.Part.from_text(text=json.dumps(dict(score=62, summary="Interested; timing unclear."))))])
-        agent = lead_summary_agent(self.bot)
-        agent.model = model
-        with patch("agent.client.lead_summary_agent", return_value=agent), patch("agent.client.conversation_bookings", return_value=[]) as bookings:
-            result = await self.client.generate_lead_summary(user_id="admin")
-        self.assertEqual(result["result"]["lead_summary"]["score"], 62)
-        # Workflow input can carry ADK's context preamble. The full JSON payload
-        # must still reach the analysis agent unchanged.
-        transcript_part = next(p.text for c in model.requests[0].contents for p in c.parts
-                               if p.text and '{"messages":' in p.text)
-        sent = json.loads(transcript_part[transcript_part.index('{"messages":'):])
-        self.assertEqual(len(sent["messages"]), 40)
-        self.assertEqual(sent["messages"][0]["content"], "Message 0")
-        self.assertEqual(sent["messages"][-1]["content"], "Message 39")
-        sessions = await self.service.list_sessions(app_name=self.client.app_name)
-        self.assertEqual(sessions.sessions, [])
-        self.assertEqual(agent.tools, [])
+    async def test_agent_records_lead_score_during_conversation(self):
+        self.script(
+            call(
+                "record_lead_score",
+                score=82,
+                summary="Needs implementation this month and requested a booking.",
+            ),
+            answer("I can help you schedule that."),
+        )
+        payload = {
+            "score": 82,
+            "summary": "Needs implementation this month and requested a booking.",
+            "recorded": True,
+        }
+        with patch("agent.tools.conversation._record_lead_score", return_value=payload) as record:
+            result = await self.client.chat("We need this this month. Can we book a call?")
+        record.assert_called_once_with(
+            "bot-1",
+            "session-1",
+            82,
+            "Needs implementation this month and requested a booking.",
+        )
+        self.assertEqual(result["result"]["lead_score"], payload)
+
+    async def test_agent_escalation_is_returned_to_caller(self):
+        self.script(
+            call(
+                "request_human_escalation",
+                escalation_reason="Visitor explicitly asked to speak with a person.",
+            ),
+            answer("I have requested human assistance."),
+        )
+        payload = {
+            "requires_attention": True,
+            "escalation_reason": "Visitor explicitly asked to speak with a person.",
+        }
+        with patch("agent.tools.conversation._request_human_escalation", return_value=payload):
+            result = await self.client.chat("Let me speak with a human")
+        self.assertEqual(result["result"]["escalation"], payload)
 
     async def test_invalid_chat_output_fails_closed(self):
         self.script(response(types.Part.from_text(text="not JSON")))
@@ -239,20 +270,6 @@ class ClientTests(IsolatedAsyncioTestCase):
                 await self.client.confirm_booking("appt-1")
         session = await self.client._get_or_create_session("bot-1:session-1")
         self.assertEqual(session.state["booking_confirmations"]["appt-1"], payload)
-
-    async def test_invalid_lead_score_is_rejected(self):
-        agent = lead_summary_agent(self.bot)
-        agent.model = ScriptedModel(model="gemini-2.5-flash", responses=[response(
-            types.Part.from_text(text='{"score": 101, "summary": "Unsupported score"}'))])
-        with patch("agent.client.lead_summary_agent", return_value=agent), patch.object(self.client, "_transcript", return_value='{"messages": []}'):
-            with self.assertRaisesRegex(RuntimeError, "ValidationError|invalid lead summary"):
-                await self.client.generate_lead_summary()
-
-    def test_analysis_requires_visitor_evidence(self):
-        self.conversation.messages.order_by.return_value.values.return_value = [
-            dict(sender_type="ai", content="Hello")]
-        with self.assertRaisesRegex(ValueError, "visitor message"):
-            self.client._transcript()
 
     async def test_missing_knowledge_returns_empty_citations(self):
         self.script(call("knowledge_agent", request="Find hours"),

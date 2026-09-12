@@ -20,6 +20,7 @@ from app.utils.permission import IsChatbotUser
 from app.utils.response import APIResponse
 from chatbot.api.v1.client.serializers import (
     AcceptChatbotInvitationSerializer,
+    ChatbotBaseResponseSerializer,
     ChatbotCreateSerializer,
     ChatbotDeleteSerializer,
     ChatbotDetailSerializer,
@@ -262,6 +263,46 @@ class ChatbotDetailView(ChatbotObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     serializer_class = ChatbotDetailSerializer
     allow_workspace_admin = True
+
+    def get(self, request, *args, **kwargs):
+        return APIResponse.success(
+            data=self.get_serializer(self.get_chatbot()).data,
+            message="Chatbot fetched successfully.",
+        )
+
+
+class ChatbotBaseAPIView(ChatbotObjectMixin, GenericAPIView):
+    """Return chatbot identity and its subscription-backed capabilities."""
+
+    permission_classes = [IsChatbotUser]
+    serializer_class = ChatbotBaseResponseSerializer
+    allow_workspace_admin = True
+
+    def get_chatbot(self):
+        if self._chatbot is None:
+            query_serializer = ChatbotQuerySerializer(
+                data=self.request.query_params,
+            )
+            query_serializer.is_valid(raise_exception=True)
+            self._chatbot = get_object_or_404(
+                Chatbot.objects.select_related("workspace", "capacity")
+                .prefetch_related(
+                    Prefetch(
+                        "subscriptions",
+                        queryset=ChatbotSubscription.objects.filter(
+                            status__in=OPEN_SUBSCRIPTION_STATUSES,
+                        ),
+                        to_attr="open_subscriptions",
+                    )
+                )
+                .filter(
+                    is_deleted=False,
+                    workspace__is_active=True,
+                ),
+                slug=query_serializer.validated_data["chatbot"],
+            )
+            self.check_object_permissions(self.request, self._chatbot)
+        return self._chatbot
 
     def get(self, request, *args, **kwargs):
         return APIResponse.success(

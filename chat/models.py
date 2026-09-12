@@ -12,7 +12,6 @@ from chat.utils.choices import (
     ChatMessageStatus,
     ChatSessionChannel,
     ChatSessionStatus,
-    ChatSessionAttentionReason,
     ChatSessionTakeoverReleaseReason,
     ChatSessionTransferStatus,
 )
@@ -55,9 +54,7 @@ class ChatSession(BaseMinModel):
 
     # Human attention
     requires_attention = models.BooleanField(default=False)
-    attention_reason = models.CharField(
-        max_length=30,
-        choices=ChatSessionAttentionReason.choices,
+    attention_reason = models.TextField(
         blank=True,
         default="",
     )

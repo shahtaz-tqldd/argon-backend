@@ -31,14 +31,21 @@ class AppointmentSchema(BaseModel):
     ends_at: datetime | None = None
 
 
-class LeadSummaryAgentOutputSchema(BaseModel):
+class LeadScoreSchema(BaseModel):
     score: int = Field(ge=0, le=100, strict=True)
-    summary: str = Field(min_length=1)
+    summary: str = Field(min_length=1, max_length=240)
+    recorded: bool = False
+
+
+class EscalationSchema(BaseModel):
+    requires_attention: bool = True
+    escalation_reason: str = Field(min_length=1, max_length=500)
 
 
 class AgentResultSchema(KnowledgeBaseAgentOutputSchema):
     appointment: AppointmentSchema | None = None
-    lead_summary: LeadSummaryAgentOutputSchema | None = None
+    lead_score: LeadScoreSchema | None = None
+    escalation: EscalationSchema | None = None
 
 
 class AgentResponseSchema(BaseModel):

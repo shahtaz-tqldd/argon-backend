@@ -18,19 +18,6 @@ class ChatSessionStatus(models.TextChoices):
     CLOSED = "closed", "Closed"
 
 
-class ChatSessionAttentionReason(models.TextChoices):
-    """
-    Why human attention was requested.
-
-    Blank value on ChatSession means no attention is currently required.
-    """
-    HUMAN_REQUESTED = "human_requested", "Human Requested"
-    AI_UNCERTAIN = "ai_uncertain", "AI Unable to Answer"
-    TOOL_FAILED = "tool_failed", "Tool Failed"
-    ESCALATED = "escalated", "Escalated"
-    OTHER = "other", "Other"
-
-
 class ChatMessageSenderType(models.TextChoices):
     VISITOR = "visitor", "Visitor"
     AI = "ai", "AI"

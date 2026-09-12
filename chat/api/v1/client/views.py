@@ -217,9 +217,12 @@ class ChatSessionListView(
             queryset = queryset.filter(assigned_to__isnull=False)
         elif assignment == "unassigned":
             queryset = queryset.filter(assigned_to__isnull=True)
-        if "requires_attention" in query:
+        if query.get("requires_attention"):
+            queryset = queryset.filter(requires_attention=True)
+        if query.get("is_recently_active"):
+            recently_active_since = timezone.now() - timedelta(minutes=10)
             queryset = queryset.filter(
-                requires_attention=query["requires_attention"]
+                last_visitor_activity_at__gte=recently_active_since
             )
         queryset = queryset.order_by(
             "-last_activity_at",

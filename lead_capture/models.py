@@ -40,7 +40,6 @@ class LeadCaptureConfig(BaseModel):
     )
 
     # Optional message shown before asking for information
-    intro_message = models.TextField(blank=True, default="")
     require_consent = models.BooleanField(default=False)
     consent_message = models.TextField(blank=True, default="")
 

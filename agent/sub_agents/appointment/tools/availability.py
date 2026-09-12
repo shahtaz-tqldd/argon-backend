@@ -20,7 +20,7 @@ def create_appointment_tools(chatbot):
         if previous is not None:
             return previous
 
-        if tool_context.state.get("temp:booking_confirmation"):
+        if tool_context.state.get("current_booking_confirmation"):
             return {
                 "status": "disabled", 
                 "available": False,

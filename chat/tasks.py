@@ -11,6 +11,8 @@ from chatbot.models import ChatbotCapacity
 from chat.models import ChatMessage, ChatSession
 from chat.services.events import publish_session_event
 from chat.utils.choices import ChatMessageSenderType, ChatSessionStatus
+from notification.models import NotificationRecipientType, NotificationType
+from notification.services import create_notification
 
 
 def is_ai_reply_enabled(session, chatbot=None):
@@ -33,7 +35,17 @@ def _generate_reply(session, visitor_message):
         "source_ids": result.get("source_ids", []),
         "appointment": result.get("appointment"),
     }
-    return result["content"], metadata, response["token"], response["cost"]
+    agent_actions = {
+        "lead_score": result.get("lead_score"),
+        "escalation": result.get("escalation"),
+    }
+    return (
+        result["content"],
+        metadata,
+        response["token"],
+        response["cost"],
+        agent_actions,
+    )
 
 
 def dispatch_ai_reply(visitor_message_id):
@@ -113,7 +125,7 @@ def generate_ai_reply_task(self, visitor_message_id):
         {"in_reply_to": str(visitor_message.id)},
     )
     try:
-        content, metadata, token_usage, cost = _generate_reply(
+        content, metadata, token_usage, cost, agent_actions = _generate_reply(
             session,
             visitor_message,
         )
@@ -134,6 +146,20 @@ def generate_ai_reply_task(self, visitor_message_id):
             )
             message.full_clean()
             message.save()
+            escalation = agent_actions.get("escalation")
+            if escalation:
+                create_notification(
+                    recipient_type=NotificationRecipientType.CHATBOT,
+                    notification_type=NotificationType.AI_NOTIFICATION,
+                    chatbot=chatbot,
+                    title="Attention required",
+                    message=escalation["escalation_reason"],
+                    metadata={
+                        "chat_session_id": str(locked_session.id),
+                        "escalation_reason": escalation["escalation_reason"],
+                        "source": "chat_agent",
+                    },
+                )
             record_ai_usage(
                 chatbot=chatbot,
                 chat_session=locked_session,
@@ -144,7 +170,7 @@ def generate_ai_reply_task(self, visitor_message_id):
                 model=settings.GEMINI_CHAT_MODEL,
             )
         return str(message.id)
-    
+
     except Exception:
         if capacity_reserved:
             _release_ai_message(chatbot.id)
