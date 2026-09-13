@@ -70,7 +70,10 @@ def get_valid_chatbot_invitation(token):
 
 
 def _deliver_chatbot_invitation(*, invitation, token):
-    query = urlencode({"token": token, "email": invitation.email})
+    query_params = {"token": token, "email": invitation.email}
+    if not User.objects.filter(email__iexact=invitation.email).exists():
+        query_params["new_user"] = "true"
+    query = urlencode(query_params)
     invitation_link = (
         f"{settings.USER_FRONTEND_URL.rstrip('/')}"
         f"{settings.CHATBOT_INVITATION_PATH}?{query}"

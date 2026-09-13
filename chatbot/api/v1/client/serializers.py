@@ -2,13 +2,16 @@ from uuid import UUID, uuid4
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import (
     ObjectDoesNotExist,
     ValidationError as DjangoValidationError,
 )
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from rest_framework import serializers
 
+from accounts.api.v1.client.serializers import build_auth_token_payload
+from accounts.choices import AccountProvider
 from app.services.r2 import delete_image, schedule_delete_image, upload_image
 from app.utils.storage_fields import R2ImageField
 from appointment_booking.models import AppointmentBookingConfig
@@ -1007,6 +1010,18 @@ class InviteChatbotMemberSerializer(serializers.Serializer):
 
 class AcceptChatbotInvitationSerializer(serializers.Serializer):
     token = serializers.CharField(write_only=True)
+    name = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=False,
+        max_length=50,
+    )
+    password = serializers.CharField(
+        write_only=True,
+        required=False,
+        min_length=8,
+    )
+    confirm_password = serializers.CharField(write_only=True, required=False)
 
     def validate(self, attrs):
         try:
@@ -1014,18 +1029,94 @@ class AcceptChatbotInvitationSerializer(serializers.Serializer):
         except InvalidChatbotInvitation as exc:
             raise serializers.ValidationError({"token": str(exc)}) from exc
 
-        user = self.context["request"].user
-        if user.email.strip().casefold() != invitation.email.strip().casefold():
-            raise serializers.ValidationError(
-                {"token": "This invitation was sent to a different email address."}
-            )
+        invited_user = User.objects.filter(email__iexact=invitation.email).first()
+        request_user = self.context["request"].user
+        if invited_user is not None:
+            if (
+                request_user.is_authenticated
+                and request_user.email.strip().casefold()
+                != invitation.email.strip().casefold()
+            ):
+                raise serializers.ValidationError(
+                    {
+                        "token": (
+                            "This invitation was sent to a different email address."
+                        )
+                    }
+                )
+            if not invited_user.is_active:
+                raise serializers.ValidationError(
+                    {"token": "The account for this invitation is inactive."}
+                )
+            if (
+                not request_user.is_authenticated
+                or request_user.pk != invited_user.pk
+            ):
+                raise serializers.ValidationError(
+                    {
+                        "token": (
+                            "Sign in with the invited account before accepting "
+                            "this invitation."
+                        )
+                    }
+                )
+        else:
+            errors = {}
+            for field in ("name", "password", "confirm_password"):
+                if not attrs.get(field):
+                    errors[field] = "This field is required for a new user."
+            if errors:
+                raise serializers.ValidationError(errors)
+            if attrs["password"] != attrs["confirm_password"]:
+                raise serializers.ValidationError(
+                    {"confirm_password": "Passwords do not match."}
+                )
+            try:
+                validate_password(
+                    attrs["password"],
+                    User(email=invitation.email, name=attrs["name"]),
+                )
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError(
+                    {"password": list(exc.messages)}
+                ) from exc
+
+        attrs["invitation"] = invitation
+        attrs["invited_user"] = invited_user
         return attrs
 
+    @transaction.atomic
     def create(self, validated_data):
+        invitation = validated_data["invitation"]
+        user = validated_data["invited_user"]
+        self.created_new_user = user is None
+        if user is None:
+            try:
+                user = User.objects.create_user(
+                    email=invitation.email,
+                    name=validated_data["name"],
+                    password=validated_data["password"],
+                    provider=AccountProvider.PASSWORD,
+                    is_email_verified=True,
+                )
+            except IntegrityError as exc:
+                raise serializers.ValidationError(
+                    {
+                        "token": (
+                            "An account for this invitation already exists. "
+                            "Please sign in and try again."
+                        )
+                    }
+                ) from exc
         try:
-            return accept_chatbot_invitation(
+            membership = accept_chatbot_invitation(
                 token=validated_data["token"],
-                user=self.context["request"].user,
+                user=user,
             )
         except InvalidChatbotInvitation as exc:
             raise serializers.ValidationError({"token": str(exc)}) from exc
+        self.accepted_user = user
+        self.auth_tokens = (
+            build_auth_token_payload(user) if self.created_new_user else {}
+        )
+        return membership

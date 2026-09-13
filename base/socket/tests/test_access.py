@@ -12,7 +12,9 @@ from chatbot.utils.choices import ChatbotPermissionTypes
 class SocketAccessTests(SimpleTestCase):
     @patch("base.socket.services.access.ChatbotUser.objects")
     @patch("base.socket.services.access.WorkspaceUser.objects")
-    def test_dashboard_groups_require_active_workspace_and_chatbot_membership(self, workspaces, chatbots):
+    def test_dashboard_groups_include_active_workspace_and_chatbot_memberships(
+        self, workspaces, chatbots,
+    ):
         user_id, workspace_id, chatbot_id = uuid4(), uuid4(), uuid4()
         workspaces.filter.return_value.values_list.return_value = [workspace_id]
         membership_id = uuid4()
@@ -32,10 +34,30 @@ class SocketAccessTests(SimpleTestCase):
         )
         chatbots.filter.assert_called_once_with(
             user_id=user_id, user__is_active=True, is_active=True,
-            chatbot__is_deleted=False, chatbot__workspace_id__in=[workspace_id],
+            chatbot__is_deleted=False, chatbot__workspace__is_active=True,
         )
         chatbots.filter.return_value.values_list.assert_called_once_with(
             "chatbot_id", "id"
+        )
+
+    @patch("base.socket.services.access.ChatbotUser.objects")
+    @patch("base.socket.services.access.WorkspaceUser.objects")
+    def test_chatbot_only_member_gets_chatbot_group_and_presence_scope(
+        self, workspaces, chatbots,
+    ):
+        user_id, chatbot_id, membership_id = uuid4(), uuid4(), uuid4()
+        workspaces.filter.return_value.values_list.return_value = []
+        chatbots.filter.return_value.values_list.return_value = [
+            (chatbot_id, membership_id),
+        ]
+
+        groups, workspace_ids, chatbot_memberships = dashboard_access(user_id)
+
+        self.assertEqual(workspace_ids, set())
+        self.assertIn(chatbot_dashboard_group(chatbot_id), groups)
+        self.assertEqual(
+            chatbot_memberships,
+            {str(chatbot_id): str(membership_id)},
         )
 
     @patch("base.socket.services.access.ChatbotUser.objects")

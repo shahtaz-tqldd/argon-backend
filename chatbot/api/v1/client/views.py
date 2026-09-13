@@ -936,7 +936,7 @@ class InviteChatbotMemberView(ChatbotObjectMixin, GenericAPIView):
 
 
 class AcceptChatbotInvitationView(GenericAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
     serializer_class = AcceptChatbotInvitationSerializer
 
     def post(self, request, *args, **kwargs):
@@ -953,14 +953,18 @@ class AcceptChatbotInvitationView(GenericAPIView):
                 exc.detail,
                 "Invitation acceptance failed.",
             )
+        response_data = {
+            "chatbot": ChatbotDetailSerializer(
+                membership.chatbot,
+                context={
+                    "request": SimpleNamespace(user=serializer.accepted_user),
+                },
+            ).data,
+            "membership": ChatbotMemberSerializer(membership).data,
+        }
+        response_data.update(serializer.auth_tokens)
         return APIResponse.success(
-            data={
-                "chatbot": ChatbotDetailSerializer(
-                    membership.chatbot,
-                    context={"request": request},
-                ).data,
-                "membership": ChatbotMemberSerializer(membership).data,
-            },
+            data=response_data,
             message="Chatbot invitation accepted successfully.",
             status=status.HTTP_201_CREATED,
         )

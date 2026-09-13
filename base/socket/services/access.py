@@ -18,7 +18,7 @@ def dashboard_access(user_id):
     ).values_list("workspace_id", flat=True))
     chatbot_memberships = dict(ChatbotUser.objects.filter(
         user_id=user_id, user__is_active=True, is_active=True,
-        chatbot__is_deleted=False, chatbot__workspace_id__in=workspace_ids,
+        chatbot__is_deleted=False, chatbot__workspace__is_active=True,
     ).values_list("chatbot_id", "id"))
     groups = {
         global_dashboard_group(), user_dashboard_group(user_id),

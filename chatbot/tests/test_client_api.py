@@ -19,6 +19,10 @@ from chatbot.models import (
 )
 from appointment_booking.models import Appointment, AppointmentBookingConfig
 from chatbot.services import create_chatbot
+from chatbot.services.invitations import (
+    _deliver_chatbot_invitation,
+    hash_invitation_token,
+)
 from chatbot.utils.choices import ChatbotPermissionTypes, ChatbotRoleTypes
 from chat.models import ChatMessage, ChatSession
 from chat.services.visitor_tokens import issue_conversation_token
@@ -1315,6 +1319,130 @@ class ChatbotClientAPITests(APITestCase):
             invited_by=self.owner,
         )
 
+    @patch("chatbot.services.invitations.send_chatbot_invitation_email.delay")
+    def test_invitation_link_marks_only_missing_accounts_as_new_users(self, delay):
+        invitation = ChatbotInvitation.objects.create(
+            chatbot=self.chatbot,
+            email="new-invitee@example.com",
+            token_hash="new-invite-token-hash",
+            expires_at=timezone.now() + timedelta(hours=1),
+            created_by=self.owner,
+        )
+
+        _deliver_chatbot_invitation(invitation=invitation, token="new-token")
+
+        self.assertIn("new_user=true", delay.call_args.kwargs["message"])
+
+        invitation.email = self.member.email
+        invitation.save(update_fields=["email", "updated_at"])
+        _deliver_chatbot_invitation(invitation=invitation, token="existing-token")
+
+        self.assertNotIn("new_user", delay.call_args.kwargs["message"])
+
+    def test_new_user_can_register_and_accept_invitation_in_one_request(self):
+        invitee_email = "brand-new-invitee@example.com"
+        query = urlencode({"chatbot": self.chatbot.slug})
+        with patch(
+            "chatbot.services.invitations._deliver_chatbot_invitation"
+        ) as deliver:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    f'{reverse("invite-chatbot-member")}?{query}',
+                    {"email": invitee_email, "permissions": []},
+                    format="json",
+                )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        token = deliver.call_args.kwargs["token"]
+
+        self.client.force_authenticate(user=None)
+        response = self.client.post(
+            reverse("accept-chatbot-invitation"),
+            {
+                "token": token,
+                "name": "Brand New Invitee",
+                "password": "InvitedPassword123!",
+                "confirm_password": "InvitedPassword123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn("access_token", response.data["data"])
+        self.assertIn("refresh_token", response.data["data"])
+        invitee = User.objects.get(email=invitee_email)
+        self.assertEqual(invitee.name, "Brand New Invitee")
+        self.assertTrue(invitee.check_password("InvitedPassword123!"))
+        self.assertTrue(invitee.is_email_verified)
+        self.assertTrue(
+            ChatbotUser.objects.filter(
+                chatbot=self.chatbot,
+                user=invitee,
+                is_active=True,
+            ).exists()
+        )
+
+    def test_new_user_can_accept_while_another_account_is_authenticated(self):
+        invitee_email = "new-user-with-session@example.com"
+        query = urlencode({"chatbot": self.chatbot.slug})
+        with patch(
+            "chatbot.services.invitations._deliver_chatbot_invitation"
+        ) as deliver:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    f'{reverse("invite-chatbot-member")}?{query}',
+                    {"email": invitee_email, "permissions": []},
+                    format="json",
+                )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        token = deliver.call_args.kwargs["token"]
+
+        # self.owner remains authenticated, but the token belongs to a new user.
+        response = self.client.post(
+            reverse("accept-chatbot-invitation"),
+            {
+                "token": token,
+                "name": "Invited User",
+                "password": "InvitedPassword123!",
+                "confirm_password": "InvitedPassword123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            response.data["data"]["chatbot"]["current_user_role"],
+            ChatbotRoleTypes.MEMBER,
+        )
+        invitee = User.objects.get(email=invitee_email)
+        self.assertTrue(
+            ChatbotUser.objects.filter(
+                chatbot=self.chatbot,
+                user=invitee,
+                is_active=True,
+            ).exists()
+        )
+
+    def test_new_user_invitation_requires_registration_fields(self):
+        ChatbotInvitation.objects.create(
+            chatbot=self.chatbot,
+            email="missing-fields@example.com",
+            token_hash=hash_invitation_token("missing-fields-token"),
+            expires_at=timezone.now() + timedelta(hours=1),
+            created_by=self.owner,
+        )
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(
+            reverse("accept-chatbot-invitation"),
+            {"token": "missing-fields-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("name", response.data["errors"])
+        self.assertIn("password", response.data["errors"])
+        self.assertIn("confirm_password", response.data["errors"])
+
     def test_invitation_is_account_independent_and_applies_permissions(self):
         invitee_email = "invitee@example.com"
         permissions = [
@@ -1427,6 +1555,10 @@ class ChatbotClientAPITests(APITestCase):
 
     def test_invitation_acceptance_rejects_a_different_authenticated_user(self):
         invitee_email = "different-account@example.com"
+        User.objects.create_user(
+            email=invitee_email,
+            password="StrongPass123!",
+        )
         query = urlencode({"chatbot": self.chatbot.slug})
         with patch(
             "chatbot.services.invitations._deliver_chatbot_invitation"
@@ -1454,7 +1586,7 @@ class ChatbotClientAPITests(APITestCase):
             email=invitee_email,
         )
         self.assertIsNone(invitation.accepted_at)
-        self.assertFalse(User.objects.filter(email=invitee_email).exists())
+        self.assertTrue(User.objects.filter(email=invitee_email).exists())
 
     def test_jwt_activity_updates_last_active(self):
         self.client.force_authenticate(user=None)
