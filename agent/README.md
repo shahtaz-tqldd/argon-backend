@@ -70,23 +70,23 @@ this estimate is not a billing receipt.
 1. Chat asks for the preferred date, resolving it in the chatbot timezone.
 2. `find_appointment_availability` searches the preferred date plus at most six
    following dates and stops at the first available day. Only one search window
-   can run per invocation, enforced through ADK `temp:` state. No slots are
-   returned in the chat response.
+   can run per invocation, enforced through ADK `temp:` state. Available slots
+   are returned in `result.appointment.slots` and saved in the AI message metadata
+   for the widget.
 3. On success, `result.appointment` contains `status: "available"`,
    `available: true`, `requested_date`, `date`, `searched_through`, and `timezone`.
    For June 16 with first availability on June 18, `date` is `2026-06-18`.
-   Fetch current slots for that day in your backend and render the UI. The existing
-   `agent.sub_agents.appointment.tools.booking.booking_schedule(chatbot.id, date)` helper returns slots.
+   Each slot contains offset-aware `starts_at` and `ends_at` values. Render these
+   choices in the widget, but treat them as offers rather than reservations.
 4. If June 16–22 is unavailable, `available` is false, `date` is null,
    `searched_through` is June 22, and `next_search_date` is June 23. Chat asks whether
    to try next week and waits for another visitor turn. Searches stop at the
    configured booking horizon; disabled/invalid requests have distinct statuses.
-5. Your booking endpoint validates the selected slot and fields, rechecks
-   availability, and saves the appointment. **Set
-   `Appointment.metadata["chat_session_id"] = str(chat_session.id)` in trusted
-   backend code**, after verifying conversation ownership. Do not accept that
-   association from untrusted UI metadata. All booking writers should lock the
-   booking configuration during availability checking and saving.
+5. POST the selected `starts_at` and customer `collected_fields` to
+   `/api/v1/chatbots/{public_key}/conversations/{session_id}/appointments/` using
+   the conversation bearer token. The endpoint rechecks availability while
+   locking the booking configuration, derives `ends_at`, and stores the trusted
+   chat-session association itself.
 6. After the save commits, call the backend-only confirmation method:
 
 ```python

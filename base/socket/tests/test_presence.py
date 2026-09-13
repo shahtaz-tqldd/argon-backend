@@ -51,6 +51,7 @@ class PresenceTests(SimpleTestCase):
         self.client_patch.start()
         self.addCleanup(self.client_patch.stop)
         self.events = patch.object(presence, "publish_dashboard_event").start()
+        self.broadcast = patch.object(presence, "broadcast").start()
         self.addCleanup(patch.stopall)
 
     def age_user(self, workspace="workspace-a", user="user-a", seconds=80):
@@ -102,3 +103,43 @@ class PresenceTests(SimpleTestCase):
         self.assertEqual(self.events.call_args.args[1]["type"], "member.online")
         self.assertEqual(presence.expire_stale_presence(), 1)
         self.assertEqual(self.events.call_args.args[1]["data"]["user_id"], "stale-user")
+
+    def test_chatbot_snapshot_uses_membership_ids_and_publishes_widget_count(self):
+        snapshots = presence.heartbeat(
+            "user-a",
+            set(),
+            {"chatbot-a": "membership-a"},
+        )
+        self.assertEqual(snapshots, [{
+            "type": "presence.snapshot",
+            "data": {
+                "chatbot_id": "chatbot-a",
+                "member_ids": ["membership-a"],
+                "version": snapshots[0]["data"]["version"],
+            },
+        }])
+        self.assertEqual(
+            self.events.call_args.args[1]["data"]["member_id"],
+            "membership-a",
+        )
+        self.assertEqual(
+            self.broadcast.call_args.args[1]["event"],
+            {"type": "presence.count", "data": {"online_count": 1}},
+        )
+        self.assertEqual(presence.chatbot_online_count("chatbot-a"), 1)
+
+    def test_chatbot_expiry_publishes_offline_and_zero_widget_count(self):
+        self.age_user(workspace="chatbot-a", user="membership-a")
+        self.redis.rename(
+            presence.workspace_key("chatbot-a"),
+            presence.chatbot_key("chatbot-a"),
+        )
+        self.assertEqual(presence.expire_stale_presence(), 1)
+        self.assertEqual(
+            self.events.call_args.args[1]["data"]["member_id"],
+            "membership-a",
+        )
+        self.assertEqual(
+            self.broadcast.call_args.args[1]["event"]["data"]["online_count"],
+            0,
+        )

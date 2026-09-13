@@ -16,16 +16,23 @@ def dashboard_access(user_id):
         user_id=user_id, user__is_active=True, is_active=True,
         workspace__is_active=True,
     ).values_list("workspace_id", flat=True))
-    chatbot_ids = list(ChatbotUser.objects.filter(
+    chatbot_memberships = dict(ChatbotUser.objects.filter(
         user_id=user_id, user__is_active=True, is_active=True,
         chatbot__is_deleted=False, chatbot__workspace_id__in=workspace_ids,
-    ).values_list("chatbot_id", flat=True))
+    ).values_list("chatbot_id", "id"))
     groups = {
         global_dashboard_group(), user_dashboard_group(user_id),
         *(workspace_dashboard_group(item) for item in workspace_ids),
-        *(chatbot_dashboard_group(item) for item in chatbot_ids),
+        *(chatbot_dashboard_group(item) for item in chatbot_memberships),
     }
-    return groups, {str(item) for item in workspace_ids}
+    return (
+        groups,
+        {str(item) for item in workspace_ids},
+        {
+            str(chatbot_id): str(membership_id)
+            for chatbot_id, membership_id in chatbot_memberships.items()
+        },
+    )
 
 
 def session_access(user_id, session_id):

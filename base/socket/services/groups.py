@@ -42,6 +42,11 @@ def chatbot_dashboard_group(chatbot_id):
     return notification_group(NotificationRecipientType.CHATBOT, chatbot_id)
 
 
+def chatbot_widget_group(chatbot_id):
+    """Public, aggregate-only events for every open widget of a chatbot."""
+    return f"widget.chatbot.{chatbot_id}"
+
+
 def chat_session_dashboard_group(chat_session_id):
     return notification_group(
         NotificationRecipientType.CHAT_SESSION,

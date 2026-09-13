@@ -15,17 +15,27 @@ class SocketAccessTests(SimpleTestCase):
     def test_dashboard_groups_require_active_workspace_and_chatbot_membership(self, workspaces, chatbots):
         user_id, workspace_id, chatbot_id = uuid4(), uuid4(), uuid4()
         workspaces.filter.return_value.values_list.return_value = [workspace_id]
-        chatbots.filter.return_value.values_list.return_value = [chatbot_id]
-        groups, workspace_ids = dashboard_access(user_id)
+        membership_id = uuid4()
+        chatbots.filter.return_value.values_list.return_value = [
+            (chatbot_id, membership_id)
+        ]
+        groups, workspace_ids, chatbot_memberships = dashboard_access(user_id)
         self.assertIn(workspace_dashboard_group(workspace_id), groups)
         self.assertIn(chatbot_dashboard_group(chatbot_id), groups)
         self.assertEqual(workspace_ids, {str(workspace_id)})
+        self.assertEqual(
+            chatbot_memberships,
+            {str(chatbot_id): str(membership_id)},
+        )
         workspaces.filter.assert_called_once_with(
             user_id=user_id, user__is_active=True, is_active=True, workspace__is_active=True,
         )
         chatbots.filter.assert_called_once_with(
             user_id=user_id, user__is_active=True, is_active=True,
             chatbot__is_deleted=False, chatbot__workspace_id__in=[workspace_id],
+        )
+        chatbots.filter.return_value.values_list.assert_called_once_with(
+            "chatbot_id", "id"
         )
 
     @patch("base.socket.services.access.ChatbotUser.objects")

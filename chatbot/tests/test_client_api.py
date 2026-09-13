@@ -17,10 +17,15 @@ from chatbot.models import (
     ChatbotInvitation,
     ChatbotUser,
 )
+from appointment_booking.models import Appointment, AppointmentBookingConfig
 from chatbot.services import create_chatbot
 from chatbot.utils.choices import ChatbotPermissionTypes, ChatbotRoleTypes
 from chat.models import ChatMessage, ChatSession
-from chat.utils.choices import ChatMessageSenderType
+from chat.services.visitor_tokens import issue_conversation_token
+from chat.utils.choices import (
+    ChatMessageSenderType,
+    ChatSessionChannel,
+)
 from lead_capture.models import Lead, LeadCaptureConfig
 from subscription.choices import (
     BillingInterval,
@@ -169,6 +174,31 @@ class ChatbotClientAPITests(APITestCase):
         self.assertNotIn("public_key", data["widget_settings"])
         self.assertNotIn("allowed_urls", data)
         self.assertIsNone(data["lead_config"])
+        self.assertIsNone(data["appointment_config"])
+
+    def test_public_chatbot_returns_enabled_appointment_config(self):
+        config = AppointmentBookingConfig.objects.create(
+            chatbot=self.chatbot,
+            is_enabled=True,
+            confirmation_message="Your request has been received.",
+        )
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get(
+            reverse(
+                "public-chatbot",
+                kwargs={"public_key": self.chatbot.widget_settings.public_key},
+            )
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["data"]["appointment_config"],
+            {
+                "collectable_fields": config.collectable_fields,
+                "confirmation_message": "Your request has been received.",
+            },
+        )
 
     def test_public_chatbot_returns_enabled_lead_config(self):
         lead_config = LeadCaptureConfig.objects.create(
@@ -565,6 +595,77 @@ class ChatbotClientAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @patch("chatbot.api.v1.client.views.record_ai_usage")
+    @patch("chatbot.api.v1.client.views.AgentClient")
+    @patch("appointment_booking.services.available_slots")
+    def test_visitor_can_book_available_slot_and_notify_agent(
+        self,
+        available_slots,
+        agent_client,
+        record_ai_usage,
+    ):
+        AppointmentBookingConfig.objects.create(
+            chatbot=self.chatbot,
+            is_enabled=True,
+        )
+        session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            visitor_id="booking-visitor",
+            channel=ChatSessionChannel.WEB_WIDGET,
+        )
+        token = issue_conversation_token(session)
+        starts_at = timezone.now() + timedelta(days=2)
+        ends_at = starts_at + timedelta(minutes=30)
+        available_slots.return_value = [{
+            "starts_at": starts_at.isoformat(),
+            "ends_at": ends_at.isoformat(),
+        }]
+        agent_client.return_value.confirm_booking_sync.return_value = {
+            "result": {"content": "Your appointment request is awaiting approval."},
+            "token": {"total_tokens": 20},
+            "cost": 0.0001,
+        }
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(
+            reverse(
+                "visitor-appointment-create",
+                kwargs={
+                    "public_key": self.chatbot.widget_settings.public_key,
+                    "session_id": session.id,
+                },
+            ),
+            {
+                "starts_at": starts_at.isoformat(),
+                "collected_fields": {
+                    "name": "Ada Lovelace",
+                    "email": "ada@example.com",
+                },
+            },
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        appointment = Appointment.objects.get(
+            pk=response.data["data"]["appointment"]["id"]
+        )
+        self.assertEqual(
+            appointment.metadata,
+            {
+                "chat_session_id": str(session.id),
+                "source": "web_widget",
+            },
+        )
+        self.assertEqual(appointment.starts_at, starts_at)
+        self.assertEqual(appointment.ends_at, ends_at)
+        agent_client.return_value.confirm_booking_sync.assert_called_once_with(
+            appointment_id=str(appointment.id),
+            user_id="booking-visitor",
+        )
+        self.assertTrue(response.data["data"]["agent_acknowledged"])
+        record_ai_usage.assert_called_once()
 
     def test_chatbot_detail_uses_chatbot_query_parameter(self):
         response = self.client.get(

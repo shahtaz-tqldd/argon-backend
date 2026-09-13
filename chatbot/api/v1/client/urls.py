@@ -32,6 +32,11 @@ chatbot = [
         name="visitor-message-create",
     ),
     path(
+        "<str:public_key>/conversations/<uuid:session_id>/appointments/",
+        views.VisitorAppointmentCreateView.as_view(),
+        name="visitor-appointment-create",
+    ),
+    path(
         "<str:public_key>/visitors/<str:visitor_id>/",
         views.PublicVisitorDetailView.as_view(),
         name="public-visitor-detail",

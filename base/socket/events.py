@@ -3,6 +3,7 @@ NOTIFICATION_CREATED = "notification.created"
 MEMBER_ONLINE = "member.online"
 MEMBER_OFFLINE = "member.offline"
 PRESENCE_SNAPSHOT = "presence.snapshot"
+PRESENCE_COUNT = "presence.count"
 SESSION_UPDATED = "session.updated"
 
 # Existing specific transitions remain available alongside session.updated.

@@ -84,6 +84,20 @@ After acceptance:
 
 Only show the widget as live after this event.
 
+The server then sends the number of dashboard members currently online for
+this chatbot:
+
+```json
+{
+  "type": "presence.count",
+  "data": {"online_count": 3}
+}
+```
+
+The same event is pushed whenever the count changes. The widget receives no
+member IDs or personal details. Store `data.online_count` as the current value;
+do not increment or decrement it locally.
+
 ## Send a visitor message
 
 ```json
@@ -222,7 +236,8 @@ Command error codes are `unsupported_event`, `invalid_content`,
 
 During idle periods send `{"type":"ping"}`; the response is
 `{"type":"pong"}`. The widget has no presence protocol and receives no
-dashboard presence events.
+dashboard member details. It only receives the aggregate `presence.count`
+event and does not send presence heartbeats itself.
 
 ## Reconnection and consistency
 

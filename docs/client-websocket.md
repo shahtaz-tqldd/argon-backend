@@ -33,7 +33,8 @@ After acceptance:
 ```
 
 Treat these values as authoritative rather than hard-coding them. The server
-then sends one `presence.snapshot` for every workspace the user can access.
+then sends one `presence.snapshot` for every workspace and chatbot the user
+can access.
 
 ## Connection lifecycle
 
@@ -221,6 +222,40 @@ state comes from REST.
 
 ### Presence
 
+Use chatbot presence beside the chatbot member-list API:
+
+```json
+{
+  "type": "presence.snapshot",
+  "data": {
+    "chatbot_id": "chatbot-uuid",
+    "member_ids": ["chatbot-membership-uuid"],
+    "version": 1788948000000000
+  }
+}
+```
+
+Each `member_id` is the top-level `id` returned by the chatbot member-list
+API. Filter the stored member list by those IDs to render full details.
+Incremental changes use `member.online` and `member.offline`:
+
+```json
+{
+  "type": "member.online",
+  "data": {
+    "chatbot_id": "chatbot-uuid",
+    "member_id": "chatbot-membership-uuid",
+    "user_id": "user-uuid",
+    "version": 1788948000000001
+  }
+}
+```
+
+`member.offline` has the same identifying fields but may omit `user_id`. Use
+`member_id` for member-list matching.
+
+Workspace presence remains available for workspace-wide UI:
+
 ```json
 {
   "type": "presence.snapshot",
@@ -232,9 +267,9 @@ state comes from REST.
 }
 ```
 
-`member.online` and `member.offline` contain `workspace_id`, `user_id`,
-and `version`. Versions are Redis server timestamps in microseconds. Because
-events can be reordered across workers:
+Workspace `member.online` and `member.offline` contain `workspace_id`,
+`user_id`, and `version`. Versions are Redis server timestamps in microseconds.
+Because events can be reordered across workers:
 
 - Keep the latest snapshot version per workspace and latest transition version
   per user.
@@ -242,6 +277,8 @@ events can be reordered across workers:
 - When applying a newer snapshot, preserve per-user transitions newer than that
   snapshot.
 - Clear presence state when disconnected or workspace access is removed.
+
+Apply the same version rules per chatbot/member for chatbot-scoped events.
 
 Disconnect does not immediately make a user offline because another tab/device
 may be active. Offline normally appears 75–90 seconds after the last heartbeat.
@@ -302,6 +339,29 @@ export function openDashboardSocket(
 
   return socket;
 }
+```
+
+A minimal chatbot-member reducer can keep a `Set` of online membership IDs:
+
+```ts
+function applyChatbotPresence(
+  event: any,
+  chatbotId: string,
+  onlineMemberIds: Set<string>,
+) {
+  if (event.data?.chatbot_id !== chatbotId) return onlineMemberIds;
+
+  if (event.type === "presence.snapshot") {
+    return new Set<string>(event.data.member_ids);
+  }
+
+  const next = new Set(onlineMemberIds);
+  if (event.type === "member.online") next.add(event.data.member_id);
+  if (event.type === "member.offline") next.delete(event.data.member_id);
+  return next;
+}
+
+const onlineMembers = members.filter(member => onlineMemberIds.has(member.id));
 ```
 
 Production clients should guard JSON parsing, cap and jitter reconnect delays,

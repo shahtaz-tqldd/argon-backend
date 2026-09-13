@@ -38,6 +38,7 @@ def get_public_chatbot(public_key):
             "workspace",
             "widget_settings",
             "lead_capture_config",
+            "appointment_booking_config",
         )
         .filter(
             is_deleted=False,

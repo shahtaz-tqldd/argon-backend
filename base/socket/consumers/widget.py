@@ -1,13 +1,17 @@
-from app.utils.logger import logger
 from urllib.parse import parse_qs
 
+from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import Http404
+from redis.exceptions import RedisError
 
+from app.utils.logger import logger
+from base.socket.events import PRESENCE_COUNT
+from base.socket.services.groups import chat_session_group, chatbot_widget_group
+from base.socket.services.presence import chatbot_online_count
 from chat.models import ChatSession
-from base.socket.services.groups import chat_session_group
 from chat.services.events import publish_session_event
 from chat.services.visitor import (
     get_public_chatbot,
@@ -41,7 +45,14 @@ class VisitorChatSessionConsumer(AsyncJsonWebsocketConsumer):
 
         self.chat_session = access
         self.group_name = chat_session_group(session_id)
+        self.presence_group_name = chatbot_widget_group(
+            self.chat_session.chatbot_id
+        )
         await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.channel_layer.group_add(
+            self.presence_group_name,
+            self.channel_name,
+        )
         await self.accept()
         await self.send_json(
             {
@@ -53,11 +64,31 @@ class VisitorChatSessionConsumer(AsyncJsonWebsocketConsumer):
                 },
             }
         )
+        try:
+            count = await sync_to_async(
+                chatbot_online_count,
+                thread_sensitive=False,
+            )(self.chat_session.chatbot_id)
+        except RedisError:
+            # Presence is supplementary; a Redis outage must not break chat.
+            logger.exception("Widget presence unavailable")
+        else:
+            await self.send_json(
+                {
+                    "type": PRESENCE_COUNT,
+                    "data": {"online_count": count},
+                }
+            )
 
     async def disconnect(self, close_code):
         if hasattr(self, "group_name"):
             await self.channel_layer.group_discard(
                 self.group_name,
+                self.channel_name,
+            )
+        if hasattr(self, "presence_group_name"):
+            await self.channel_layer.group_discard(
+                self.presence_group_name,
                 self.channel_name,
             )
 
@@ -181,6 +212,10 @@ class VisitorChatSessionConsumer(AsyncJsonWebsocketConsumer):
                 },
             }
         await self.send_json(payload)
+
+    async def widget_presence_event(self, event):
+        """Only an aggregate count is ever published to public widgets."""
+        await self.send_json(event["event"])
 
     async def send_error(self, code, message):
         await self.send_json(

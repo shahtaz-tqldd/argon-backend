@@ -91,7 +91,7 @@ class DashboardConsumerTests(SimpleTestCase):
     def test_refresh_discards_revoked_groups_and_session_subscriptions(self, user_model, access):
         self.consumer.scope["user"].pk = self.consumer.scope["user"].id
         user_model.return_value.objects.filter.return_value.exists.return_value = True
-        access.return_value = ({"notifications.global"}, set())
+        access.return_value = ({"notifications.global"}, set(), {})
         self.consumer.group_names = {"notifications.global", "notifications.workspace.revoked"}
         self.consumer.session_ids = {self.session_id}
         self.consumer.get_session_access.return_value = None
@@ -172,6 +172,20 @@ class DashboardDeliveryTests(SimpleTestCase):
 
 
 class WidgetPreservationTests(SimpleTestCase):
+    def test_widget_presence_event_exposes_only_the_count(self):
+        consumer = VisitorChatSessionConsumer()
+        consumer.send_json = AsyncMock()
+        async_to_sync(consumer.widget_presence_event)({
+            "event": {
+                "type": "presence.count",
+                "data": {"online_count": 2},
+            },
+        })
+        consumer.send_json.assert_awaited_once_with({
+            "type": "presence.count",
+            "data": {"online_count": 2},
+        })
+
     def test_widget_sanitizes_sender_identity_and_hides_internal_transfer_events(self):
         consumer = VisitorChatSessionConsumer()
         consumer.send_json = AsyncMock()

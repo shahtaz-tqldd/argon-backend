@@ -129,7 +129,13 @@ class ClientTests(IsolatedAsyncioTestCase):
         self.assertEqual([tool.name for tool in root.sub_agents[1].tools], ["find_appointment_availability"])
 
     async def test_mixed_request_delegates_to_both_specialists(self):
-        payload = dict(status="available", available=True, requested_date="2026-06-16", date="2026-06-16")
+        slots = [{
+            "starts_at": "2026-06-16T09:00:00+06:00",
+            "ends_at": "2026-06-16T09:30:00+06:00",
+        }]
+        payload = dict(status="available", available=True,
+                       requested_date="2026-06-16", date="2026-06-16",
+                       slots=slots)
         model = self.script(
             call("knowledge_agent", request="Which service is offered?"),
             call("search_knowledge", query="services"), answer("Consultations", ["kb-1"]),
@@ -144,6 +150,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             result = await self.client.chat("What service can I book on June 16?")
         self.assertEqual(result["result"]["source_ids"], ["kb-1"])
         self.assertEqual(result["result"]["appointment"]["date"], "2026-06-16")
+        self.assertEqual(result["result"]["appointment"]["slots"], slots)
         self.assertEqual(result["token"]["total_tokens"], 7 * 125)
         self.assertEqual(len(model.requests), 7)
 
@@ -297,10 +304,15 @@ class AvailabilityTests(SimpleTestCase):
         self.addCleanup(self.now_patch.stop)
 
     def test_stops_on_first_available_day(self):
-        with patch("agent.sub_agents.appointment.tools.booking.available_slots", side_effect=[[], [], [{"slot": 1}]]) as slots:
+        available = [{
+            "starts_at": "2026-06-18T09:00:00+06:00",
+            "ends_at": "2026-06-18T09:30:00+06:00",
+        }]
+        with patch("agent.sub_agents.appointment.tools.booking.available_slots", side_effect=[[], [], available]) as slots:
             result = booking.find_availability("bot", "2026-06-16")
         self.assertEqual(result["date"], "2026-06-18")
         self.assertTrue(result["available"])
+        self.assertEqual(result["slots"], available)
         self.assertEqual([c.args[1] for c in slots.call_args_list], [date(2026, 6, d) for d in (16, 17, 18)])
 
     def test_searches_exactly_seven_days_including_preferred(self):
@@ -312,9 +324,14 @@ class AvailabilityTests(SimpleTestCase):
         self.assertFalse(result["available"])
 
     def test_requested_day_available(self):
-        with patch("agent.sub_agents.appointment.tools.booking.available_slots", return_value=[{}]) as slots:
+        available = [{
+            "starts_at": "2026-06-16T09:00:00+06:00",
+            "ends_at": "2026-06-16T09:30:00+06:00",
+        }]
+        with patch("agent.sub_agents.appointment.tools.booking.available_slots", return_value=available) as slots:
             result = booking.find_availability("bot", "2026-06-16")
         self.assertEqual(result["date"], "2026-06-16")
+        self.assertEqual(result["slots"], available)
         self.assertEqual(slots.call_count, 1)
 
     def test_invalid_past_and_beyond_horizon_never_query_slots(self):

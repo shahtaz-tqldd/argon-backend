@@ -17,6 +17,11 @@ class KnowledgeBaseAgentOutputSchema(BaseModel):
     source_ids: list[str] = Field(default_factory=list)
 
 
+class AppointmentSlotSchema(BaseModel):
+    starts_at: datetime
+    ends_at: datetime
+
+
 class AppointmentSchema(BaseModel):
     status: Literal["available", "unavailable", "disabled", "invalid", "booking_recorded"]
     available: bool = False
@@ -29,6 +34,7 @@ class AppointmentSchema(BaseModel):
     appointment_status: str | None = None
     starts_at: datetime | None = None
     ends_at: datetime | None = None
+    slots: list[AppointmentSlotSchema] = Field(default_factory=list)
 
 
 class LeadScoreSchema(BaseModel):

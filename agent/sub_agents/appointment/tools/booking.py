@@ -92,9 +92,11 @@ def find_availability(chatbot_id, requested_date):
     end = min(day + timedelta(days=6), last_allowed)
     cursor = day
     while cursor <= end:
-        if available_slots(config, cursor, now=now):
+        slots = available_slots(config, cursor, now=now)
+        if slots:
             return {**base, "status": "available", "available": True,
-                    "date": cursor.isoformat(), "searched_through": cursor.isoformat()}
+                    "date": cursor.isoformat(), "searched_through": cursor.isoformat(),
+                    "slots": slots}
         cursor += timedelta(days=1)
     return {**base, "status": "unavailable", "searched_through": end.isoformat(),
             "next_search_date": cursor.isoformat() if cursor <= last_allowed else None,

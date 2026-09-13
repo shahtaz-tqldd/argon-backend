@@ -56,6 +56,12 @@ class GenerateAIReplyTaskTests(TestCase):
                     "status": "available",
                     "available": True,
                     "date": "2026-09-11",
+                    "slots": [
+                        {
+                            "starts_at": "2026-09-11T09:00:00+06:00",
+                            "ends_at": "2026-09-11T09:30:00+06:00",
+                        }
+                    ],
                 },
             },
             "token": {
@@ -84,6 +90,12 @@ class GenerateAIReplyTaskTests(TestCase):
                     "status": "available",
                     "available": True,
                     "date": "2026-09-11",
+                    "slots": [
+                        {
+                            "starts_at": "2026-09-11T09:00:00+06:00",
+                            "ends_at": "2026-09-11T09:30:00+06:00",
+                        }
+                    ],
                 },
             },
         )

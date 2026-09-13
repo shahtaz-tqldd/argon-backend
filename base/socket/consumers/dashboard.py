@@ -46,9 +46,11 @@ class DashboardConsumer(AsyncJsonWebsocketConsumer):
         )():
             await self.close(code=4401)
             return False
-        groups, self.workspace_ids = await database_sync_to_async(dashboard_access)(
-            self.scope["user"].id
-        )
+        (
+            groups,
+            self.workspace_ids,
+            self.chatbot_memberships,
+        ) = await database_sync_to_async(dashboard_access)(self.scope["user"].id)
         for session_id in self.session_ids.copy():
             if await self.get_session_access(session_id):
                 groups.add(chat_session_dashboard_group(session_id))
@@ -65,7 +67,9 @@ class DashboardConsumer(AsyncJsonWebsocketConsumer):
     async def update_presence(self):
         try:
             snapshots = await sync_to_async(heartbeat, thread_sensitive=False)(
-                self.scope["user"].id, self.workspace_ids,
+                self.scope["user"].id,
+                self.workspace_ids,
+                self.chatbot_memberships,
             )
         except RedisError:
             logger.exception("Dashboard presence unavailable")
