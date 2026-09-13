@@ -9,7 +9,6 @@ from django.db import IntegrityError, transaction
 from django.template.loader import render_to_string
 from django.utils import timezone
 
-from accounts.services.verification import complete_email_verification
 from workspace.models import WorkspaceInvitation, WorkspaceUser
 from workspace.services.membership import join_workspace_from_invitation
 from workspace.tasks import send_workspace_invitation_email
@@ -82,6 +81,10 @@ def issue_workspace_invitation(*, workspace, email, invited_by):
     email = User.objects.normalize_email(email).strip().casefold()
     existing_user = User.objects.filter(email__iexact=email).first()
     if existing_user:
+        if not existing_user.is_active:
+            raise InvalidWorkspaceInvitation(
+                "The account for this email is inactive."
+            )
         if WorkspaceUser.objects.filter(
             workspace=workspace,
             user=existing_user,
@@ -90,10 +93,6 @@ def issue_workspace_invitation(*, workspace, email, invited_by):
             raise InvalidWorkspaceInvitation(
                 "This user is already a member of the workspace."
             )
-        raise InvalidWorkspaceInvitation(
-            "A user with this email already exists. Invite registration is only "
-            "available for new users."
-        )
 
     token = secrets.token_urlsafe(32)
     token_hash = hash_invitation_token(token)
@@ -139,7 +138,7 @@ def issue_workspace_invitation(*, workspace, email, invited_by):
 
 
 @transaction.atomic
-def accept_workspace_invitation(*, token, name, password):
+def accept_workspace_invitation(*, token, user):
     try:
         invitation = (
             WorkspaceInvitation.objects.select_for_update(of=("self",))
@@ -155,18 +154,16 @@ def accept_workspace_invitation(*, token, name, password):
         raise InvalidWorkspaceInvitation("This invitation has expired.")
     if not invitation.workspace.is_active:
         raise InvalidWorkspaceInvitation("This workspace is inactive.")
-    if User.objects.filter(email__iexact=invitation.email).exists():
+    if not user or not user.is_active:
         raise InvalidWorkspaceInvitation(
-            "An account with the invited email already exists."
+            "Sign in with the invited account before accepting this invitation."
+        )
+    if user.email.strip().casefold() != invitation.email.strip().casefold():
+        raise InvalidWorkspaceInvitation(
+            "This invitation was sent to a different email address."
         )
 
     try:
-        user = User.objects.create_user(
-            email=invitation.email,
-            password=password,
-            name=name,
-            is_email_verified=True,
-        )
         membership = join_workspace_from_invitation(
             workspace=invitation.workspace,
             user=user,
@@ -180,7 +177,4 @@ def accept_workspace_invitation(*, token, name, password):
     invitation.accepted_at = timezone.now()
     invitation.updated_by = user
     invitation.save(update_fields=["accepted_at", "updated_by", "updated_at"])
-    user.last_login = timezone.now()
-    user.save(update_fields=["last_login"])
-    complete_email_verification(user)
-    return user, membership
+    return membership

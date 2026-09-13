@@ -1,269 +1,368 @@
-# Client WebSocket Integration
+# Dashboard client WebSocket
 
-This document describes the recommended WebSocket integration for the authenticated
-agent dashboard. It covers messages created by visitors, AI, the current agent, and
-other agents.
+This is the frontend contract for the authenticated Argon dashboard. Use one
+WebSocket per signed-in browser tab for notifications, conversations, agent
+commands, and workspace presence.
 
-## Recommendation
+The implementation lives in `base/socket`. REST remains the source of truth;
+WebSocket events are transient updates and can be missed while disconnected.
 
-Use one authenticated dashboard WebSocket connection:
-
-```text
-wss://<api-host>/ws/notifications/?token=<access-token>
-```
-
-Use the same **connection**, but not one shared Channels group for every user.
-The backend should attach the connection to all authorized user, workspace, and
-chatbot groups. This is already how `NotificationConsumer` subscribes clients.
-
-Publish chat-message events to the relevant chatbot dashboard group. This lets one
-connection receive events for every conversation the agent is allowed to manage.
-
-Do not open one WebSocket per chat session just to update the inbox. A per-session
-socket is still appropriate for:
-
-- the public visitor widget;
-- a specialized interactive protocol that sends messages over WebSocket;
-- deployments that intentionally want active-conversation isolation.
-
-If the dashboard sends agent messages through the REST API, the single dashboard
-socket is sufficient for receiving all resulting events.
-
-## Current backend behavior
-
-| Endpoint | Audience | Current events |
-| --- | --- | --- |
-| `/ws/notifications/` | Authenticated dashboard user | Persisted notification events for authorized global, user, workspace, and chatbot groups |
-| `/ws/chat-sessions/{session_id}/` | Authenticated chatbot agent | Live events for one chat session; also accepts agent message commands |
-| `/ws/widget/chatbots/{public_key}/conversations/{session_id}/` | Public visitor widget | Sanitized live events for one visitor conversation |
-
-At present, `message.created` is published only to the session-specific group.
-Therefore, the notification connection cannot yet receive chat messages by itself.
-The backend must additionally fan each message event out to its chatbot dashboard
-group before the dashboard can use only one connection.
-
-## Authentication
-
-The WebSocket middleware accepts a JWT from either:
-
-```http
-Authorization: Bearer <access-token>
-```
-
-or the query string:
+## Connect
 
 ```text
-?token=<access-token>
+wss://{api-host}/ws/dashboard/?token={access-token}
 ```
 
-Native browser `WebSocket` does not support arbitrary authorization headers, so a
-browser client normally uses the query parameter. Always use `wss://` outside local
-development. Avoid logging the full WebSocket URL because it contains the token.
+- Use the same access JWT as the authenticated REST API.
+- Browser `WebSocket` cannot set an `Authorization` header, so browsers must
+  use the `token` query parameter. Non-browser clients may instead send
+  `Authorization: Bearer {access-token}`.
+- Use `wss://` outside local development and redact query strings from logs.
+- A missing/invalid token or inactive user is rejected with close code `4401`.
 
-The backend closes an unauthenticated connection with code `4401`.
+After acceptance:
 
-## Recommended event envelope
+```json
+{
+  "type": "connection.ready",
+  "data": {
+    "heartbeat_interval_seconds": 25,
+    "presence_timeout_seconds": 75
+  }
+}
+```
 
-Chat events delivered through the dashboard connection should preserve the existing
-session event shape:
+Treat these values as authoritative rather than hard-coding them. The server
+then sends one `presence.snapshot` for every workspace and chatbot the user
+can access.
+
+## Connection lifecycle
+
+1. Open the socket after obtaining an access token.
+2. Wait for `connection.ready` before treating it as usable.
+3. Send `{"type":"presence.heartbeat"}` at the supplied interval.
+4. Stop the heartbeat timer when the socket closes.
+5. Reconnect with exponential backoff and jitter, refreshing the access token
+   first when necessary.
+6. After reconnecting, refresh REST state and restore active
+   `session.subscribe` subscriptions. Automatic workspace/chatbot subscriptions
+   require no client action.
+
+Close code `1013` means presence storage is temporarily unavailable; retry with
+backoff. Retry other abnormal/network closes too, but not after sign-out.
+
+## Client commands
+
+Every command is a JSON object with a string `type`.
+
+### Heartbeat
+
+```json
+{"type": "presence.heartbeat"}
+```
+
+`ping` is an alias. A successful heartbeat produces fresh presence snapshots
+followed by `{"type":"pong"}`.
+
+### Session-specific notification subscription
+
+```json
+{"type": "session.subscribe", "session_id": "session-uuid"}
+```
+
+The acknowledgement is:
+
+```json
+{"type": "session.subscribed", "session_id": "session-uuid"}
+```
+
+Chat events for authorized chatbots already arrive automatically. This command
+only adds notifications specifically addressed to that session. It is
+idempotent, access-controlled, and limited to 100 distinct sessions per socket.
+
+Unsubscribe with:
+
+```json
+{"type": "session.unsubscribe", "session_id": "session-uuid"}
+```
+
+The response is `session.unsubscribed` with the same top-level `session_id`.
+Subscriptions last only for the socket lifetime and must be restored after a
+reconnect.
+
+### Send an agent message
+
+```json
+{
+  "type": "message.send",
+  "session_id": "session-uuid",
+  "content": "Hello! How can I help?",
+  "metadata": {}
+}
+```
+
+`content` must be non-blank and at most 10,000 characters. `metadata` is
+optional and must be an object. The user needs current chat-session management
+permission and must be the active takeover agent.
+
+```json
+{
+  "type": "message.accepted",
+  "session_id": "session-uuid",
+  "message_id": "message-uuid"
+}
+```
+
+Acceptance means the message was persisted. It is also broadcast as
+`message.created`; upsert it by `data.id`. Dashboard socket sends are not
+idempotent, so do not automatically resend an unacknowledged command. Refetch
+messages after reconnecting to determine the final state.
+
+## Server events
+
+### Message created
 
 ```json
 {
   "type": "message.created",
-  "session_id": "1b42e275-6305-4d7b-ab25-92bf21ed23f3",
+  "session_id": "session-uuid",
   "data": {
-    "id": "756a2a47-c03c-414d-89dc-45b8373ab067",
-    "chat_session_id": "1b42e275-6305-4d7b-ab25-92bf21ed23f3",
-    "sender_type": "visitor",
-    "sender": null,
-    "content": "Can someone help me?",
+    "id": "message-uuid",
+    "chat_session_id": "session-uuid",
+    "sender_type": "agent",
+    "sender": {
+      "id": "chatbot-membership-uuid",
+      "user_id": "user-uuid",
+      "name": "Support Agent",
+      "email": "agent@example.com",
+      "avatar": "https://example.com/avatar.webp"
+    },
+    "content": "Hello! How can I help?",
     "status": "sent",
     "external_id": "",
     "metadata": {},
     "attachments": [],
-    "created_at": "2026-09-05T09:42:12.522Z",
-    "updated_at": "2026-09-05T09:42:12.522Z"
+    "created_at": "2026-09-09T10:00:00+00:00",
+    "updated_at": "2026-09-09T10:00:00+00:00"
   }
 }
 ```
 
-The client determines the message source using `data.sender_type`.
+`sender_type` is `visitor`, `ai`, `agent`, or `system`. `sender` is
+populated for an agent and otherwise is `null`. Compare `sender.user_id` with
+the signed-in user ID to identify the current agent. Order by `created_at`,
+then `id`, and upsert by `id`.
 
-| `sender_type` | Meaning | `sender` |
-| --- | --- | --- |
-| `visitor` | Message from the customer | `null` |
-| `ai` | Message generated by the chatbot | `null` |
-| `agent` | Message sent by any human agent | Agent identity object |
-| `system` | Internal conversation event represented as a message | `null` |
+### Session and AI events
 
-An agent sender has this shape:
+These events share `{"type", "session_id", "data"}`:
 
-```json
-{
-  "id": "6f12a4cc-73b8-43cf-a52b-a3cbe26890ef",
-  "user_id": "fa10a141-60e6-41f8-ad69-120f57e546b9",
-  "name": "Support Agent",
-  "email": "agent@example.com",
-  "avatar": "https://assets.example.com/images/users/avatar.webp"
-}
-```
+| Event | `data` fields |
+| --- | --- |
+| `session.created` | `chatbot_id`, `channel`, `status` |
+| `session.taken_over` | `takeover_id`, `agent_id` |
+| `session.released` | `takeover_id` |
+| `session.resolved` / `session.closed` | `takeover_id`, `status` |
+| `session.reopened` | `reopened_by_id` |
+| `session.transfer_requested` | `transfer_id`, `takeover_id`, `from_agent_id`, `to_agent_id` |
+| `session.transferred` | `transfer_id`, `takeover_id`, `from_agent_id`, `to_agent_id` |
+| `session.transfer_declined` / `session.transfer_cancelled` | `transfer_id` |
+| `ai.response.started` | `in_reply_to` message UUID |
+| `ai.response.failed` | `code`, `retryable` |
 
-Compare `sender.user_id` with the authenticated user's ID to distinguish the current
-agent from another agent. Do not infer authorship from the display name or email.
-
-## Other session events
-
-The same dashboard connection can deliver session state changes:
+Every specific session transition also produces this dashboard-only partial
+event:
 
 ```json
 {
-  "type": "session.taken_over",
-  "session_id": "1b42e275-6305-4d7b-ab25-92bf21ed23f3",
+  "type": "session.updated",
+  "session_id": "session-uuid",
   "data": {
-    "takeover_id": "82b17e3a-c7d9-4561-9265-481dcd063e37",
-    "agent_id": "6f12a4cc-73b8-43cf-a52b-a3cbe26890ef"
+    "change": "session.taken_over",
+    "takeover_id": "takeover-uuid",
+    "agent_id": "chatbot-membership-uuid"
   }
 }
 ```
 
-Supported session event names include:
+Choose either the specific transition or `session.updated` for state changes;
+handling both applies the same change twice. Payloads are partial, so refetch the
+session through REST when a complete record is needed.
 
-- `session.taken_over`
-- `session.released`
-- `session.resolved`
-- `session.closed`
-- `session.reopened`
-- `session.transfer_requested`
-- `session.transferred`
-- `session.transfer_declined`
-- `session.transfer_cancelled`
-- `ai.response.started`
-- `ai.response.failed`
+Known AI failure codes are `queue_unavailable`, `message_limit_reached`, and
+`generation_failed`. AI replies are not streamed; the complete reply arrives
+as `message.created`.
 
-Persisted notifications currently arrive in their existing notification serializer
-shape and contain an `event` property such as `new_message` or
-`training_complete`. Clients should route chat events by `type` and notification
-records by `event` until the notification contract is normalized under a common
-versioned envelope.
+### Notifications
 
-## Browser client example
+```json
+{
+  "type": "notification.created",
+  "data": {
+    "id": "notification-uuid",
+    "recipient_type": "chatbot",
+    "notification_type": "training_complete",
+    "event": "training_complete",
+    "title": "Knowledge training complete",
+    "message": "",
+    "metadata": {},
+    "workspace_id": null,
+    "chatbot_id": "chatbot-uuid",
+    "target_id": null,
+    "is_read": false,
+    "read_at": null,
+    "created_at": "2026-09-09T10:00:00+00:00"
+  }
+}
+```
+
+Route by top-level `type`. Inside a notification, `data.event` equals
+`data.notification_type` and is retained for compatibility. Persistent/read
+state comes from REST.
+
+### Presence
+
+Use chatbot presence beside the chatbot member-list API:
+
+```json
+{
+  "type": "presence.snapshot",
+  "data": {
+    "chatbot_id": "chatbot-uuid",
+    "member_ids": ["chatbot-membership-uuid"],
+    "version": 1788948000000000
+  }
+}
+```
+
+Each `member_id` is the top-level `id` returned by the chatbot member-list
+API. Filter the stored member list by those IDs to render full details.
+Incremental changes use `member.online` and `member.offline`:
+
+```json
+{
+  "type": "member.online",
+  "data": {
+    "chatbot_id": "chatbot-uuid",
+    "member_id": "chatbot-membership-uuid",
+    "user_id": "user-uuid",
+    "version": 1788948000000001
+  }
+}
+```
+
+`member.offline` has the same identifying fields but may omit `user_id`. Use
+`member_id` for member-list matching.
+
+Workspace presence remains available for workspace-wide UI:
+
+```json
+{
+  "type": "presence.snapshot",
+  "data": {
+    "workspace_id": "workspace-uuid",
+    "user_ids": ["user-uuid"],
+    "version": 1788948000000000
+  }
+}
+```
+
+Workspace `member.online` and `member.offline` contain `workspace_id`,
+`user_id`, and `version`. Versions are Redis server timestamps in microseconds.
+Because events can be reordered across workers:
+
+- Keep the latest snapshot version per workspace and latest transition version
+  per user.
+- Ignore a transition at or below the applicable stored version.
+- When applying a newer snapshot, preserve per-user transitions newer than that
+  snapshot.
+- Clear presence state when disconnected or workspace access is removed.
+
+Apply the same version rules per chatbot/member for chatbot-scoped events.
+
+Disconnect does not immediately make a user offline because another tab/device
+may be active. Offline normally appears 75–90 seconds after the last heartbeat.
+
+### Errors
+
+Dashboard command errors use:
+
+```json
+{"type": "error", "message": "Session is unavailable or access is denied."}
+```
+
+Errors have no request ID or machine-readable code. Serialize commands if they
+must be associated with errors, or present errors as general socket failures.
+
+## Authorization
+
+The server automatically attaches the connection to permitted global, user,
+workspace, and chatbot audiences. Clients cannot name groups. Active workspace
+membership is required for workspace data. Active chatbot membership and
+`CHAT_SESSION_MANAGEMENT` permission are required for chat delivery/commands.
+Access is checked again during commands and event delivery.
+
+New access is discovered on the next command/heartbeat. After membership changes,
+reconnect and refetch REST state for predictable resynchronization.
+
+## Minimal browser implementation
 
 ```ts
-type ChatMessageCreatedEvent = {
-  type: "message.created";
-  session_id: string;
-  data: {
-    id: string;
-    chat_session_id: string;
-    sender_type: "visitor" | "ai" | "agent" | "system";
-    sender: null | {
-      id: string;
-      user_id: string;
-      name: string;
-      email: string;
-      avatar: string;
-    };
-    content: string;
-    status: "sent" | "delivered" | "read" | "failed";
-    external_id: string;
-    metadata: Record<string, unknown>;
-    attachments: unknown[];
-    created_at: string;
-    updated_at: string;
-  };
-};
-
-export function connectDashboardSocket(
-  apiWebSocketBaseUrl: string,
+export function openDashboardSocket(
+  apiWsBaseUrl: string,
   accessToken: string,
-  currentUserId: string,
+  onEvent: (event: Record<string, unknown>) => void,
 ) {
-  const url = new URL("/ws/notifications/", apiWebSocketBaseUrl);
+  const url = new URL("/ws/dashboard/", apiWsBaseUrl);
   url.searchParams.set("token", accessToken);
 
   const socket = new WebSocket(url);
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
 
-  socket.addEventListener("message", (rawEvent) => {
-    const event = JSON.parse(rawEvent.data);
-
-    if (event.type === "message.created") {
-      const messageEvent = event as ChatMessageCreatedEvent;
-      const { data: message, session_id: sessionId } = messageEvent;
-      const source =
-        message.sender_type === "agent" &&
-        message.sender?.user_id === currentUserId
-          ? "current_agent"
-          : message.sender_type;
-
-      // Upsert by message.id so reconnects or overlapping sockets cannot
-      // duplicate a message in client state.
-      upsertConversationMessage(sessionId, message);
-      updateInboxPreview(sessionId, message);
-
-      if (source === "visitor" && !isConversationOpen(sessionId)) {
-        incrementUnreadCount(sessionId);
-        showNewMessageToast(sessionId, message.content);
-      }
-      return;
+  socket.addEventListener("message", ({ data }) => {
+    const event = JSON.parse(String(data));
+    if (event.type === "connection.ready") {
+      const seconds = event.data.heartbeat_interval_seconds;
+      heartbeat = setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "presence.heartbeat" }));
+        }
+      }, seconds * 1000);
     }
+    onEvent(event);
+  });
 
-    if (event.type?.startsWith("session.")) {
-      applySessionEvent(event);
-      return;
-    }
-
-    if (event.event) {
-      applyPersistedNotification(event);
-    }
+  socket.addEventListener("close", () => {
+    if (heartbeat) clearInterval(heartbeat);
+    // Reconnect with backoff unless the user signed out.
   });
 
   return socket;
 }
 ```
 
-The functions such as `upsertConversationMessage` represent the application's state
-store and are intentionally left implementation-specific.
+A minimal chatbot-member reducer can keep a `Set` of online membership IDs:
 
-## Reconnection and consistency
+```ts
+function applyChatbotPresence(
+  event: any,
+  chatbotId: string,
+  onlineMemberIds: Set<string>,
+) {
+  if (event.data?.chatbot_id !== chatbotId) return onlineMemberIds;
 
-WebSocket delivery is transient. The client must treat REST APIs as the source of
-truth.
+  if (event.type === "presence.snapshot") {
+    return new Set<string>(event.data.member_ids);
+  }
 
-1. Reconnect with exponential backoff and jitter.
-2. After reconnecting, refresh the session list and the currently open message list.
-3. Upsert messages by `data.id` to prevent duplicates.
-4. Use `created_at`, then message ID, for stable per-session ordering.
-5. Do not assume strict ordering between events from different sessions.
-6. Refresh the socket after authentication or membership changes so its authorized
-   group subscriptions are recalculated.
+  const next = new Set(onlineMemberIds);
+  if (event.type === "member.online") next.add(event.data.member_id);
+  if (event.type === "member.offline") next.delete(event.data.member_id);
+  return next;
+}
 
-## Sending agent messages
-
-Choose one sending transport and use it consistently:
-
-- Recommended for a single dashboard socket: send through the existing REST message
-  endpoint and receive the resulting `message.created` event on the dashboard socket.
-- Alternative: use `/ws/chat-sessions/{session_id}/` and send
-  `{"type":"message.send", ...}`. If this socket and the dashboard socket are both
-  connected, deduplicate the echoed `message.created` event by message ID.
-
-The agent must own the active takeover before the backend accepts an agent message.
-
-## Backend fan-out required
-
-For the single-connection design, each newly created `ChatMessage` should be emitted
-to both:
-
-```text
-chat_session_<session_id>
-notifications.chatbot.<chatbot_id>
+const onlineMembers = members.filter(member => onlineMemberIds.has(member.id));
 ```
 
-The session group supports the visitor and optional active-session connection. The
-chatbot notification group supports the authenticated dashboard's one connection.
-Only users with an active membership in that chatbot are subscribed to the latter.
-
-Do not create a permanent `Notification` database row for every message unless the
-product needs a durable cross-session notification history. The chat message already
-provides durable storage; the dashboard WebSocket event can be an ephemeral fan-out,
-with REST resynchronization after reconnect.
+Production clients should guard JSON parsing, cap and jitter reconnect delays,
+refetch REST state after reconnect, and restore session-specific subscriptions.

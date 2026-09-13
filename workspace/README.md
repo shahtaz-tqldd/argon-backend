@@ -7,24 +7,24 @@ The current workspace schema contains:
 - `WorkspaceInvitation`: a single-use, expiring invitation stored as a token hash.
 
 Direct password and Google signup call
-`accounts.services.onboarding.provision_direct_signup`. It idempotently creates
-a default workspace and an admin membership for the new user.
+`accounts.services.onboarding.provision_direct_signup`. It creates a default
+workspace only when the new account has no active workspace/chatbot membership
+and no valid pending workspace/chatbot invitation.
 
-An invitation acceptance endpoint must validate its invitation first, then use:
-
-- `create_user_from_workspace_invitation` for a new account, or
-- `join_workspace_from_invitation` for an existing account.
-
-Neither invitation path creates another workspace. This separation is
-intentional; invitation behavior must not be controlled by an untrusted request
-boolean.
+Invitations never create or update an account. A recipient signs in (or uses the
+normal registration flow first), then accepts the invitation as that authenticated
+user. Acceptance verifies that the account email matches the invitation and creates
+only the membership. Users without an automatically created workspace can create
+one later through the normal workspace creation endpoint.
 
 Workspace admins can call `add_workspace_user` to add or reactivate members.
 
 Client API routes:
 
 - `POST /api/v1/workspaces/create/` creates a workspace and its owner membership.
-- `GET /api/v1/workspaces/` gets the authenticated owner's or member's workspace.
+- `GET /api/v1/workspaces/list/` lists every active workspace membership for the authenticated user.
+- `GET /api/v1/workspaces/?workspace=<slug>` gets a selected accessible workspace
+  (the query parameter is optional for backward compatibility).
 - `PUT/PATCH /api/v1/workspaces/update/?workspace=<slug>` owner-updates a workspace.
 - `DELETE /api/v1/workspaces/delete/?workspace=<slug>` soft-deletes a workspace.
 - `GET /api/v1/workspaces/team/list/?workspace=<slug>` lists active and invited members.
@@ -32,7 +32,12 @@ Client API routes:
 - `POST /api/v1/workspaces/team/invite/?workspace=<slug>` emails an invitation.
 - `GET/PATCH /api/v1/workspaces/team/role/?workspace=<slug>&member_email=<email>` manages a member role.
 - `DELETE /api/v1/workspaces/team/remove-member/?workspace=<slug>&member_email=<email>` removes a member.
-- `POST /api/v1/workspaces/team/accept-invite/` registers from an emailed token.
+- `POST /api/v1/workspaces/team/accept-invite/` accepts an emailed token for the authenticated user.
+
+Chatbot access remains membership-specific. `GET /api/v1/chatbots/list/` returns
+only chatbots assigned to the user (plus all chatbots for workspace admins), and
+each item includes its workspace. Pass `workspace=<slug>` to restrict the list to
+one accessible workspace.
 
 
 ---

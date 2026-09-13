@@ -13,21 +13,33 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from chatbot.models import (
     Chatbot,
     ChatbotAllowedOrigin,
+    ChatbotCapacity,
     ChatbotInvitation,
     ChatbotUser,
 )
+from appointment_booking.models import Appointment, AppointmentBookingConfig
 from chatbot.services import create_chatbot
+from chatbot.services.invitations import (
+    _deliver_chatbot_invitation,
+    hash_invitation_token,
+)
 from chatbot.utils.choices import ChatbotPermissionTypes, ChatbotRoleTypes
-from chat_session.models import ChatMessage, ChatSession
+from chat.models import ChatMessage, ChatSession
+from chat.services.visitor_tokens import issue_conversation_token
+from chat.utils.choices import (
+    ChatMessageSenderType,
+    ChatSessionChannel,
+)
 from lead_capture.models import Lead, LeadCaptureConfig
 from subscription.choices import (
     BillingInterval,
     PaymentProvider,
+    PlanFeature,
     RenewalMode,
     SubscriptionStatus,
 )
 from subscription.models import ChatbotSubscription, PlanPrice, SubscriptionPlan
-from workspace.models import Workspace, WorkspaceUser
+from workspace.models import Workspace
 from workspace.services import add_workspace_user, ensure_personal_workspace
 
 User = get_user_model()
@@ -56,6 +68,83 @@ class ChatbotClientAPITests(APITestCase):
         )
         ChatbotUser.objects.create(chatbot=self.chatbot, user=self.member)
         self.client.force_authenticate(self.owner)
+
+    def test_chatbot_base_returns_subscription_backed_capabilities(self):
+        capacity = ChatbotCapacity.objects.get(chatbot=self.chatbot)
+        capacity.active_features = [
+            PlanFeature.KNOWLEDGE_BASE,
+            PlanFeature.HUMAN_HANDOFF,
+            PlanFeature.APPOINTMENT_BOOKING,
+            PlanFeature.LEAD_CAPTURE,
+        ]
+        capacity.save(update_fields=["active_features", "updated_at"])
+        subscription = self.chatbot.subscriptions.get(
+            status=SubscriptionStatus.ACTIVE
+        )
+
+        response = self.client.get(
+            reverse("chatbot-base"),
+            {"chatbot": self.chatbot.slug},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["message"], "Chatbot fetched successfully.")
+        self.assertEqual(
+            response.data["data"],
+            {
+                "workspace": {
+                    "name": self.workspace.name,
+                    "slug": self.workspace.slug,
+                },
+                "chatbot_name": self.chatbot.chatbot_name,
+                "slug": self.chatbot.slug,
+                "language": self.chatbot.language,
+                "timezone": self.chatbot.timezone,
+                "features": {
+                    "knowledge_base_enabled": True,
+                    "human_handoff_enabled": True,
+                    "appointment_booking_enabled": True,
+                    "lead_captures_enabled": True,
+                },
+                "capacity": {
+                    "ai_message_limit": capacity.ai_message_limit,
+                    "current_ai_message_count": capacity.current_ai_message_count,
+                    "file_size_limit_bytes": capacity.file_size_limit_bytes,
+                    "current_file_size_bytes": capacity.current_file_size_bytes,
+                    "knowledge_chunk_limit": capacity.knowledge_chunk_limit,
+                    "current_knowledge_chunk_count": (
+                        capacity.current_knowledge_chunk_count
+                    ),
+                    "active_features": capacity.active_features,
+                },
+                "current_subscription_plan": {
+                    "name": subscription.get_plan_name(),
+                    "is_free": subscription.is_free_plan(),
+                    "billing_interval": subscription.get_billing_interval(),
+                    "status": subscription.status,
+                    "current_period_start": subscription.current_period_start,
+                    "current_period_end": subscription.current_period_end,
+                    "cancel_at_period_end": subscription.cancel_at_period_end,
+                },
+                "ai_enabled": self.chatbot.ai_enabled,
+                "logo": self.chatbot.logo,
+                "status": self.chatbot.status,
+            },
+        )
+
+    def test_chatbot_base_rejects_non_member(self):
+        outsider = User.objects.create_user(
+            email="outsider@example.com",
+            password="StrongPass123!",
+        )
+        self.client.force_authenticate(outsider)
+
+        response = self.client.get(
+            reverse("chatbot-base"),
+            {"chatbot": self.chatbot.slug},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_public_chatbot_returns_widget_configuration_by_public_key(self):
         widget_settings = self.chatbot.widget_settings
@@ -89,12 +178,36 @@ class ChatbotClientAPITests(APITestCase):
         self.assertNotIn("public_key", data["widget_settings"])
         self.assertNotIn("allowed_urls", data)
         self.assertIsNone(data["lead_config"])
+        self.assertIsNone(data["appointment_config"])
+
+    def test_public_chatbot_returns_enabled_appointment_config(self):
+        config = AppointmentBookingConfig.objects.create(
+            chatbot=self.chatbot,
+            is_enabled=True,
+            confirmation_message="Your request has been received.",
+        )
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get(
+            reverse(
+                "public-chatbot",
+                kwargs={"public_key": self.chatbot.widget_settings.public_key},
+            )
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["data"]["appointment_config"],
+            {
+                "collectable_fields": config.collectable_fields,
+                "confirmation_message": "Your request has been received.",
+            },
+        )
 
     def test_public_chatbot_returns_enabled_lead_config(self):
         lead_config = LeadCaptureConfig.objects.create(
             chatbot=self.chatbot,
             is_enabled=True,
-            intro_message="Tell us about yourself.",
             require_consent=True,
             consent_message="May we save your details?",
         )
@@ -116,7 +229,6 @@ class ChatbotClientAPITests(APITestCase):
                 "is_enabled": True,
                 "collectable_fields": lead_config.collectable_fields,
                 "auto_collect": True,
-                "intro_message": "Tell us about yourself.",
                 "require_consent": True,
                 "consent_message": "May we save your details?",
             },
@@ -345,6 +457,39 @@ class ChatbotClientAPITests(APITestCase):
             {"lead_id": str(first_session.lead_id)},
             format="json",
         )
+        third_response = self.client.post(
+            conversation_url,
+            {"lead_id": str(first_session.lead_id)},
+            format="json",
+        )
+        second_session = ChatSession.objects.get(
+            pk=second_response.data["data"]["session"]["id"]
+        )
+        third_session = ChatSession.objects.get(
+            pk=third_response.data["data"]["session"]["id"]
+        )
+        ChatMessage.objects.create(
+            chat_session=first_session,
+            sender_type=ChatMessageSenderType.AI,
+            content="How can I help?",
+        )
+        self.member.name = "Support Agent"
+        self.member.save(update_fields=["name"])
+        agent = ChatbotUser.objects.get(
+            chatbot=self.chatbot,
+            user=self.member,
+        )
+        ChatMessage.objects.create(
+            chat_session=second_session,
+            sender_type=ChatMessageSenderType.AGENT,
+            sender=agent,
+            content="I can take it from here.",
+        )
+        ChatMessage.objects.create(
+            chat_session=third_session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="I need some help.",
+        )
         visitor_id = first_session.visitor_id
         url_kwargs = {
             "public_key": self.chatbot.widget_settings.public_key,
@@ -372,12 +517,38 @@ class ChatbotClientAPITests(APITestCase):
             },
         )
         self.assertEqual(sessions_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(sessions_response.data["data"]), 2)
+        self.assertEqual(len(sessions_response.data["data"]), 3)
         self.assertEqual(
             {item["id"] for item in sessions_response.data["data"]},
             {
                 first_response.data["data"]["session"]["id"],
                 second_response.data["data"]["session"]["id"],
+                third_response.data["data"]["session"]["id"],
+            },
+        )
+        sessions_by_id = {
+            item["id"]: item for item in sessions_response.data["data"]
+        }
+        self.assertEqual(
+            sessions_by_id[str(first_session.id)]["last_message"],
+            {
+                "content": "How can I help?",
+                "sender": self.chatbot.chatbot_name,
+            },
+        )
+        self.assertEqual(
+            sessions_by_id[str(second_session.id)]["last_message"],
+            {
+                "content": "I can take it from here.",
+                "sender": "Agent",
+                "agent_name": self.member.name,
+            },
+        )
+        self.assertEqual(
+            sessions_by_id[str(third_session.id)]["last_message"],
+            {
+                "content": "I need some help.",
+                "sender": "You",
             },
         )
 
@@ -404,55 +575,6 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(rejected_response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(accepted_response.status_code, status.HTTP_201_CREATED)
 
-    @patch("chatbot.api.v1.client.views.dispatch_ai_reply")
-    def test_visitor_message_is_authenticated_and_idempotent(self, queue_ai):
-        self.client.force_authenticate(user=None)
-        public_key = self.chatbot.widget_settings.public_key
-        bootstrap_response = self.client.post(
-            reverse(
-                "visitor-conversation",
-                kwargs={"public_key": public_key},
-            ),
-            {},
-            format="json",
-        )
-        conversation = bootstrap_response.data["data"]
-        url = reverse(
-            "visitor-message-create",
-            kwargs={
-                "public_key": public_key,
-                "session_id": conversation["session"]["id"],
-            },
-        )
-        payload = {
-            "client_message_id": "widget-message-1",
-            "content": "What is your refund policy?",
-            "metadata": {"page": "pricing"},
-        }
-        authorization = f"Bearer {conversation['conversation_token']}"
-
-        created_response = self.client.post(
-            url,
-            payload,
-            format="json",
-            HTTP_AUTHORIZATION=authorization,
-        )
-        duplicate_response = self.client.post(
-            url,
-            payload,
-            format="json",
-            HTTP_AUTHORIZATION=authorization,
-        )
-
-        self.assertEqual(created_response.status_code, status.HTTP_201_CREATED)
-        self.assertTrue(created_response.data["data"]["ai_queued"])
-        self.assertEqual(duplicate_response.status_code, status.HTTP_200_OK)
-        self.assertTrue(duplicate_response.data["data"]["duplicate"])
-        self.assertEqual(
-            ChatMessage.objects.filter(external_id="widget-message-1").count(),
-            1,
-        )
-        queue_ai.assert_called_once()
 
     def test_visitor_message_requires_conversation_bearer_token(self):
         self.client.force_authenticate(user=None)
@@ -477,6 +599,77 @@ class ChatbotClientAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @patch("chatbot.api.v1.client.views.record_ai_usage")
+    @patch("chatbot.api.v1.client.views.AgentClient")
+    @patch("appointment_booking.services.available_slots")
+    def test_visitor_can_book_available_slot_and_notify_agent(
+        self,
+        available_slots,
+        agent_client,
+        record_ai_usage,
+    ):
+        AppointmentBookingConfig.objects.create(
+            chatbot=self.chatbot,
+            is_enabled=True,
+        )
+        session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            visitor_id="booking-visitor",
+            channel=ChatSessionChannel.WEB_WIDGET,
+        )
+        token = issue_conversation_token(session)
+        starts_at = timezone.now() + timedelta(days=2)
+        ends_at = starts_at + timedelta(minutes=30)
+        available_slots.return_value = [{
+            "starts_at": starts_at.isoformat(),
+            "ends_at": ends_at.isoformat(),
+        }]
+        agent_client.return_value.confirm_booking_sync.return_value = {
+            "result": {"content": "Your appointment request is awaiting approval."},
+            "token": {"total_tokens": 20},
+            "cost": 0.0001,
+        }
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(
+            reverse(
+                "visitor-appointment-create",
+                kwargs={
+                    "public_key": self.chatbot.widget_settings.public_key,
+                    "session_id": session.id,
+                },
+            ),
+            {
+                "starts_at": starts_at.isoformat(),
+                "collected_fields": {
+                    "name": "Ada Lovelace",
+                    "email": "ada@example.com",
+                },
+            },
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        appointment = Appointment.objects.get(
+            pk=response.data["data"]["appointment"]["id"]
+        )
+        self.assertEqual(
+            appointment.metadata,
+            {
+                "chat_session_id": str(session.id),
+                "source": "web_widget",
+            },
+        )
+        self.assertEqual(appointment.starts_at, starts_at)
+        self.assertEqual(appointment.ends_at, ends_at)
+        agent_client.return_value.confirm_booking_sync.assert_called_once_with(
+            appointment_id=str(appointment.id),
+            user_id="booking-visitor",
+        )
+        self.assertTrue(response.data["data"]["agent_acknowledged"])
+        record_ai_usage.assert_called_once()
 
     def test_chatbot_detail_uses_chatbot_query_parameter(self):
         response = self.client.get(
@@ -896,16 +1089,12 @@ class ChatbotClientAPITests(APITestCase):
             ],
         )
 
-    def test_workspace_member_can_list_and_open_every_workspace_chatbot(self):
+    def test_workspace_member_lists_and_opens_only_assigned_chatbots(self):
         workspace_chatbot = create_chatbot(
             workspace=self.workspace,
             chatbot_name="Workspace Bot",
             created_by=self.owner,
         )
-        ChatbotUser.objects.filter(
-            chatbot=self.chatbot,
-            user=self.member,
-        ).delete()
         self.client.force_authenticate(self.member)
 
         response = self.client.get(
@@ -916,14 +1105,22 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(
             {item["slug"] for item in response.data["data"]},
-            {self.chatbot.slug, workspace_chatbot.slug},
+            {self.chatbot.slug},
+        )
+        self.assertEqual(
+            response.data["data"][0]["workspace"],
+            {
+                "id": str(self.workspace.id),
+                "name": self.workspace.name,
+                "slug": self.workspace.slug,
+            },
         )
 
         response = self.client.get(
             reverse("chatbot-detail"),
             {"chatbot": workspace_chatbot.slug},
         )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
         response = self.client.patch(
             (
@@ -965,6 +1162,56 @@ class ChatbotClientAPITests(APITestCase):
             {"chatbot": other_chatbot.slug},
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_user_can_access_multiple_chatbots_across_workspaces_and_filter_them(self):
+        user = User.objects.create_user(
+            email="multi-chatbot@example.com",
+            password="StrongPass123!",
+        )
+        same_workspace_chatbot = create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Same Workspace Bot",
+            created_by=self.owner,
+        )
+        other_owner = User.objects.create_user(
+            email="other-owner@example.com",
+            password="StrongPass123!",
+        )
+        other_workspace = ensure_personal_workspace(other_owner)
+        other_workspace_chatbot = create_chatbot(
+            workspace=other_workspace,
+            chatbot_name="Other Workspace Bot",
+            created_by=other_owner,
+        )
+        ChatbotUser.objects.bulk_create(
+            [
+                ChatbotUser(chatbot=self.chatbot, user=user),
+                ChatbotUser(chatbot=same_workspace_chatbot, user=user),
+                ChatbotUser(chatbot=other_workspace_chatbot, user=user),
+            ]
+        )
+        self.client.force_authenticate(user)
+
+        response = self.client.get(
+            reverse("chatbot-list"),
+            {"page_size": 10},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 3)
+        self.assertEqual(
+            {item["workspace"]["slug"] for item in response.data["data"]},
+            {self.workspace.slug, other_workspace.slug},
+        )
+
+        response = self.client.get(
+            reverse("chatbot-list"),
+            {"workspace": self.workspace.slug, "page_size": 10},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            {item["slug"] for item in response.data["data"]},
+            {self.chatbot.slug, same_workspace_chatbot.slug},
+        )
 
     def test_chatbot_member_list_returns_page_metadata(self):
         response = self.client.get(
@@ -1072,10 +1319,132 @@ class ChatbotClientAPITests(APITestCase):
             invited_by=self.owner,
         )
 
-    def test_invited_permissions_are_applied_when_invitation_is_accepted(self):
+    @patch("chatbot.services.invitations.send_chatbot_invitation_email.delay")
+    def test_invitation_link_marks_only_missing_accounts_as_new_users(self, delay):
+        invitation = ChatbotInvitation.objects.create(
+            chatbot=self.chatbot,
+            email="new-invitee@example.com",
+            token_hash="new-invite-token-hash",
+            expires_at=timezone.now() + timedelta(hours=1),
+            created_by=self.owner,
+        )
+
+        _deliver_chatbot_invitation(invitation=invitation, token="new-token")
+
+        self.assertIn("new_user=true", delay.call_args.kwargs["message"])
+
+        invitation.email = self.member.email
+        invitation.save(update_fields=["email", "updated_at"])
+        _deliver_chatbot_invitation(invitation=invitation, token="existing-token")
+
+        self.assertNotIn("new_user", delay.call_args.kwargs["message"])
+
+    def test_new_user_can_register_and_accept_invitation_in_one_request(self):
+        invitee_email = "brand-new-invitee@example.com"
+        query = urlencode({"chatbot": self.chatbot.slug})
+        with patch(
+            "chatbot.services.invitations._deliver_chatbot_invitation"
+        ) as deliver:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    f'{reverse("invite-chatbot-member")}?{query}',
+                    {"email": invitee_email, "permissions": []},
+                    format="json",
+                )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        token = deliver.call_args.kwargs["token"]
+
+        self.client.force_authenticate(user=None)
+        response = self.client.post(
+            reverse("accept-chatbot-invitation"),
+            {
+                "token": token,
+                "name": "Brand New Invitee",
+                "password": "InvitedPassword123!",
+                "confirm_password": "InvitedPassword123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn("access_token", response.data["data"])
+        self.assertIn("refresh_token", response.data["data"])
+        invitee = User.objects.get(email=invitee_email)
+        self.assertEqual(invitee.name, "Brand New Invitee")
+        self.assertTrue(invitee.check_password("InvitedPassword123!"))
+        self.assertTrue(invitee.is_email_verified)
+        self.assertTrue(
+            ChatbotUser.objects.filter(
+                chatbot=self.chatbot,
+                user=invitee,
+                is_active=True,
+            ).exists()
+        )
+
+    def test_new_user_can_accept_while_another_account_is_authenticated(self):
+        invitee_email = "new-user-with-session@example.com"
+        query = urlencode({"chatbot": self.chatbot.slug})
+        with patch(
+            "chatbot.services.invitations._deliver_chatbot_invitation"
+        ) as deliver:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    f'{reverse("invite-chatbot-member")}?{query}',
+                    {"email": invitee_email, "permissions": []},
+                    format="json",
+                )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        token = deliver.call_args.kwargs["token"]
+
+        # self.owner remains authenticated, but the token belongs to a new user.
+        response = self.client.post(
+            reverse("accept-chatbot-invitation"),
+            {
+                "token": token,
+                "name": "Invited User",
+                "password": "InvitedPassword123!",
+                "confirm_password": "InvitedPassword123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            response.data["data"]["chatbot"]["current_user_role"],
+            ChatbotRoleTypes.MEMBER,
+        )
+        invitee = User.objects.get(email=invitee_email)
+        self.assertTrue(
+            ChatbotUser.objects.filter(
+                chatbot=self.chatbot,
+                user=invitee,
+                is_active=True,
+            ).exists()
+        )
+
+    def test_new_user_invitation_requires_registration_fields(self):
+        ChatbotInvitation.objects.create(
+            chatbot=self.chatbot,
+            email="missing-fields@example.com",
+            token_hash=hash_invitation_token("missing-fields-token"),
+            expires_at=timezone.now() + timedelta(hours=1),
+            created_by=self.owner,
+        )
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(
+            reverse("accept-chatbot-invitation"),
+            {"token": "missing-fields-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("name", response.data["errors"])
+        self.assertIn("password", response.data["errors"])
+        self.assertIn("confirm_password", response.data["errors"])
+
+    def test_invitation_is_account_independent_and_applies_permissions(self):
         invitee_email = "invitee@example.com"
-        invitee_name = "Invited Member"
-        invitee_password = "StrongInvitePass123!"
         permissions = [
             ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT,
             ChatbotPermissionTypes.SETUP_CONFIGURATION,
@@ -1097,12 +1466,7 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["data"]["permissions"], permissions)
         invited_at = response.data["data"]["invited_at"]
-        invitee = User.objects.get(email=invitee_email)
-        self.assertFalse(invitee.has_usable_password())
-        self.assertFalse(
-            WorkspaceUser.objects.filter(user=invitee).exists()
-        )
-        self.assertFalse(Workspace.objects.filter(owner=invitee).exists())
+        self.assertFalse(User.objects.filter(email=invitee_email).exists())
         token = deliver.call_args.kwargs["token"]
 
         response = self.client.get(
@@ -1126,38 +1490,37 @@ class ChatbotClientAPITests(APITestCase):
 
         self.client.force_authenticate(user=None)
         response = self.client.post(
-            reverse("accept-chatbot-invitation"),
+            reverse("register"),
             {
-                "name": invitee_name,
-                "password": invitee_password,
-                "confirm_password": invitee_password,
-                "token": token,
+                "email": invitee_email,
+                "name": "Invited Chatbot User",
+                "password": "ExistingPassword123!",
+                "confirm_password": "ExistingPassword123!",
             },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        invitee = User.objects.get(email=invitee_email)
+        self.assertFalse(Workspace.objects.filter(owner=invitee).exists())
+
+        self.client.force_authenticate(invitee)
+        response = self.client.post(
+            reverse("accept-chatbot-invitation"),
+            {"token": token},
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertIn("access_token", response.data["data"])
-        self.assertIn("refresh_token", response.data["data"])
+        self.assertNotIn("access_token", response.data["data"])
+        self.assertNotIn("refresh_token", response.data["data"])
         membership = ChatbotUser.objects.get(
             chatbot=self.chatbot,
             user=invitee,
         )
         self.assertEqual(membership.permissions, permissions)
         invitee.refresh_from_db()
-        self.assertEqual(invitee.name, invitee_name)
-        self.assertTrue(invitee.check_password(invitee_password))
-        self.assertTrue(invitee.is_email_verified)
-        self.assertIsNotNone(invitee.last_login)
-        self.assertFalse(
-            WorkspaceUser.objects.filter(user=invitee).exists()
-        )
-
-        self.client.credentials(
-            HTTP_AUTHORIZATION=(
-                f'Bearer {response.data["data"]["access_token"]}'
-            )
-        )
+        self.assertEqual(invitee.name, "Invited Chatbot User")
+        self.assertTrue(invitee.check_password("ExistingPassword123!"))
         response = self.client.get(
             reverse("chatbot-detail"),
             {"chatbot": self.chatbot.slug},
@@ -1190,8 +1553,12 @@ class ChatbotClientAPITests(APITestCase):
         self.assertTrue(accepted_members[0]["is_active"])
         self.assertEqual(accepted_members[0]["invited_at"], invited_at)
 
-    def test_invitation_acceptance_rejects_mismatched_passwords(self):
-        invitee_email = "password-mismatch@example.com"
+    def test_invitation_acceptance_rejects_a_different_authenticated_user(self):
+        invitee_email = "different-account@example.com"
+        User.objects.create_user(
+            email=invitee_email,
+            password="StrongPass123!",
+        )
         query = urlencode({"chatbot": self.chatbot.slug})
         with patch(
             "chatbot.services.invitations._deliver_chatbot_invitation"
@@ -1205,33 +1572,21 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         token = deliver.call_args.kwargs["token"]
 
-        self.client.force_authenticate(user=None)
+        self.client.force_authenticate(self.owner)
         response = self.client.post(
             reverse("accept-chatbot-invitation"),
-            {
-                "name": "Invited Member",
-                "password": "StrongInvitePass123!",
-                "confirm_password": "DifferentPass123!",
-                "token": token,
-            },
+            {"token": token},
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("confirm_password", response.data["errors"])
+        self.assertIn("token", response.data["errors"])
         invitation = ChatbotInvitation.objects.get(
             chatbot=self.chatbot,
             email=invitee_email,
         )
         self.assertIsNone(invitation.accepted_at)
-        invitee = User.objects.get(email=invitee_email)
-        self.assertFalse(invitee.has_usable_password())
-        self.assertFalse(
-            ChatbotUser.objects.filter(
-                chatbot=self.chatbot,
-                user=invitee,
-            ).exists()
-        )
+        self.assertTrue(User.objects.filter(email=invitee_email).exists())
 
     def test_jwt_activity_updates_last_active(self):
         self.client.force_authenticate(user=None)
@@ -1244,7 +1599,7 @@ class ChatbotClientAPITests(APITestCase):
         self.owner.refresh_from_db()
         self.assertIsNotNone(self.owner.last_active)
 
-    def test_remove_member_deletes_only_membership_and_marks_account_orphan(self):
+    def test_remove_member_deletes_only_membership_without_changing_account(self):
         query = urlencode(
             {
                 "chatbot": self.chatbot.slug,
@@ -1263,8 +1618,6 @@ class ChatbotClientAPITests(APITestCase):
             ).exists()
         )
         self.assertTrue(User.objects.filter(pk=self.member.pk).exists())
-        self.member.refresh_from_db()
-        self.assertTrue(self.member.is_orphan)
 
     def test_member_detail_requires_both_query_parameters(self):
         response = self.client.get(

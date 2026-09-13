@@ -45,27 +45,6 @@ def _is_chatbot_manager(chatbot, user):
     )
 
 
-def _get_or_create_invited_user(email):
-    user = User.objects.select_for_update().filter(email__iexact=email).first()
-    if user is not None:
-        if not user.is_active:
-            raise InvalidChatbotInvitation(
-                "The account for this email is inactive."
-            )
-        return user
-
-    try:
-        with transaction.atomic():
-            return User.objects.create_user(email=email, password=None)
-    except IntegrityError:
-        user = User.objects.filter(email__iexact=email).first()
-        if user is None or not user.is_active:
-            raise InvalidChatbotInvitation(
-                "The invited user account could not be created."
-            )
-        return user
-
-
 def get_valid_chatbot_invitation(token):
     if not token:
         raise InvalidChatbotInvitation("Invitation token is required.")
@@ -91,7 +70,10 @@ def get_valid_chatbot_invitation(token):
 
 
 def _deliver_chatbot_invitation(*, invitation, token):
-    query = urlencode({"token": token, "email": invitation.email})
+    query_params = {"token": token, "email": invitation.email}
+    if not User.objects.filter(email__iexact=invitation.email).exists():
+        query_params["new_user"] = "true"
+    query = urlencode(query_params)
     invitation_link = (
         f"{settings.USER_FRONTEND_URL.rstrip('/')}"
         f"{settings.CHATBOT_INVITATION_PATH}?{query}"
@@ -142,15 +124,20 @@ def issue_chatbot_invitation(*, chatbot, email, permissions=None, invited_by):
         permissions = normalize_chatbot_permission_codes(chatbot, permissions)
     except ValueError as exc:
         raise InvalidChatbotInvitation(str(exc)) from exc
-    invited_user = _get_or_create_invited_user(email)
-    if ChatbotUser.objects.filter(
-        chatbot=chatbot,
-        user=invited_user,
-        is_active=True,
-    ).exists():
-        raise InvalidChatbotInvitation(
-            "This user is already a member of the chatbot."
-        )
+    invited_user = User.objects.filter(email__iexact=email).first()
+    if invited_user is not None:
+        if not invited_user.is_active:
+            raise InvalidChatbotInvitation(
+                "The account for this email is inactive."
+            )
+        if ChatbotUser.objects.filter(
+            chatbot=chatbot,
+            user=invited_user,
+            is_active=True,
+        ).exists():
+            raise InvalidChatbotInvitation(
+                "This user is already a member of the chatbot."
+            )
 
     token = secrets.token_urlsafe(32)
     token_hash = hash_invitation_token(token)
@@ -201,7 +188,7 @@ def issue_chatbot_invitation(*, chatbot, email, permissions=None, invited_by):
 
 
 @transaction.atomic
-def accept_chatbot_invitation(*, token, name, password):
+def accept_chatbot_invitation(*, token, user):
     try:
         invitation = (
             ChatbotInvitation.objects.select_for_update()
@@ -222,17 +209,13 @@ def accept_chatbot_invitation(*, token, name, password):
     ):
         raise InvalidChatbotInvitation("This chatbot is inactive.")
 
-    user = (
-        User.objects.select_for_update()
-        .filter(
-            email__iexact=invitation.email,
-            is_active=True,
-        )
-        .first()
-    )
-    if user is None:
+    if not user or not user.is_active:
         raise InvalidChatbotInvitation(
-            "The invited user account is no longer active."
+            "Sign in with the invited account before accepting this invitation."
+        )
+    if user.email.strip().casefold() != invitation.email.strip().casefold():
+        raise InvalidChatbotInvitation(
+            "This invitation was sent to a different email address."
         )
 
     try:
@@ -259,20 +242,5 @@ def accept_chatbot_invitation(*, token, name, password):
     invitation.accepted_at = accepted_at
     invitation.updated_by = user
     invitation.save(update_fields=["accepted_at", "updated_by", "updated_at"])
-    user.name = name.strip()
-    user.set_password(password)
-    user.is_email_verified = True
-    user.is_orphan = False
-    user.last_login = accepted_at
-    user.save(
-        update_fields=[
-            "name",
-            "password",
-            "is_email_verified",
-            "is_orphan",
-            "last_login",
-            "updated_at",
-        ]
-    )
     membership.invited_at = invitation.invited_at
     return membership

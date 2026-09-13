@@ -7,14 +7,18 @@ from django.core.exceptions import (
     ObjectDoesNotExist,
     ValidationError as DjangoValidationError,
 )
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from rest_framework import serializers
 
+from accounts.api.v1.client.serializers import build_auth_token_payload
+from accounts.choices import AccountProvider
 from app.services.r2 import delete_image, schedule_delete_image, upload_image
 from app.utils.storage_fields import R2ImageField
+from appointment_booking.models import AppointmentBookingConfig
 from chatbot.models import (
     Chatbot,
     ChatbotAllowedOrigin,
+    ChatbotCapacity,
     ChatbotInvitation,
     ChatbotUser,
     ChatbotWidgetSettings,
@@ -36,6 +40,7 @@ from chatbot.utils.validation import (
     validate_unique_chatbot_name,
 )
 from lead_capture.models import LeadCaptureConfig
+from subscription.choices import PlanFeature
 from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
 from workspace.models import Workspace, WorkspaceUser
 
@@ -44,6 +49,10 @@ User = get_user_model()
 
 class ChatbotQuerySerializer(serializers.Serializer):
     chatbot = serializers.SlugField()
+
+
+class ChatbotListQuerySerializer(serializers.Serializer):
+    workspace = serializers.SlugField(required=False)
 
 
 class ChatbotMemberQuerySerializer(ChatbotQuerySerializer):
@@ -309,6 +318,7 @@ class ChatbotListSerializer(serializers.ModelSerializer):
     """Serialize compact chatbot summaries returned by the list endpoint."""
 
     created_by = serializers.SerializerMethodField()
+    workspace = ChatbotWorkspaceSerializer(read_only=True)
     members = serializers.SerializerMethodField()
     current_user_role = serializers.SerializerMethodField()
     subscription_plan_name = serializers.SerializerMethodField()
@@ -317,6 +327,7 @@ class ChatbotListSerializer(serializers.ModelSerializer):
         model = Chatbot
         fields = (
             "slug",
+            "workspace",
             "chatbot_name",
             "business_name",
             "description",
@@ -386,6 +397,100 @@ class ChatbotCreateSerializer(ChatbotBaseSerializer):
 
 class ChatbotDetailSerializer(ChatbotBaseSerializer):
     """Serialize the complete details of a chatbot."""
+
+
+class ChatbotBaseWorkspaceSerializer(serializers.ModelSerializer):
+    """Serialize the workspace identity used by the chatbot shell."""
+
+    class Meta:
+        model = Workspace
+        fields = ("name", "slug")
+        read_only_fields = fields
+
+
+class ChatbotCapacitySerializer(serializers.ModelSerializer):
+    """Serialize the cached limits, usage, and entitlements for a chatbot."""
+
+    class Meta:
+        model = ChatbotCapacity
+        fields = (
+            "ai_message_limit",
+            "current_ai_message_count",
+            "file_size_limit_bytes",
+            "current_file_size_bytes",
+            "knowledge_chunk_limit",
+            "current_knowledge_chunk_count",
+            "active_features",
+        )
+        read_only_fields = fields
+
+
+class ChatbotCurrentSubscriptionPlanSerializer(serializers.Serializer):
+    """Serialize the plan and billing state for the current subscription."""
+
+    name = serializers.CharField(source="get_plan_name", read_only=True)
+    is_free = serializers.BooleanField(source="is_free_plan", read_only=True)
+    billing_interval = serializers.CharField(
+        source="get_billing_interval",
+        read_only=True,
+    )
+    status = serializers.CharField(read_only=True)
+    current_period_start = serializers.DateTimeField(read_only=True)
+    current_period_end = serializers.DateTimeField(read_only=True)
+    cancel_at_period_end = serializers.BooleanField(read_only=True)
+
+
+class ChatbotBaseResponseSerializer(serializers.ModelSerializer):
+    """Serialize chatbot identity and subscription-backed capabilities."""
+
+    workspace = ChatbotBaseWorkspaceSerializer(read_only=True)
+    capacity = ChatbotCapacitySerializer(read_only=True)
+    features = serializers.SerializerMethodField()
+    current_subscription_plan = serializers.SerializerMethodField()
+
+    def get_features(self, obj):
+        capacity = getattr(obj, "capacity", None)
+
+        def enabled(feature):
+            return bool(capacity and capacity.has_feature(feature))
+
+        return {
+            "knowledge_base_enabled": enabled(PlanFeature.KNOWLEDGE_BASE),
+            "human_handoff_enabled": enabled(PlanFeature.HUMAN_HANDOFF),
+            "appointment_booking_enabled": enabled(
+                PlanFeature.APPOINTMENT_BOOKING
+            ),
+            "lead_captures_enabled": enabled(PlanFeature.LEAD_CAPTURE),
+        }
+
+    def get_current_subscription_plan(self, obj):
+        subscriptions = getattr(obj, "open_subscriptions", None)
+        if subscriptions is None:
+            subscription = obj.subscriptions.filter(
+                status__in=OPEN_SUBSCRIPTION_STATUSES,
+            ).first()
+        else:
+            subscription = subscriptions[0] if subscriptions else None
+        if subscription is None:
+            return None
+        return ChatbotCurrentSubscriptionPlanSerializer(subscription).data
+
+    class Meta:
+        model = Chatbot
+        fields = (
+            "workspace",
+            "chatbot_name",
+            "slug",
+            "language",
+            "timezone",
+            "features",
+            "capacity",
+            "current_subscription_plan",
+            "ai_enabled",
+            "logo",
+            "status",
+        )
+        read_only_fields = fields
 
 
 
@@ -483,9 +588,20 @@ class PublicLeadCaptureConfigSerializer(serializers.ModelSerializer):
             "is_enabled",
             "collectable_fields",
             "auto_collect",
-            "intro_message",
             "require_consent",
             "consent_message",
+        )
+        read_only_fields = fields
+
+
+class PublicAppointmentBookingConfigSerializer(serializers.ModelSerializer):
+    """Serialize the booking form configuration required by the widget."""
+
+    class Meta:
+        model = AppointmentBookingConfig
+        fields = (
+            "collectable_fields",
+            "confirmation_message",
         )
         read_only_fields = fields
 
@@ -495,6 +611,7 @@ class PublicChatbotSerializer(serializers.ModelSerializer):
 
     widget_settings = PublicChatbotWidgetSettingsSerializer(read_only=True)
     lead_config = serializers.SerializerMethodField()
+    appointment_config = serializers.SerializerMethodField()
 
     def get_lead_config(self, obj):
         try:
@@ -506,6 +623,16 @@ class PublicChatbotSerializer(serializers.ModelSerializer):
             return None
         return PublicLeadCaptureConfigSerializer(config).data
 
+    def get_appointment_config(self, obj):
+        try:
+            config = obj.appointment_booking_config
+        except ObjectDoesNotExist:
+            return None
+
+        if not config.is_enabled:
+            return None
+        return PublicAppointmentBookingConfigSerializer(config).data
+
     class Meta:
         model = Chatbot
         fields = (
@@ -515,6 +642,7 @@ class PublicChatbotSerializer(serializers.ModelSerializer):
             "welcome_message",
             "widget_settings",
             "lead_config",
+            "appointment_config",
         )
         read_only_fields = fields
 
@@ -881,40 +1009,114 @@ class InviteChatbotMemberSerializer(serializers.Serializer):
 
 
 class AcceptChatbotInvitationSerializer(serializers.Serializer):
-    name = serializers.CharField(max_length=50)
-    password = serializers.CharField(write_only=True, min_length=8)
-    confirm_password = serializers.CharField(write_only=True)
     token = serializers.CharField(write_only=True)
+    name = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=False,
+        max_length=50,
+    )
+    password = serializers.CharField(
+        write_only=True,
+        required=False,
+        min_length=8,
+    )
+    confirm_password = serializers.CharField(write_only=True, required=False)
 
     def validate(self, attrs):
-        if attrs["password"] != attrs["confirm_password"]:
-            raise serializers.ValidationError(
-                {"confirm_password": "Passwords do not match."}
-            )
-
         try:
             invitation = get_valid_chatbot_invitation(attrs["token"])
         except InvalidChatbotInvitation as exc:
             raise serializers.ValidationError({"token": str(exc)}) from exc
 
-        user = User.objects.filter(
-            email__iexact=invitation.email,
-            is_active=True,
-        ).first()
-        if user is None:
-            raise serializers.ValidationError(
-                {"token": "The invited user account is no longer active."}
-            )
-        user.name = attrs["name"]
-        validate_password(attrs["password"], user)
+        invited_user = User.objects.filter(email__iexact=invitation.email).first()
+        request_user = self.context["request"].user
+        if invited_user is not None:
+            if (
+                request_user.is_authenticated
+                and request_user.email.strip().casefold()
+                != invitation.email.strip().casefold()
+            ):
+                raise serializers.ValidationError(
+                    {
+                        "token": (
+                            "This invitation was sent to a different email address."
+                        )
+                    }
+                )
+            if not invited_user.is_active:
+                raise serializers.ValidationError(
+                    {"token": "The account for this invitation is inactive."}
+                )
+            if (
+                not request_user.is_authenticated
+                or request_user.pk != invited_user.pk
+            ):
+                raise serializers.ValidationError(
+                    {
+                        "token": (
+                            "Sign in with the invited account before accepting "
+                            "this invitation."
+                        )
+                    }
+                )
+        else:
+            errors = {}
+            for field in ("name", "password", "confirm_password"):
+                if not attrs.get(field):
+                    errors[field] = "This field is required for a new user."
+            if errors:
+                raise serializers.ValidationError(errors)
+            if attrs["password"] != attrs["confirm_password"]:
+                raise serializers.ValidationError(
+                    {"confirm_password": "Passwords do not match."}
+                )
+            try:
+                validate_password(
+                    attrs["password"],
+                    User(email=invitation.email, name=attrs["name"]),
+                )
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError(
+                    {"password": list(exc.messages)}
+                ) from exc
+
+        attrs["invitation"] = invitation
+        attrs["invited_user"] = invited_user
         return attrs
 
+    @transaction.atomic
     def create(self, validated_data):
+        invitation = validated_data["invitation"]
+        user = validated_data["invited_user"]
+        self.created_new_user = user is None
+        if user is None:
+            try:
+                user = User.objects.create_user(
+                    email=invitation.email,
+                    name=validated_data["name"],
+                    password=validated_data["password"],
+                    provider=AccountProvider.PASSWORD,
+                    is_email_verified=True,
+                )
+            except IntegrityError as exc:
+                raise serializers.ValidationError(
+                    {
+                        "token": (
+                            "An account for this invitation already exists. "
+                            "Please sign in and try again."
+                        )
+                    }
+                ) from exc
         try:
-            return accept_chatbot_invitation(
+            membership = accept_chatbot_invitation(
                 token=validated_data["token"],
-                name=validated_data["name"],
-                password=validated_data["password"],
+                user=user,
             )
         except InvalidChatbotInvitation as exc:
             raise serializers.ValidationError({"token": str(exc)}) from exc
+        self.accepted_user = user
+        self.auth_tokens = (
+            build_auth_token_payload(user) if self.created_new_user else {}
+        )
+        return membership

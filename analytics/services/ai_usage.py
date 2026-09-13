@@ -20,19 +20,45 @@ def _normalize_cost(cost):
 
 def record_ai_usage(
     *,
-    user,
+    chatbot,
     usage_type,
     cost,
-    tokens,
-    trip=None,
+    token_usage,
+    chat_session=None,
+    chat_message=None,
+    model="",
     metadata=None,
 ):
+    if (
+        chat_session is not None
+        and str(chat_session.chatbot_id) != str(chatbot.id)
+    ):
+        raise ValidationError(
+            {"chat_session": ["The session must belong to the chatbot."]}
+        )
+    if (
+        chat_message is not None
+        and (
+            chat_session is None
+            or chat_message.chat_session_id != chat_session.id
+        )
+    ):
+        raise ValidationError(
+            {"chat_message": ["The message must belong to the session."]}
+        )
+
     usage = AIUsage(
-        user=user,
-        trip=trip,
+        chatbot=chatbot,
+        chat_session=chat_session,
+        chat_message=chat_message,
         usage_type=usage_type,
         cost=_normalize_cost(cost),
-        tokens=tokens,
+        tokens=token_usage.get("total_tokens", 0),
+        input_tokens=token_usage.get("input_tokens", 0),
+        output_tokens=token_usage.get("output_tokens", 0),
+        thinking_tokens=token_usage.get("thinking_tokens", 0),
+        cached_input_tokens=token_usage.get("cached_input_tokens", 0),
+        model=model,
         metadata={} if metadata is None else metadata,
     )
     usage.full_clean(validate_unique=False, validate_constraints=False)

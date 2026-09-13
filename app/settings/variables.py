@@ -23,14 +23,14 @@ SECURE_PROXY_SSL_HEADER = (
 )
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-LOG_LEVEL = env("LOG_LEVEL", "INFO")
+LOG_LEVEL = env("LOG_LEVEL", "INFO").strip().upper()
 
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
         "console": {
-            "format": "%(levelname)s %(asctime)s %(name)s %(message)s",
+            "format": "%(levelname)s %(asctime)s %(name)s %(filename)s:%(lineno)d %(message)s",
         },
     },
     "handlers": {
@@ -89,11 +89,16 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = env("CELERY_TIMEZONE", "UTC")
 CELERY_RESULT_EXTENDED = True
 CELERY_IMPORTS = (
+    "base.socket.tasks",
     "accounts.tasks",
-    "chat_session.tasks",
+    "chat.tasks",
     "knowledge.tasks",
 )
 CELERY_BEAT_SCHEDULE = {
+    "expire-dashboard-presence": {
+        "task": "base.socket.tasks.sweep_presence",
+        "schedule": 15.0,
+    },
     "permanently-delete-expired-accounts-daily": {
         "task": "accounts.tasks.permanently_delete_expired_accounts",
         "schedule": 60 * 60 * 24,
@@ -118,6 +123,12 @@ else:
             "BACKEND": "channels.layers.InMemoryChannelLayer",
         },
     }
+
+# Presence remains Redis-backed even when Channels uses an in-memory test layer.
+PRESENCE_REDIS_URL = env("PRESENCE_REDIS_URL", CHANNEL_REDIS_URL)
+PRESENCE_REDIS_PREFIX = env("PRESENCE_REDIS_PREFIX", "presence")
+PRESENCE_HEARTBEAT_SECONDS = 25
+PRESENCE_TIMEOUT_SECONDS = 75
 
 # ADK
 ADK_DB_URL = env("ADK_DB_URL")
@@ -189,9 +200,7 @@ PASSWORD_RESET_PATH = env("PASSWORD_RESET_PATH", "/reset-password")
 WORKSPACE_INVITATION_PATH = env(
     "WORKSPACE_INVITATION_PATH", "/workspace-invitation"
 )
-CHATBOT_INVITATION_PATH = env(
-    "CHATBOT_INVITATION_PATH", "/chatbot-invitation"
-)
+CHATBOT_INVITATION_PATH = env("CHATBOT_INVITATION_PATH", "/invitation")
 
 # FIREBASE AUTH
 FIREBASE_VERIFY_ID_TOKEN = env_bool("FIREBASE_VERIFY_ID_TOKEN", False)

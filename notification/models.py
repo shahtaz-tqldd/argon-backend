@@ -2,7 +2,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from app.base.models import BaseModel
+from app.core.models import BaseModel
 
 
 class NotificationRecipientType(models.TextChoices):

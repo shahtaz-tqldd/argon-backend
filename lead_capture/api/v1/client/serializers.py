@@ -27,7 +27,6 @@ class LeadCaptureConfigSerializer(serializers.ModelSerializer):
             "is_enabled",
             "collectable_fields",
             "auto_collect",
-            "intro_message",
             "require_consent",
             "consent_message",
             "created_at",

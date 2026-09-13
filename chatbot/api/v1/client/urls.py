@@ -6,6 +6,7 @@ from chatbot.api.v1.client import views
 chatbot = [
     path("create/", views.ChatbotCreateView.as_view(), name="chatbot-create"),
     path("list/", views.ChatbotListView.as_view(), name="chatbot-list"),
+    path("base/", views.ChatbotBaseAPIView.as_view(), name="chatbot-base"),
     path("details/", views.ChatbotDetailView.as_view(), name="chatbot-detail"),
     path(
         "widget-details/",
@@ -29,6 +30,11 @@ chatbot = [
         "<str:public_key>/conversations/<uuid:session_id>/messages/",
         views.VisitorMessageCreateView.as_view(),
         name="visitor-message-create",
+    ),
+    path(
+        "<str:public_key>/conversations/<uuid:session_id>/appointments/",
+        views.VisitorAppointmentCreateView.as_view(),
+        name="visitor-appointment-create",
     ),
     path(
         "<str:public_key>/visitors/<str:visitor_id>/",

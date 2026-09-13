@@ -1,12 +1,8 @@
-import logging
+from app.utils.logger import logger
 from dataclasses import dataclass
 import asyncio, re, random
 
 from playwright.async_api import async_playwright
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 
 @dataclass
 class Data:

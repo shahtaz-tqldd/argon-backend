@@ -2,7 +2,6 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
 from rest_framework import serializers
 
@@ -275,33 +274,25 @@ class InviteWorkspaceMemberSerializer(serializers.Serializer):
 
 class AcceptWorkspaceInvitationSerializer(serializers.Serializer):
     token = serializers.CharField(write_only=True)
-    name = serializers.CharField(max_length=50)
-    password = serializers.CharField(write_only=True, min_length=8)
-    confirm_password = serializers.CharField(write_only=True)
 
     def validate(self, attrs):
-        if attrs["password"] != attrs["confirm_password"]:
-            raise serializers.ValidationError(
-                {"confirm_password": "Passwords do not match."}
-            )
         try:
             invitation = get_valid_workspace_invitation(attrs["token"])
         except InvalidWorkspaceInvitation as exc:
             raise serializers.ValidationError({"token": str(exc)}) from exc
 
-        validate_password(
-            attrs["password"],
-            User(email=invitation.email, name=attrs["name"]),
-        )
-        attrs["invitation"] = invitation
+        user = self.context["request"].user
+        if user.email.strip().casefold() != invitation.email.strip().casefold():
+            raise serializers.ValidationError(
+                {"token": "This invitation was sent to a different email address."}
+            )
         return attrs
 
     def create(self, validated_data):
         try:
             return accept_workspace_invitation(
                 token=validated_data["token"],
-                name=validated_data["name"],
-                password=validated_data["password"],
+                user=self.context["request"].user,
             )
         except InvalidWorkspaceInvitation as exc:
             raise serializers.ValidationError({"token": str(exc)}) from exc

@@ -3,7 +3,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
-from app.base.models import BaseModel
+from app.core.models import BaseModel
 
 
 class WorkspaceRole(models.TextChoices):

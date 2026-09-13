@@ -1,6 +1,6 @@
 import asyncio
 import hashlib
-import logging
+from app.utils.logger import logger
 
 from django.conf import settings
 from django.db import transaction
@@ -24,8 +24,6 @@ from notification.services import create_chatbot_notification
 from vector_store.models import VectorDocument
 from vector_store.services.gemini_embeddings import GeminiEmbeddingService
 from vector_store.services.vectorize import KnowledgeVectorService
-
-logger = logging.getLogger(__name__)
 
 
 def content_digest(content):

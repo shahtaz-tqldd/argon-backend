@@ -17,10 +17,6 @@ from analytics.api.v1.admin.serializers import (
 from analytics.choices import AIUsageType
 from analytics.models import AIUsage
 from app.utils.response import APIResponse
-from journals.models import Journal
-from trips.choices import TripStatus
-from trips.models import Trip
-
 
 def _month_start(value):
     return value.replace(day=1)
@@ -34,70 +30,6 @@ def _shift_month(value, months):
 def _aware_start(value):
     value = datetime.combine(value, time.min)
     return timezone.make_aware(value, timezone.get_current_timezone())
-
-
-def _growth_percentage(queryset, now):
-    current_start = now - timedelta(days=30)
-    previous_start = now - timedelta(days=60)
-    current_count = queryset.filter(created_at__gte=current_start, created_at__lt=now).count()
-    previous_count = queryset.filter(
-        created_at__gte=previous_start,
-        created_at__lt=current_start,
-    ).count()
-
-    if previous_count == 0:
-        return 100.0 if current_count else 0.0
-    return round(((current_count - previous_count) / previous_count) * 100, 2)
-
-
-class OverviewStatsAPIView(GenericAPIView):
-    """Dashboard totals, current-month activity, and rolling 30-day growth."""
-
-    permission_classes = [IsAuthenticated, IsSuperAdmin]
-
-    def get(self, request, *args, **kwargs):
-        now = timezone.now()
-        current_month_start = _aware_start(_month_start(timezone.localdate()))
-
-        users = User.objects.all()
-        trips = Trip.objects.all()
-        journals = Journal.objects.filter(deleted_at__isnull=True)
-        ai_usages = AIUsage.objects.all()
-
-        return APIResponse.success(
-            data={
-                "users": {
-                    "total": users.count(),
-                    "this_month": users.filter(
-                        created_at__gte=current_month_start,
-                        created_at__lt=now,
-                    ).count(),
-                    "growth_percentage_30_days": _growth_percentage(users, now),
-                },
-                "trips": {
-                    "total_planned": trips.count(),
-                    "completed": trips.filter(status=TripStatus.COMPLETED).count(),
-                    "growth_percentage_30_days": _growth_percentage(trips, now),
-                },
-                "journals": {
-                    "total": journals.count(),
-                    "this_month": journals.filter(
-                        created_at__gte=current_month_start,
-                        created_at__lt=now,
-                    ).count(),
-                    "growth_percentage_30_days": _growth_percentage(journals, now),
-                },
-                "ai_messages": {
-                    "total": ai_usages.count(),
-                    "this_month": ai_usages.filter(
-                        created_at__gte=current_month_start,
-                        created_at__lt=now,
-                    ).count(),
-                    "growth_percentage_30_days": _growth_percentage(ai_usages, now),
-                },
-            },
-            message="Overview stats fetched successfully.",
-        )
 
 
 class AIUsageStatsAPIView(GenericAPIView):

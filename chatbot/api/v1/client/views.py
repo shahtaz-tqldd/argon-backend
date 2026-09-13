@@ -1,4 +1,4 @@
-import logging
+from app.utils.logger import logger
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -12,19 +12,28 @@ from django.utils import timezone
 from rest_framework import serializers as drf_serializers
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 
-from accounts.api.v1.client.serializers import build_auth_token_payload
+from agent.client import AgentClient
+from analytics.choices import AIUsageType
+from analytics.services.ai_usage import record_ai_usage
 from app.services.r2 import schedule_delete_image
 from app.utils.pagination import CustomPagination
 from app.utils.permission import IsChatbotUser
 from app.utils.response import APIResponse
+from appointment_booking.api.v1.client.serializers import (
+    VisitorAppointmentCreateSerializer,
+    VisitorAppointmentSerializer,
+)
+from appointment_booking.services import book_visitor_appointment
 from chatbot.api.v1.client.serializers import (
     AcceptChatbotInvitationSerializer,
+    ChatbotBaseResponseSerializer,
     ChatbotCreateSerializer,
     ChatbotDeleteSerializer,
     ChatbotDetailSerializer,
     ChatbotInvitationSerializer,
+    ChatbotListQuerySerializer,
     ChatbotListSerializer,
     ChatbotMemberListSerializer,
     ChatbotMemberPermissionUpdateSerializer,
@@ -38,16 +47,16 @@ from chatbot.api.v1.client.serializers import (
     PublicChatbotSerializer,
 )
 from chatbot.models import Chatbot, ChatbotInvitation, ChatbotUser
-from chat_session.api.v1.client.serializers import (
+from chat.api.v1.client.serializers import (
     PublicVisitorSerializer,
     PublicVisitorSessionSerializer,
     VisitorConversationCreateSerializer,
     VisitorMessageCreateSerializer,
     VisitorMessageSerializer,
 )
-from chat_session.models import ChatMessage
-from chat_session.services.events import publish_session_event
-from chat_session.services.visitor import (
+from chat.models import ChatMessage
+from chat.services.events import publish_session_event
+from chat.services.visitor import (
     create_or_resume_conversation,
     get_public_chatbot,
     get_public_visitor_details,
@@ -56,11 +65,11 @@ from chat_session.services.visitor import (
     require_allowed_widget_origin,
     send_visitor_message,
 )
-from chat_session.services.visitor_tokens import (
+from chat.services.visitor_tokens import (
     InvalidConversationToken,
     issue_conversation_token,
 )
-from chat_session.tasks import dispatch_ai_reply, is_ai_reply_enabled
+from chat.tasks import dispatch_ai_reply, is_ai_reply_enabled
 from chatbot.utils.choices import (
     ChatbotPermissionTypes,
     ChatbotRoleTypes,
@@ -69,9 +78,9 @@ from chatbot.utils.choices import (
 from chatbot.utils.permissions import available_chatbot_permissions
 from subscription.models import ChatbotSubscription
 from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
+from workspace.models import WorkspaceRole
 
 User = get_user_model()
-logger = logging.getLogger(__name__)
 
 
 def first_error_message(errors, fallback="Request failed."):
@@ -178,7 +187,11 @@ class ChatbotListView(PaginatedListMixin, GenericAPIView):
     serializer_class = ChatbotListSerializer
 
     def get_queryset(self):
-        return (
+        query_serializer = ChatbotListQuerySerializer(
+            data=self.request.query_params,
+        )
+        query_serializer.is_valid(raise_exception=True)
+        queryset = (
             Chatbot.objects.select_related(
                 "workspace",
                 "created_by__profile",
@@ -206,6 +219,7 @@ class ChatbotListView(PaginatedListMixin, GenericAPIView):
                 Q(
                     workspace__memberships__user=self.request.user,
                     workspace__memberships__is_active=True,
+                    workspace__memberships__role=WorkspaceRole.ADMIN,
                 )
                 | Q(
                     memberships__user=self.request.user,
@@ -217,6 +231,10 @@ class ChatbotListView(PaginatedListMixin, GenericAPIView):
             .distinct()
             .order_by("-created_at")
         )
+        workspace_slug = query_serializer.validated_data.get("workspace")
+        if workspace_slug:
+            queryset = queryset.filter(workspace__slug=workspace_slug)
+        return queryset
 
     def get(self, request, *args, **kwargs):
         return self.paginated_response(
@@ -252,7 +270,47 @@ class ChatbotCreateView(GenericAPIView):
 class ChatbotDetailView(ChatbotObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     serializer_class = ChatbotDetailSerializer
-    allow_workspace_member = True
+    allow_workspace_admin = True
+
+    def get(self, request, *args, **kwargs):
+        return APIResponse.success(
+            data=self.get_serializer(self.get_chatbot()).data,
+            message="Chatbot fetched successfully.",
+        )
+
+
+class ChatbotBaseAPIView(ChatbotObjectMixin, GenericAPIView):
+    """Return chatbot identity and its subscription-backed capabilities."""
+
+    permission_classes = [IsChatbotUser]
+    serializer_class = ChatbotBaseResponseSerializer
+    allow_workspace_admin = True
+
+    def get_chatbot(self):
+        if self._chatbot is None:
+            query_serializer = ChatbotQuerySerializer(
+                data=self.request.query_params,
+            )
+            query_serializer.is_valid(raise_exception=True)
+            self._chatbot = get_object_or_404(
+                Chatbot.objects.select_related("workspace", "capacity")
+                .prefetch_related(
+                    Prefetch(
+                        "subscriptions",
+                        queryset=ChatbotSubscription.objects.filter(
+                            status__in=OPEN_SUBSCRIPTION_STATUSES,
+                        ),
+                        to_attr="open_subscriptions",
+                    )
+                )
+                .filter(
+                    is_deleted=False,
+                    workspace__is_active=True,
+                ),
+                slug=query_serializer.validated_data["chatbot"],
+            )
+            self.check_object_permissions(self.request, self._chatbot)
+        return self._chatbot
 
     def get(self, request, *args, **kwargs):
         return APIResponse.success(
@@ -462,7 +520,7 @@ class VisitorMessageCreateView(GenericAPIView):
                 status=status.HTTP_409_CONFLICT,
             )
         ai_queued = False
-        if created:
+        if created and is_ai_reply_enabled(chat_session, chatbot):
             try:
                 dispatch_ai_reply(str(message.id))
                 ai_queued = True
@@ -473,6 +531,7 @@ class VisitorMessageCreateView(GenericAPIView):
                 )
                 publish_session_event(
                     chat_session.id,
+                    chat_session.chatbot_id,
                     "ai.response.failed",
                     {"code": "queue_unavailable", "retryable": True},
                 )
@@ -486,6 +545,115 @@ class VisitorMessageCreateView(GenericAPIView):
                 "Message already accepted."
                 if not created
                 else "Message accepted successfully."
+            ),
+            status=(status.HTTP_200_OK if not created else status.HTTP_201_CREATED),
+        )
+
+
+class VisitorAppointmentCreateView(GenericAPIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    serializer_class = VisitorAppointmentCreateSerializer
+
+    @staticmethod
+    def _bearer_token(request):
+        authorization = request.headers.get("Authorization", "")
+        if authorization.lower().startswith("bearer "):
+            return authorization.split(" ", 1)[1].strip()
+        return ""
+
+    def post(self, request, public_key, session_id, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return validation_error_response(
+                serializer.errors,
+                "Appointment could not be booked.",
+            )
+
+        chatbot = get_public_chatbot(public_key)
+        require_allowed_widget_origin(
+            chatbot,
+            request.headers.get("Origin", ""),
+        )
+        token = self._bearer_token(request)
+        if not token:
+            return APIResponse.error(
+                message="A conversation bearer token is required.",
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        try:
+            chat_session = get_visitor_chat_session(
+                chatbot,
+                session_id,
+                token,
+            )
+        except InvalidConversationToken as exc:
+            return APIResponse.error(
+                message=str(exc),
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        try:
+            appointment, created = book_visitor_appointment(
+                chat_session,
+                starts_at=serializer.validated_data["starts_at"],
+                collected_fields=serializer.validated_data["collected_fields"],
+            )
+        except DjangoValidationError as exc:
+            errors = getattr(
+                exc,
+                "message_dict",
+                {"non_field_errors": exc.messages},
+            )
+            return APIResponse.error(
+                errors=errors,
+                message=first_error_message(
+                    errors,
+                    fallback="Appointment could not be booked.",
+                ),
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        agent_response = None
+        try:
+            agent_response = AgentClient(chatbot, chat_session).confirm_booking_sync(
+                appointment_id=str(appointment.id),
+                user_id=chat_session.visitor_id or str(chat_session.id),
+            )
+            record_ai_usage(
+                chatbot=chatbot,
+                chat_session=chat_session,
+                usage_type=AIUsageType.CHAT,
+                cost=agent_response["cost"],
+                token_usage=agent_response["token"],
+                model=settings.GEMINI_CHAT_MODEL,
+                metadata={
+                    "event": "appointment_confirmation",
+                    "appointment_id": str(appointment.id),
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Could not append appointment %s to agent session %s",
+                appointment.id,
+                chat_session.id,
+            )
+
+        return APIResponse.success(
+            data={
+                "appointment": VisitorAppointmentSerializer(appointment).data,
+                "duplicate": not created,
+                "agent_acknowledged": agent_response is not None,
+                "agent_reply": (
+                    agent_response["result"]["content"]
+                    if agent_response is not None
+                    else ""
+                ),
+            },
+            message=(
+                "Appointment already booked."
+                if not created
+                else "Appointment request submitted successfully."
             ),
             status=(status.HTTP_200_OK if not created else status.HTTP_201_CREATED),
         )
@@ -726,8 +894,6 @@ class RemoveChatbotMemberView(ChatbotMemberObjectMixin, GenericAPIView):
         membership = self.get_chatbot_member()
         member = membership.user
         membership.delete()
-        member.is_orphan = True
-        member.save(update_fields=["is_orphan", "updated_at"])
         return APIResponse.success(
             data={"member_email": member.email},
             message="Chatbot member removed successfully.",
@@ -771,7 +937,6 @@ class InviteChatbotMemberView(ChatbotObjectMixin, GenericAPIView):
 
 class AcceptChatbotInvitationView(GenericAPIView):
     permission_classes = [AllowAny]
-    authentication_classes = []
     serializer_class = AcceptChatbotInvitationSerializer
 
     def post(self, request, *args, **kwargs):
@@ -788,16 +953,18 @@ class AcceptChatbotInvitationView(GenericAPIView):
                 exc.detail,
                 "Invitation acceptance failed.",
             )
-        auth_tokens = build_auth_token_payload(membership.user)
+        response_data = {
+            "chatbot": ChatbotDetailSerializer(
+                membership.chatbot,
+                context={
+                    "request": SimpleNamespace(user=serializer.accepted_user),
+                },
+            ).data,
+            "membership": ChatbotMemberSerializer(membership).data,
+        }
+        response_data.update(serializer.auth_tokens)
         return APIResponse.success(
-            data={
-                **auth_tokens,
-                "chatbot": ChatbotDetailSerializer(
-                    membership.chatbot,
-                    context={"request": request},
-                ).data,
-                "membership": ChatbotMemberSerializer(membership).data,
-            },
+            data=response_data,
             message="Chatbot invitation accepted successfully.",
             status=status.HTTP_201_CREATED,
         )

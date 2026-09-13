@@ -4,7 +4,7 @@ from django.db import models
 from django.db.models import F, Q
 from django.utils.dateparse import parse_date
 
-from app.base.models import BaseModel
+from app.core.models import BaseModel
 from appointment_booking.utils.choices import (
     AppointmentFieldMode,
     AppointmentStatus,

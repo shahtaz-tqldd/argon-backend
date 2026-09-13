@@ -1,4 +1,4 @@
-import logging
+from app.utils.logger import logger
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -7,13 +7,10 @@ from django.db import close_old_connections, transaction
 from django.db.models import F
 from pgvector.django import CosineDistance
 
-from app.base.models import ArgonChatbotConfig
+from base.models import ArgonChatbotConfig
 from vector_store.models import VectorDocument
 
 from .gemini_embeddings import GeminiEmbeddingService
-
-logger = logging.getLogger(__name__)
-
 
 @dataclass(slots=True)
 class VectorSearchResult:
