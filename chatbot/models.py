@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django.utils.text import slugify
 
@@ -46,6 +46,7 @@ DEFAULT_CHATBOT_NEVER_ANSWER = (
 )
 DEFAULT_WIDGET_HEADER_TITLE_TEMPLATE = "{chatbot_name}"
 DEFAULT_WIDGET_HEADER_DESCRIPTION = "typically replies instantly"
+MAX_ALLOWED_ORIGINS_PER_CHATBOT = 5
 
 
 def build_default_chatbot_welcome_message(chatbot_name, business_name=""):
@@ -304,7 +305,28 @@ class ChatbotAllowedOrigin(BaseModel):
 
     def save(self, *args, **kwargs):
         self.origin = normalize_widget_origin(self.origin)
-        super().save(*args, **kwargs)
+        if not self._state.adding:
+            return super().save(*args, **kwargs)
+
+        # Serialize origin creation per chatbot so concurrent requests cannot
+        # both pass the limit check.
+        with transaction.atomic():
+            Chatbot.objects.select_for_update().get(pk=self.chatbot_id)
+            if (
+                ChatbotAllowedOrigin.objects.filter(
+                    chatbot_id=self.chatbot_id,
+                ).count()
+                >= MAX_ALLOWED_ORIGINS_PER_CHATBOT
+            ):
+                raise ValidationError(
+                    {
+                        "origin": (
+                            "A chatbot can have at most "
+                            f"{MAX_ALLOWED_ORIGINS_PER_CHATBOT} allowed origins."
+                        )
+                    }
+                )
+            super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.origin} -> {self.chatbot}"
