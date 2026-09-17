@@ -4,6 +4,7 @@ from unittest.mock import patch
 from urllib.parse import urlencode
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -81,6 +82,11 @@ class ChatbotClientAPITests(APITestCase):
         subscription = self.chatbot.subscriptions.get(
             status=SubscriptionStatus.ACTIVE
         )
+        allowed_origin = ChatbotAllowedOrigin.objects.create(
+            chatbot=self.chatbot,
+            origin="https://app.example.com",
+            created_by=self.owner,
+        )
 
         response = self.client.get(
             reverse("chatbot-base"),
@@ -129,6 +135,13 @@ class ChatbotClientAPITests(APITestCase):
                 "ai_enabled": self.chatbot.ai_enabled,
                 "logo": self.chatbot.logo,
                 "status": self.chatbot.status,
+                "allowed_urls": [
+                    {
+                        "id": str(allowed_origin.id),
+                        "url": allowed_origin.origin,
+                        "is_active": True,
+                    }
+                ],
             },
         )
 
@@ -829,6 +842,71 @@ class ChatbotClientAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_chatbot_widget_update_rejects_more_than_five_allowed_origins(self):
+        for index in range(5):
+            ChatbotAllowedOrigin.objects.create(
+                chatbot=self.chatbot,
+                origin=f"https://app-{index}.example.com",
+                created_by=self.owner,
+            )
+
+        response = self.client.patch(
+            reverse("chatbot-widget-update"),
+            {"allowed_urls": [{"url": "https://sixth.example.com"}]},
+            format="json",
+            QUERY_STRING=urlencode({"chatbot": self.chatbot.slug}),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("allowed_urls", response.data["errors"])
+        self.assertEqual(self.chatbot.allowed_origins.count(), 5)
+
+    def test_allowed_origin_model_enforces_five_origin_limit(self):
+        for index in range(5):
+            ChatbotAllowedOrigin.objects.create(
+                chatbot=self.chatbot,
+                origin=f"https://app-{index}.example.com",
+                created_by=self.owner,
+            )
+
+    def test_chatbot_widget_update_can_replace_an_origin_at_the_limit(self):
+        origins = [
+            ChatbotAllowedOrigin.objects.create(
+                chatbot=self.chatbot,
+                origin=f"https://app-{index}.example.com",
+                created_by=self.owner,
+            )
+            for index in range(5)
+        ]
+
+        response = self.client.patch(
+            reverse("chatbot-widget-update"),
+            {
+                "allowed_urls": [{"url": "https://replacement.example.com"}],
+                "removed_allowed_url_id": str(origins[0].id),
+            },
+            format="json",
+            QUERY_STRING=urlencode({"chatbot": self.chatbot.slug}),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self.chatbot.allowed_origins.count(), 5)
+        self.assertFalse(
+            self.chatbot.allowed_origins.filter(id=origins[0].id).exists()
+        )
+        self.assertTrue(
+            self.chatbot.allowed_origins.filter(
+                origin="https://replacement.example.com"
+            ).exists()
+        )
+
+        with self.assertRaises(DjangoValidationError):
+            ChatbotAllowedOrigin.objects.create(
+                chatbot=self.chatbot,
+                origin="https://sixth.example.com",
+                created_by=self.owner,
+            )
 
     def test_chatbot_widget_update_removes_allowed_url_by_id(self):
         removed_origin = ChatbotAllowedOrigin.objects.create(

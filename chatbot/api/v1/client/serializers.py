@@ -22,6 +22,7 @@ from chatbot.models import (
     ChatbotInvitation,
     ChatbotUser,
     ChatbotWidgetSettings,
+    MAX_ALLOWED_ORIGINS_PER_CHATBOT,
 )
 from chatbot.services.invitations import (
     InvalidChatbotInvitation,
@@ -440,6 +441,21 @@ class ChatbotCurrentSubscriptionPlanSerializer(serializers.Serializer):
     cancel_at_period_end = serializers.BooleanField(read_only=True)
 
 
+class ChatbotAllowedURLSerializer(serializers.ModelSerializer):
+    """Serialize an allowed widget URL and its enabled state."""
+
+    url = serializers.CharField(source="origin", read_only=True)
+
+    class Meta:
+        model = ChatbotAllowedOrigin
+        fields = (
+            "id",
+            "url",
+            "is_active",
+        )
+        read_only_fields = fields
+
+
 class ChatbotBaseResponseSerializer(serializers.ModelSerializer):
     """Serialize chatbot identity and subscription-backed capabilities."""
 
@@ -447,6 +463,11 @@ class ChatbotBaseResponseSerializer(serializers.ModelSerializer):
     capacity = ChatbotCapacitySerializer(read_only=True)
     features = serializers.SerializerMethodField()
     current_subscription_plan = serializers.SerializerMethodField()
+    allowed_urls = ChatbotAllowedURLSerializer(
+        source="allowed_origins",
+        many=True,
+        read_only=True,
+    )
 
     def get_features(self, obj):
         capacity = getattr(obj, "capacity", None)
@@ -489,6 +510,7 @@ class ChatbotBaseResponseSerializer(serializers.ModelSerializer):
             "ai_enabled",
             "logo",
             "status",
+            "allowed_urls",
         )
         read_only_fields = fields
 
@@ -514,21 +536,6 @@ class ChatbotWidgetSettingsSerializer(serializers.ModelSerializer):
             "other_settings",
             "created_at",
             "updated_at",
-        )
-        read_only_fields = fields
-
-
-class ChatbotAllowedURLSerializer(serializers.ModelSerializer):
-    """Serialize an allowed widget URL and its enabled state."""
-
-    url = serializers.CharField(source="origin", read_only=True)
-
-    class Meta:
-        model = ChatbotAllowedOrigin
-        fields = (
-            "id",
-            "url",
-            "is_active",
         )
         read_only_fields = fields
 
@@ -736,6 +743,7 @@ class ChatbotWidgetUpdateSerializer(serializers.Serializer):
         submitted_ids = set()
         submitted_urls = set()
         item_errors = {}
+        new_origin_count = 0
 
         for index, item in enumerate(allowed_urls):
             origin_id = item.get("id")
@@ -778,6 +786,8 @@ class ChatbotWidgetUpdateSerializer(serializers.Serializer):
             if origin is not None:
                 submitted_ids.add(origin.id)
                 item["_origin_id"] = origin.id
+            else:
+                new_origin_count += 1
             submitted_urls.add(target_url)
 
         if item_errors:
@@ -789,6 +799,22 @@ class ChatbotWidgetUpdateSerializer(serializers.Serializer):
                 {
                     "removed_allowed_url_id": (
                         "A URL cannot be updated and removed together."
+                    )
+                }
+            )
+        removed_origin_count = int(
+            removed_origin_id is not None
+            and removed_origin_id not in submitted_ids
+        )
+        if (
+            len(existing_origins) + new_origin_count - removed_origin_count
+            > MAX_ALLOWED_ORIGINS_PER_CHATBOT
+        ):
+            raise serializers.ValidationError(
+                {
+                    "allowed_urls": (
+                        "A chatbot can have at most "
+                        f"{MAX_ALLOWED_ORIGINS_PER_CHATBOT} allowed origins."
                     )
                 }
             )
@@ -818,6 +844,16 @@ class ChatbotWidgetUpdateSerializer(serializers.Serializer):
                     ]
                 )
 
+            if removed_origin_id is not None:
+                (
+                    ChatbotAllowedOrigin.objects.select_for_update()
+                    .filter(
+                        chatbot=instance,
+                        id=removed_origin_id,
+                    )
+                    .delete()
+                )
+
             if allowed_urls is not None:
                 for item in allowed_urls:
                     origin_id = item.pop("_origin_id", None)
@@ -825,15 +861,26 @@ class ChatbotWidgetUpdateSerializer(serializers.Serializer):
                     is_active = item.get("is_active")
 
                     if origin_id is None:
-                        ChatbotAllowedOrigin.objects.create(
-                            chatbot=instance,
-                            origin=url,
-                            is_active=(
-                                True if is_active is None else is_active
-                            ),
-                            created_by=user,
-                            updated_by=user,
-                        )
+                        try:
+                            ChatbotAllowedOrigin.objects.create(
+                                chatbot=instance,
+                                origin=url,
+                                is_active=(
+                                    True if is_active is None else is_active
+                                ),
+                                created_by=user,
+                                updated_by=user,
+                            )
+                        except DjangoValidationError as exc:
+                            raise serializers.ValidationError(
+                                {
+                                    "allowed_urls": (
+                                        "A chatbot can have at most "
+                                        f"{MAX_ALLOWED_ORIGINS_PER_CHATBOT} "
+                                        "allowed origins."
+                                    )
+                                }
+                            ) from exc
                         continue
 
                     origin = (
@@ -861,16 +908,6 @@ class ChatbotWidgetUpdateSerializer(serializers.Serializer):
                                 "updated_at",
                             ]
                         )
-
-            if removed_origin_id is not None:
-                (
-                    ChatbotAllowedOrigin.objects.select_for_update()
-                    .filter(
-                        chatbot=instance,
-                        id=removed_origin_id,
-                    )
-                    .delete()
-                )
 
         return instance
 

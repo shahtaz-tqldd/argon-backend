@@ -295,6 +295,7 @@ class ChatbotBaseAPIView(ChatbotObjectMixin, GenericAPIView):
             self._chatbot = get_object_or_404(
                 Chatbot.objects.select_related("workspace", "capacity")
                 .prefetch_related(
+                    "allowed_origins",
                     Prefetch(
                         "subscriptions",
                         queryset=ChatbotSubscription.objects.filter(
