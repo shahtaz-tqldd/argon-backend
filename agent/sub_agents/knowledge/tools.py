@@ -1,7 +1,11 @@
-from google.adk.tools import FunctionTool
+from asgiref.sync import sync_to_async
+from google.adk.tools import FunctionTool, ToolContext
+
 from app.utils.logger import logger
 from vector_store.services.vectorize import KnowledgeVectorService
-from asgiref.sync import sync_to_async
+
+
+RETRIEVED_SOURCE_IDS_KEY = "knowledge_source_ids"
 
 
 class KnowledgeTools:
@@ -9,7 +13,7 @@ class KnowledgeTools:
         self.chatbot = chatbot
         self.vector_service = vector_service or KnowledgeVectorService()
 
-    async def search_knowledge(self, query: str) -> dict:
+    async def search_knowledge(self, query: str, tool_context: ToolContext) -> dict:
         """
         Search this chatbot's knowledge base for facts relevant to the
         customer's question.
@@ -43,6 +47,18 @@ class KnowledgeTools:
                     "sources": [],
                 }
 
+            # Remember every retrieved source so later turns may answer from
+            # conversation context and still cite what was retrieved before.
+            retrieved_ids = {
+                str(result.knowledge_base_id)
+                for result in results
+            }
+            known_ids = set(
+                tool_context.state.get(RETRIEVED_SOURCE_IDS_KEY) or []
+            )
+            known_ids.update(retrieved_ids)
+            tool_context.state[RETRIEVED_SOURCE_IDS_KEY] = sorted(known_ids)
+
             return {
                 "status": "ok",
                 "sources": [
@@ -65,7 +81,7 @@ class KnowledgeTools:
                 "sources": [],
                 "message": "Knowledge search is temporarily unavailable.",
             }
-        
+
 
 def create_knowledge_tools(chatbot):
     knowledge_tools = KnowledgeTools(chatbot)

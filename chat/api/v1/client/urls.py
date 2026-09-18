@@ -22,7 +22,16 @@ takeover_patterns = [
 
 transfer_patterns = [
     path("request/", views.TransferSessionView.as_view(), name="transfer-request"),
-    path("incoming/", views.IncomingTransferListView.as_view(), name="transfer-incoming-list"),
+    path(
+        "session/",
+        views.SessionTransferStatusView.as_view(),
+        name="session-transfer-status",
+    ),
+    path(
+        "incoming/",
+        views.IncomingTransferListView.as_view(),
+        name="transfer-incoming-list",
+    ),
     path("accept/", views.AcceptTransferView.as_view(), name="transfer-accept"),
     path("decline/", views.DeclineTransferView.as_view(), name="transfer-decline"),
     path("cancel/", views.CancelTransferView.as_view(), name="transfer-cancel"),

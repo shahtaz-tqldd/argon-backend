@@ -17,6 +17,7 @@ from app.utils.storage_fields import R2ImageField
 from appointment_booking.models import AppointmentBookingConfig
 from chatbot.models import (
     Chatbot,
+    ChatbotActivityLog,
     ChatbotAllowedOrigin,
     ChatbotCapacity,
     ChatbotInvitation,
@@ -61,6 +62,42 @@ class ChatbotMemberQuerySerializer(ChatbotQuerySerializer):
 
     def validate_member_email(self, value):
         return User.objects.normalize_email(value).strip().casefold()
+
+
+class ChatbotActivityLogQuerySerializer(ChatbotQuerySerializer):
+    member_email = serializers.EmailField(max_length=254, required=False)
+
+    def validate_member_email(self, value):
+        return User.objects.normalize_email(value).strip().casefold()
+
+
+class ChatbotActivityLogUserSerializer(serializers.ModelSerializer):
+    avatar = serializers.URLField(
+        source="profile.avatar_url",
+        read_only=True,
+        default="",
+    )
+
+    class Meta:
+        model = User
+        fields = ("id", "name", "email", "avatar")
+        read_only_fields = fields
+
+
+class ChatbotActivityLogSerializer(serializers.ModelSerializer):
+    user = ChatbotActivityLogUserSerializer(read_only=True)
+
+    class Meta:
+        model = ChatbotActivityLog
+        fields = (
+            "id",
+            "user",
+            "action",
+            "description",
+            "metadata",
+            "created_at",
+        )
+        read_only_fields = fields
 
 
 class ChatbotWorkspaceSerializer(serializers.ModelSerializer):

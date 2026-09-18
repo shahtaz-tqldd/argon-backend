@@ -29,6 +29,8 @@ from appointment_booking.services import book_visitor_appointment
 from chatbot.api.v1.client.serializers import (
     AcceptChatbotInvitationSerializer,
     ChatbotBaseResponseSerializer,
+    ChatbotActivityLogQuerySerializer,
+    ChatbotActivityLogSerializer,
     ChatbotCreateSerializer,
     ChatbotDeleteSerializer,
     ChatbotDetailSerializer,
@@ -46,7 +48,12 @@ from chatbot.api.v1.client.serializers import (
     InviteChatbotMemberSerializer,
     PublicChatbotSerializer,
 )
-from chatbot.models import Chatbot, ChatbotInvitation, ChatbotUser
+from chatbot.models import (
+    Chatbot,
+    ChatbotActivityLog,
+    ChatbotInvitation,
+    ChatbotUser,
+)
 from chat.api.v1.client.serializers import (
     PublicVisitorSerializer,
     PublicVisitorSessionSerializer,
@@ -240,6 +247,38 @@ class ChatbotListView(PaginatedListMixin, GenericAPIView):
         return self.paginated_response(
             self.get_queryset(),
             message="Chatbots fetched successfully.",
+        )
+
+
+class ChatbotActivityLogListView(
+    ChatbotObjectMixin,
+    PaginatedListMixin,
+    GenericAPIView,
+):
+    """List all activity, or activity by one user, for a chatbot."""
+
+    permission_classes = [IsChatbotUser]
+    serializer_class = ChatbotActivityLogSerializer
+    allow_workspace_admin = True
+
+    def get_queryset(self):
+        query_serializer = ChatbotActivityLogQuerySerializer(
+            data=self.request.query_params,
+        )
+        query_serializer.is_valid(raise_exception=True)
+
+        queryset = ChatbotActivityLog.objects.filter(
+            chatbot=self.get_chatbot(),
+        ).select_related("user__profile")
+        member_email = query_serializer.validated_data.get("member_email")
+        if member_email:
+            queryset = queryset.filter(user__email__iexact=member_email)
+        return queryset
+
+    def get(self, request, *args, **kwargs):
+        return self.paginated_response(
+            self.get_queryset(),
+            message="Chatbot activity logs fetched successfully.",
         )
 
 

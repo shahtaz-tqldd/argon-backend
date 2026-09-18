@@ -17,10 +17,12 @@ from chat.models import (
 from chat.utils.choices import (
     ChatMessageSenderType,
     ChatMessageStatus,
+    ChatSessionStatus,
     ChatSessionTakeoverReleaseReason,
     ChatSessionTransferStatus,
 )
 from lead_capture.models import Lead
+from notification.models import Notification, NotificationType
 from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
 
 
@@ -475,6 +477,23 @@ class ChatSessionClientAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         transfer = ChatSessionTransfer.objects.get()
         self.assertEqual(transfer.status, ChatSessionTransferStatus.PENDING)
+        request_notification = Notification.objects.get(recipient=recipient.user)
+        self.assertEqual(
+            request_notification.notification_type,
+            NotificationType.NOTIFY,
+        )
+        self.assertEqual(request_notification.metadata["status"], "pending")
+        self.assertEqual(
+            request_notification.metadata["transfer_id"],
+            str(transfer.id),
+        )
+        session.refresh_from_db()
+        current_takeover = ChatSessionTakeover.objects.get(
+            chat_session=session,
+            released_at__isnull=True,
+        )
+        self.assertEqual(session.assigned_to, self.agent)
+        self.assertEqual(current_takeover.agent, self.agent)
 
         self.client.force_authenticate(recipient_user)
         response = self.client.post(
@@ -503,6 +522,222 @@ class ChatSessionClientAPITests(APITestCase):
                 released_at__isnull=True,
             ).exists()
         )
+        accepted_notification = Notification.objects.get(
+            recipient=self.user,
+            metadata__status="accepted",
+        )
+        self.assertEqual(
+            accepted_notification.metadata["transfer_id"],
+            str(transfer.id),
+        )
+
+    def test_agent_can_request_and_recipient_can_accept_unowned_transfer(self):
+        recipient_user, recipient = self._create_agent(
+            "unowned-transfer-recipient@example.com"
+        )
+        session = ChatSession.objects.create(chatbot=self.chatbot)
+
+        response = self.client.post(
+            reverse("transfer-request"),
+            {"to_agent_id": recipient.id},
+            format="json",
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        transfer = ChatSessionTransfer.objects.get(pk=response.data["data"]["id"])
+
+        self.client.force_authenticate(recipient_user)
+        response = self.client.post(
+            reverse("transfer-accept"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "transfer_id": transfer.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        session.refresh_from_db()
+        self.assertEqual(session.assigned_to, recipient)
+        self.assertFalse(session.ai_enabled)
+        self.assertTrue(
+            ChatSessionTakeover.objects.filter(
+                chat_session=session,
+                agent=recipient,
+                released_at__isnull=True,
+            ).exists()
+        )
+
+    def test_unowned_transfer_can_be_requested_in_every_session_phase(self):
+        _, recipient = self._create_agent("all-phases-recipient@example.com")
+
+        for session_status in ChatSessionStatus.values:
+            with self.subTest(session_status=session_status):
+                session = ChatSession.objects.create(
+                    chatbot=self.chatbot,
+                    status=session_status,
+                )
+
+                response = self.client.post(
+                    reverse("transfer-request"),
+                    {"to_agent_id": recipient.id},
+                    format="json",
+                    query_params={
+                        "chatbot_slug": self.chatbot.slug,
+                        "session_id": session.id,
+                    },
+                )
+
+                self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_pending_transfer_blocks_takeover_until_recipient_declines(self):
+        recipient_user, recipient = self._create_agent(
+            "pending-transfer-recipient@example.com"
+        )
+        other_user, other_agent = self._create_agent(
+            "pending-transfer-other-agent@example.com"
+        )
+        session = ChatSession.objects.create(chatbot=self.chatbot)
+        response = self.client.post(
+            reverse("transfer-request"),
+            {"to_agent_id": recipient.id},
+            format="json",
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+        transfer_id = response.data["data"]["id"]
+
+        self.client.force_authenticate(other_user)
+        response = self.client.post(
+            reverse("session-take-over"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["message"],
+            "Session cannot be taken over while a transfer is pending.",
+        )
+        self.assertFalse(
+            ChatSessionTakeover.objects.filter(chat_session=session).exists()
+        )
+
+        self.client.force_authenticate(recipient_user)
+        response = self.client.post(
+            reverse("transfer-decline"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "transfer_id": transfer_id,
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.client.force_authenticate(other_user)
+        response = self.client.post(
+            reverse("session-take-over"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        session.refresh_from_db()
+        self.assertEqual(session.assigned_to, other_agent)
+
+    def test_any_agent_can_view_a_sessions_pending_transfer_status(self):
+        recipient_user, recipient = self._create_agent(
+            "session-transfer-status-recipient@example.com"
+        )
+        observer_user, _ = self._create_agent(
+            "session-transfer-status-observer@example.com"
+        )
+        session = self._owned_session()
+        response = self.client.post(
+            reverse("transfer-request"),
+            {"to_agent_id": recipient.id},
+            format="json",
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+        transfer_id = response.data["data"]["id"]
+
+        self.client.force_authenticate(observer_user)
+        response = self.client.get(
+            reverse("session-transfer-status"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["data"]
+        self.assertTrue(data["has_pending_transfer"])
+        self.assertEqual(data["chat_session_id"], str(session.id))
+        self.assertEqual(data["assigned_to"]["id"], str(self.agent.id))
+        self.assertEqual(data["transfer"]["id"], str(transfer_id))
+        self.assertEqual(
+            data["transfer"]["from_agent"]["id"],
+            str(self.agent.id),
+        )
+        self.assertEqual(data["transfer"]["to_agent"]["id"], str(recipient.id))
+
+        self.client.force_authenticate(recipient_user)
+        response = self.client.post(
+            reverse("transfer-decline"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "transfer_id": transfer_id,
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.client.force_authenticate(observer_user)
+        response = self.client.get(
+            reverse("session-transfer-status"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["data"]["has_pending_transfer"])
+        self.assertIsNone(response.data["data"]["transfer"])
+
+    def test_non_owner_cannot_transfer_session_with_active_takeover(self):
+        requester_user, _ = self._create_agent("non-owner-requester@example.com")
+        _, recipient = self._create_agent("non-owner-recipient@example.com")
+        session = self._owned_session()
+        self.client.force_authenticate(requester_user)
+
+        response = self.client.post(
+            reverse("transfer-request"),
+            {"to_agent_id": recipient.id},
+            format="json",
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["message"],
+            "Only the current owner can perform this action.",
+        )
+        self.assertFalse(ChatSessionTransfer.objects.exists())
 
     def test_non_recipient_cannot_accept_transfer(self):
         _, recipient = self._create_agent("recipient-2@example.com")
@@ -566,8 +801,50 @@ class ChatSessionClientAPITests(APITestCase):
             ChatSessionTransfer.objects.get(pk=transfer_id).status,
             ChatSessionTransferStatus.DECLINED,
         )
+        declined_notification = Notification.objects.get(
+            recipient=self.user,
+            metadata__status="declined",
+        )
+        self.assertEqual(
+            declined_notification.metadata["transfer_id"],
+            str(transfer_id),
+        )
         session.refresh_from_db()
         self.assertEqual(session.assigned_to, self.agent)
+
+    def test_requester_can_cancel_transfer_and_recipient_is_notified(self):
+        recipient_user, recipient = self._create_agent(
+            "cancelled-transfer-recipient@example.com"
+        )
+        session = self._owned_session()
+        response = self.client.post(
+            reverse("transfer-request"),
+            {"to_agent_id": recipient.id},
+            format="json",
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+        transfer_id = response.data["data"]["id"]
+
+        response = self.client.post(
+            reverse("transfer-cancel"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "transfer_id": transfer_id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        cancelled_notification = Notification.objects.get(
+            recipient=recipient_user,
+            metadata__status="cancelled",
+        )
+        self.assertEqual(
+            cancelled_notification.metadata["transfer_id"],
+            str(transfer_id),
+        )
 
     @staticmethod
     def _set_created_at(instance, value):

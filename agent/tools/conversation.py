@@ -93,6 +93,9 @@ def _request_human_escalation(
 
 
 def create_conversation_tools(chatbot, session):
+    """
+    Lead scoring for every agent; escalation only when handoff is enabled.
+    """
     async def record_lead_score(score: int, summary: str) -> dict:
         """Record a qualified lead score and a very short evidence-based reason.
 
@@ -110,29 +113,32 @@ def create_conversation_tools(chatbot, session):
             summary,
         )
 
-    async def request_human_escalation(
-        escalation_reason: str,
-    ) -> dict:
-        """Request human attention for this conversation.
+    tools = [FunctionTool(record_lead_score)]
 
-        Call when the visitor explicitly requests a human, a configured escalation
-        rule applies, the assistant cannot safely or confidently help, or a
-        required tool fails. Do not merely promise a handoff without calling it.
+    if getattr(chatbot, "human_handoff_enabled", True):
+        async def request_human_escalation(
+            escalation_reason: str,
+        ) -> dict:
+            """Request human attention for this conversation.
 
-        Args:
-            escalation_reason: A concise dashboard-ready explanation of why a
-                human should review the conversation.
-        """
-        return await sync_to_async(
-            _request_human_escalation,
-            thread_sensitive=True,
-        )(
-            chatbot.id,
-            session.id,
-            escalation_reason,
-        )
+            Call when the visitor explicitly requests a human, a configured
+            escalation rule applies, the assistant cannot safely or confidently
+            answer the visitor's question, or a required tool fails. Do not
+            merely promise a handoff without calling it.
 
-    return [
-        FunctionTool(record_lead_score),
-        FunctionTool(request_human_escalation),
-    ]
+            Args:
+                escalation_reason: A concise dashboard-ready explanation of why
+                    a human should review the conversation.
+            """
+            return await sync_to_async(
+                _request_human_escalation,
+                thread_sensitive=True,
+            )(
+                chatbot.id,
+                session.id,
+                escalation_reason,
+            )
+
+        tools.append(FunctionTool(request_human_escalation))
+
+    return tools

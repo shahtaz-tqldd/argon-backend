@@ -1,20 +1,29 @@
-from functools import cached_property
+from functools import lru_cache
 
 from django.conf import settings
 from google.adk.models import Gemini
 from google.genai import Client, types
 
 
-class ChatGemini(Gemini):
-    """Use the same explicit Vertex configuration as the existing chat service."""
+@lru_cache(maxsize=1)
+def _cached_vertex_client(project, location):
+    return Client(vertexai=True, project=project, location=location)
 
-    @cached_property
+
+def vertex_client():
+    """One shared Vertex client (and HTTP pool) for every agent and request."""
+    return _cached_vertex_client(
+        settings.GOOGLE_CLOUD_PROJECT_ID,
+        settings.GOOGLE_CLOUD_LOCATION,
+    )
+
+
+class ChatGemini(Gemini):
+    """Reuse the shared Vertex client instead of building one per agent."""
+
+    @property
     def api_client(self):
-        return Client(
-            vertexai=True,
-            project=settings.GOOGLE_CLOUD_PROJECT_ID,
-            location=settings.GOOGLE_CLOUD_LOCATION,
-        )
+        return vertex_client()
 
 
 def chat_model():

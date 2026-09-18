@@ -13,6 +13,8 @@ from chat.utils.choices import (
     ChatSessionTakeoverReleaseReason,
     ChatSessionTransferStatus,
 )
+from notification.models import NotificationType
+from notification.services import create_user_notification
 
 
 def _validate_agent(chat_session, agent):
@@ -57,12 +59,45 @@ def _cancel_pending_transfers(chat_session, now):
     )
 
 
+def _notify_transfer_agent(
+    transfer,
+    recipient_agent,
+    actor_agent,
+    *,
+    title,
+    message,
+):
+    create_user_notification(
+        recipient=recipient_agent.user,
+        notification_type=NotificationType.NOTIFY,
+        title=title,
+        message=message,
+        metadata={
+            "kind": "session_transfer",
+            "status": transfer.status,
+            "transfer_id": str(transfer.id),
+            "chat_session_id": str(transfer.chat_session_id),
+            "chatbot_id": str(recipient_agent.chatbot_id),
+            "from_agent_id": str(transfer.from_agent_id),
+            "to_agent_id": str(transfer.to_agent_id),
+        },
+        created_by=actor_agent.user,
+    )
+
+
 def take_over_session(chat_session, agent):
     with transaction.atomic():
         chat_session = _locked_session(chat_session)
         _validate_agent(chat_session, agent)
         if chat_session.status != ChatSessionStatus.OPEN:
             raise ValidationError("Reopen the session before taking it over.")
+        if ChatSessionTransfer.objects.filter(
+            chat_session=chat_session,
+            status=ChatSessionTransferStatus.PENDING,
+        ).exists():
+            raise ValidationError(
+                "Session cannot be taken over while a transfer is pending."
+            )
         if _active_takeover(chat_session) is not None:
             raise ValidationError("Session already has an active takeover.")
 
@@ -100,7 +135,10 @@ def request_transfer(
 ):
     with transaction.atomic():
         chat_session = _locked_session(chat_session)
-        active = _require_owner(chat_session, from_agent)
+        _validate_agent(chat_session, from_agent)
+        active = _active_takeover(chat_session)
+        if active is not None and active.agent_id != from_agent.id:
+            raise ValidationError("Only the current owner can perform this action.")
         _validate_agent(chat_session, to_agent)
         if from_agent.id == to_agent.id:
             raise ValidationError("Cannot transfer a session to the same agent.")
@@ -121,6 +159,13 @@ def request_transfer(
         )
         transfer.full_clean()
         transfer.save()
+        _notify_transfer_agent(
+            transfer,
+            to_agent,
+            from_agent,
+            title="Session transfer requested",
+            message=f"{from_agent.user} requested that you take over a session.",
+        )
         transaction.on_commit(
             lambda: publish_session_event(
                 chat_session.id,
@@ -128,7 +173,7 @@ def request_transfer(
                 "session.transfer_requested",
                 {
                     "transfer_id": str(transfer.id),
-                    "takeover_id": str(active.id),
+                    "takeover_id": str(active.id) if active is not None else None,
                     "from_agent_id": str(from_agent.id),
                     "to_agent_id": str(to_agent.id),
                 },
@@ -138,14 +183,10 @@ def request_transfer(
 
 
 def _locked_pending_transfer(transfer):
-    locked = (
-        ChatSessionTransfer.objects.select_for_update()
-        .select_related(
-            "from_agent__user__profile",
-            "to_agent__user__profile",
-        )
-        .get(pk=transfer.pk)
-    )
+    # Keep nullable profile joins out of this query. PostgreSQL cannot apply
+    # FOR UPDATE to the nullable side of an outer join; related display data
+    # can be loaded separately when the response is serialized.
+    locked = ChatSessionTransfer.objects.select_for_update().get(pk=transfer.pk)
     if locked.status != ChatSessionTransferStatus.PENDING:
         raise ValidationError("Transfer is no longer pending.")
     return locked
@@ -170,21 +211,22 @@ def accept_transfer(transfer, agent):
             expired = True
         else:
             active = _active_takeover(chat_session)
-            if active is None or active.agent_id != transfer.from_agent_id:
+            if active is not None and active.agent_id != transfer.from_agent_id:
                 raise ValidationError("The original agent no longer owns this session.")
 
-            active.released_at = now
-            active.release_reason = ChatSessionTakeoverReleaseReason.TRANSFERRED
-            active.released_to = agent
-            active.full_clean()
-            active.save(
-                update_fields=[
-                    "released_at",
-                    "release_reason",
-                    "released_to",
-                    "updated_at",
-                ]
-            )
+            if active is not None:
+                active.released_at = now
+                active.release_reason = ChatSessionTakeoverReleaseReason.TRANSFERRED
+                active.released_to = agent
+                active.full_clean()
+                active.save(
+                    update_fields=[
+                        "released_at",
+                        "release_reason",
+                        "released_to",
+                        "updated_at",
+                    ]
+                )
             takeover = ChatSessionTakeover(chat_session=chat_session, agent=agent)
             takeover.full_clean()
             takeover.save()
@@ -195,6 +237,13 @@ def accept_transfer(transfer, agent):
             chat_session.ai_enabled = False
             chat_session.save(
                 update_fields=["assigned_to", "ai_enabled", "updated_at"]
+            )
+            _notify_transfer_agent(
+                transfer,
+                transfer.from_agent,
+                agent,
+                title="Session transfer accepted",
+                message=f"{agent.user} accepted your session transfer request.",
             )
             transaction.on_commit(
                 lambda: publish_session_event(
@@ -234,6 +283,13 @@ def decline_transfer(transfer, agent):
         transfer.completed_at = now
         transfer.save(update_fields=["status", "completed_at", "updated_at"])
         if not expired:
+            _notify_transfer_agent(
+                transfer,
+                transfer.from_agent,
+                agent,
+                title="Session transfer declined",
+                message=f"{agent.user} declined your session transfer request.",
+            )
             transaction.on_commit(
                 lambda: publish_session_event(
                     chat_session.id,
@@ -260,6 +316,13 @@ def cancel_transfer(transfer, agent):
         transfer.status = ChatSessionTransferStatus.CANCELLED
         transfer.completed_at = now
         transfer.save(update_fields=["status", "completed_at", "updated_at"])
+        _notify_transfer_agent(
+            transfer,
+            transfer.to_agent,
+            agent,
+            title="Session transfer cancelled",
+            message=f"{agent.user} cancelled the session transfer request.",
+        )
         transaction.on_commit(
             lambda: publish_session_event(
                 chat_session.id,

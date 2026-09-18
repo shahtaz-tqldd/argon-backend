@@ -15,6 +15,7 @@ from chatbot.models import Chatbot, ChatbotUser
 from chatbot.utils.choices import ChatbotPermissionTypes
 from chat.api.v1.client.serializers import (
     AgentMessageCreateSerializer,
+    ChatbotAgentSerializer,
     ChatMessageSerializer,
     ChatSessionListSerializer,
     ChatSessionListQuerySerializer,
@@ -45,6 +46,7 @@ from chat.services.takeover import (
 from chat.utils.choices import (
     ChatMessageSenderType,
     ChatMessageStatus,
+    ChatSessionTransferStatus,
 )
 
 
@@ -494,6 +496,41 @@ class TransferSessionView(ChatSessionObjectMixin, GenericAPIView):
             data=ChatSessionTransferSerializer(transfer).data,
             message="Ownership transfer requested successfully.",
             status=status.HTTP_201_CREATED,
+        )
+
+
+class SessionTransferStatusView(ChatSessionObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT
+
+    def get(self, request, *args, **kwargs):
+        chat_session = self.get_chat_session()
+        queryset = ChatSessionTransfer.objects.filter(chat_session=chat_session)
+        expire_pending_transfers(queryset)
+        pending_transfer = (
+            queryset.filter(status=ChatSessionTransferStatus.PENDING)
+            .select_related(
+                "from_agent__user__profile",
+                "to_agent__user__profile",
+            )
+            .first()
+        )
+        return APIResponse.success(
+            data={
+                "chat_session_id": str(chat_session.id),
+                "assigned_to": (
+                    ChatbotAgentSerializer(chat_session.assigned_to).data
+                    if chat_session.assigned_to_id
+                    else None
+                ),
+                "has_pending_transfer": pending_transfer is not None,
+                "transfer": (
+                    ChatSessionTransferSerializer(pending_transfer).data
+                    if pending_transfer is not None
+                    else None
+                ),
+            },
+            message="Session transfer status fetched successfully.",
         )
 
 
