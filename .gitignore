@@ -21,3 +21,4 @@ build/
 secrets/
 .codex/
 .agents/
+.kilo

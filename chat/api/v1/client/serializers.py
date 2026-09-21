@@ -73,6 +73,12 @@ class ChatbotAgentSerializer(serializers.Serializer):
     )
 
 
+class ChatSessionAgentSerializer(serializers.Serializer):
+    """Minimal agent representation used by the session inbox."""
+
+    name = serializers.CharField(source="user.name", read_only=True)
+
+
 class ChatSessionChatbotSerializer(serializers.Serializer):
     slug = serializers.SlugField(read_only=True)
     chatbot_name = serializers.CharField(read_only=True)
@@ -123,6 +129,7 @@ class ChatSessionSerializer(serializers.ModelSerializer):
     chatbot = ChatSessionChatbotSerializer(read_only=True)
     lead_id = serializers.UUIDField(read_only=True)
     assigned_to = ChatbotAgentSerializer(read_only=True)
+    user_metadata = serializers.SerializerMethodField()
     message_count = serializers.IntegerField(read_only=True, required=False)
 
     class Meta:
@@ -152,12 +159,30 @@ class ChatSessionSerializer(serializers.ModelSerializer):
         )
         read_only_fields = fields
 
+    def get_user_metadata(self, obj):
+        user_metadata = (
+            dict(obj.user_metadata)
+            if isinstance(obj.user_metadata, dict)
+            else {}
+        )
+        lead_fields = (
+            obj.lead.collected_fields
+            if obj.lead and isinstance(obj.lead.collected_fields, dict)
+            else {}
+        )
+        for field_name in ("name", "email", "phone"):
+            lead_value = lead_fields.get(field_name)
+            if lead_value not in (None, ""):
+                user_metadata[field_name] = lead_value
+        return user_metadata
+
 
 class ChatSessionListSerializer(serializers.ModelSerializer):
     user_data = serializers.SerializerMethodField()
     unread_message_count = serializers.IntegerField(read_only=True)
     last_message = serializers.SerializerMethodField()
-    assigned_to = ChatbotAgentSerializer(read_only=True)
+    assigned_to = ChatSessionAgentSerializer(read_only=True)
+    transfer_requested_to = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatSession
@@ -171,6 +196,7 @@ class ChatSessionListSerializer(serializers.ModelSerializer):
             "is_recently_active",
             "status",
             "assigned_to",
+            "transfer_requested_to",
             "requires_attention",
             "attention_reason",
             "last_activity_at",
@@ -185,18 +211,21 @@ class ChatSessionListSerializer(serializers.ModelSerializer):
         lead = obj.lead
         lead_fields = lead.collected_fields if lead else {}
         user_metadata = obj.user_metadata or {}
-        user_data = {**user_metadata, **lead_fields}
-        user_data["name"] = self._first_value(
-            lead_fields.get("name"),
-            user_metadata.get("name"),
-        )
-        user_data["detected_country"] = self._first_value(
-            lead.detected_country_code if lead else "",
-            user_metadata.get("detected_country"),
-            user_metadata.get("detected_country_code"),
-        )
-        user_data.pop("detected_country_code", None)
-        return user_data
+        return {
+            "name": self._first_value(
+                lead_fields.get("name"),
+                user_metadata.get("name"),
+            ),
+            "detected_country": self._first_value(
+                lead.detected_country_code if lead else "",
+                user_metadata.get("detected_country"),
+                user_metadata.get("detected_country_code"),
+            ),
+        }
+
+    def get_transfer_requested_to(self, obj):
+        name = obj.transfer_requested_to_name
+        return {"name": name} if name is not None else None
 
     def get_last_message(self, obj):
         if obj.last_message_sender is None:
@@ -230,6 +259,8 @@ class ChatSessionTakeoverSerializer(serializers.ModelSerializer):
             "id",
             "chat_session_id",
             "agent",
+            "is_forced",
+            "takeover_reason",
             "released_at",
             "release_reason",
             "released_to",
@@ -239,6 +270,24 @@ class ChatSessionTakeoverSerializer(serializers.ModelSerializer):
             "updated_at",
         )
         read_only_fields = fields
+
+
+class TakeOverSessionSerializer(serializers.Serializer):
+    is_forced = serializers.BooleanField(required=False, default=False)
+    reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        max_length=256,
+    )
+
+    def validate(self, attrs):
+        attrs["reason"] = attrs["reason"].strip()
+        if attrs["is_forced"] and not attrs["reason"]:
+            raise serializers.ValidationError(
+                {"reason": "A reason is required for a forced takeover."}
+            )
+        return attrs
 
 
 class AgentMessageCreateSerializer(serializers.Serializer):

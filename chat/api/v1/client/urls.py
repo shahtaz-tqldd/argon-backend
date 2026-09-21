@@ -17,12 +17,12 @@ takeover_patterns = [
     path("take-over/", views.TakeOverSessionView.as_view(), name="session-take-over"),
     path("release/", views.ReleaseSessionView.as_view(), name="session-release"),
     path("resolve/", views.ResolveSessionView.as_view(), name="session-resolve"),
-    path("reopen/", views.ReopenSessionView.as_view(), name="session-reopen"),
 ]
 
 transfer_patterns = [
     path("request/", views.TransferSessionView.as_view(), name="transfer-request"),
-    path("incoming/", views.IncomingTransferListView.as_view(), name="transfer-incoming-list"),
+    path("session/",views.SessionTransferStatusView.as_view(),name="session-transfer-status"),
+    path("incoming/",views.IncomingTransferListView.as_view(),name="transfer-incoming-list",),
     path("accept/", views.AcceptTransferView.as_view(), name="transfer-accept"),
     path("decline/", views.DeclineTransferView.as_view(), name="transfer-decline"),
     path("cancel/", views.CancelTransferView.as_view(), name="transfer-cancel"),

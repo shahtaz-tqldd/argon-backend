@@ -162,6 +162,26 @@ class DashboardDeliveryTests(SimpleTestCase):
             finally:
                 client.stop()
 
+    def test_chatbot_management_update_reaches_every_connected_member(self):
+        event = {
+            "event": {
+                "type": "session.updated",
+                "session_id": str(uuid4()),
+                "data": {
+                    "change": "session.taken_over",
+                    "assigned_to": {"id": "agent-id", "name": "Agent"},
+                    "has_pending_transfer": False,
+                    "transfer_requested_to": None,
+                },
+            },
+        }
+        consumers = [DashboardConsumer(), DashboardConsumer()]
+        for consumer in consumers:
+            consumer.get_session_access = AsyncMock(return_value=True)
+            consumer.send_json = AsyncMock()
+            async_to_sync(consumer.chat_session_event)(event)
+            consumer.send_json.assert_awaited_once_with(event["event"])
+
     @patch("base.socket.services.broadcaster.broadcast")
     def test_generic_session_update_is_dashboard_only(self, broadcast):
         session_id, chatbot_id = uuid4(), uuid4()

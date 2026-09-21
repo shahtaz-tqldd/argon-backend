@@ -256,9 +256,6 @@ AI output is currently **not token-streamed**. The complete reply arrives in one
 turns AI off for that session, preventing AI and an agent from replying at the
 same time.
 
-During widget integration, `CHATBOT_AI_BACKEND=placeholder` returns
-`CHATBOT_PLACEHOLDER_REPLY` through the real persistence and WebSocket event
-pipeline immediately, without Celery or AI-message capacity. Change it to
 `gemini` when model-backed replies are ready; Gemini work is queued in Celery.
 
 The socket also emits `session.taken_over`, `session.transferred`,

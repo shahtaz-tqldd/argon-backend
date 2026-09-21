@@ -204,6 +204,65 @@ class Chatbot(BaseModel):
         return bool(config and config.is_enabled)
 
 
+class ChatbotCapacity(BaseMinModel):
+    """Pre-calculated subscription limits and usage for one chatbot."""
+
+    chatbot = models.OneToOneField(
+        Chatbot,
+        related_name="capacity",
+        on_delete=models.CASCADE,
+    )
+
+    ai_message_limit = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Maximum AI messages for the period; null means unlimited.",
+    )
+    current_ai_message_count = models.PositiveIntegerField(default=0)
+
+    file_size_limit_bytes = models.PositiveBigIntegerField(
+        null=True,
+        blank=True,
+        help_text="Maximum stored knowledge bytes; null means unlimited.",
+    )
+    current_file_size_bytes = models.PositiveBigIntegerField(default=0)
+
+    knowledge_chunk_limit = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Maximum knowledge chunks; null means unlimited.",
+    )
+    current_knowledge_chunk_count = models.PositiveIntegerField(default=0)
+
+    active_features = ArrayField(
+        base_field=models.CharField(
+            max_length=40,
+            choices=PlanFeature.choices,
+        ),
+        default=list,
+        blank=True,
+    )
+
+    class Meta:
+        verbose_name = "Chatbot capacity"
+        verbose_name_plural = "Chatbot capacities"
+
+    def clean(self):
+        super().clean()
+        features = self.active_features or []
+        if len(features) != len(set(features)):
+            raise ValidationError(
+                {"active_features": "Active features must be unique."}
+            )
+
+    def has_feature(self, feature):
+        feature = getattr(feature, "value", feature)
+        return feature in (self.active_features or [])
+
+    def __str__(self):
+        return f"Capacity: {self.chatbot}"
+
+
 class ChatbotWidgetSettings(BaseModel):
     chatbot = models.OneToOneField(
         Chatbot,
@@ -331,6 +390,8 @@ class ChatbotAllowedOrigin(BaseModel):
     def __str__(self):
         return f"{self.origin} -> {self.chatbot}"
 
+
+# CHATBOT USER
 
 class ChatbotUser(BaseMinModel):
     chatbot = models.ForeignKey(
@@ -466,60 +527,49 @@ class ChatbotInvitation(BaseModel):
         return f"Invitation for {self.email} to {self.chatbot}"
 
 
-class ChatbotCapacity(BaseMinModel):
-    """Pre-calculated subscription limits and usage for one chatbot."""
+class ChatbotActivityLog(BaseMinModel):
+    """A record of an action performed inside a chatbot."""
 
-    chatbot = models.OneToOneField(
+    chatbot = models.ForeignKey(
         Chatbot,
-        related_name="capacity",
         on_delete=models.CASCADE,
+        related_name="activity_logs",
     )
-
-    ai_message_limit = models.PositiveIntegerField(
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
         null=True,
         blank=True,
-        help_text="Maximum AI messages for the period; null means unlimited.",
+        on_delete=models.SET_NULL,
+        related_name="chatbot_activity_logs",
+        help_text="The user who performed the action; null denotes the system.",
     )
-    current_ai_message_count = models.PositiveIntegerField(default=0)
-
-    file_size_limit_bytes = models.PositiveBigIntegerField(
-        null=True,
-        blank=True,
-        help_text="Maximum stored knowledge bytes; null means unlimited.",
-    )
-    current_file_size_bytes = models.PositiveBigIntegerField(default=0)
-
-    knowledge_chunk_limit = models.PositiveIntegerField(
-        null=True,
-        blank=True,
-        help_text="Maximum knowledge chunks; null means unlimited.",
-    )
-    current_knowledge_chunk_count = models.PositiveIntegerField(default=0)
-
-    active_features = ArrayField(
-        base_field=models.CharField(
-            max_length=40,
-            choices=PlanFeature.choices,
-        ),
-        default=list,
-        blank=True,
-    )
+    action = models.CharField(max_length=100, db_index=True)
+    description = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
-        verbose_name = "Chatbot capacity"
-        verbose_name_plural = "Chatbot capacities"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["chatbot", "-created_at"],
+                name="chatbot_activity_time_idx",
+            ),
+            models.Index(
+                fields=["chatbot", "user", "-created_at"],
+                name="chatbot_user_activity_idx",
+            ),
+        ]
 
     def clean(self):
         super().clean()
-        features = self.active_features or []
-        if len(features) != len(set(features)):
-            raise ValidationError(
-                {"active_features": "Active features must be unique."}
-            )
-
-    def has_feature(self, feature):
-        feature = getattr(feature, "value", feature)
-        return feature in (self.active_features or [])
+        self.action = self.action.strip()
+        if not self.action:
+            raise ValidationError({"action": "Action is required."})
+        if not isinstance(self.metadata, dict):
+            raise ValidationError({"metadata": "Metadata must be an object."})
 
     def __str__(self):
-        return f"Capacity: {self.chatbot}"
+        actor = self.user or "System"
+        return f"{actor}: {self.action} in {self.chatbot}"
+
+

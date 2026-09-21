@@ -23,11 +23,18 @@ class ScriptedModel(BaseLlm):
         self.requests.append(llm_request.model_copy(deep=True))
         if not self.responses:
             raise AssertionError("Unexpected extra model call")
+        # A streamed answer arrives as consecutive partial chunks followed by
+        # the completed response, all from one generator call.
         result = self.responses.pop(0)
-        for part in result.content.parts if result.content else []:
-            if part.function_call and part.function_call.name not in llm_request.tools_dict:
-                raise AssertionError(f"Tool is not exposed to this agent: {part.function_call.name}")
-        yield result
+        is_streaming_call = result.partial
+        while True:
+            for part in result.content.parts if result.content else []:
+                if part.function_call and part.function_call.name not in llm_request.tools_dict:
+                    raise AssertionError(f"Tool is not exposed to this agent: {part.function_call.name}")
+            yield result
+            if not is_streaming_call or not result.partial or not self.responses:
+                break
+            result = self.responses.pop(0)
 
 
 def response(*parts):
@@ -46,10 +53,24 @@ def call(name, **args):
 
 
 def answer(content="Hello", source_ids=None):
+    """A specialist's structured final answer."""
     return response(types.Part.from_text(text=json.dumps({
         "content": content,
         "source_ids": source_ids or [],
     })))
+
+
+def say(content="Hello"):
+    """The coordinator's plain-text final answer."""
+    return response(types.Part.from_text(text=content))
+
+
+def partial(content):
+    """A streamed text delta from the coordinator."""
+    return LlmResponse(
+        partial=True,
+        content=types.Content(role="model", parts=[types.Part.from_text(text=content)]),
+    )
 
 
 def inline_async(func, **kwargs):
@@ -77,6 +98,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             timezone="Asia/Dhaka", language="en", instructions="", never_answer="",
             escalation_rule="", fallback_message="Please try again.", ai_enabled=True,
             is_active=True, knowledge_base_enabled=True,
+            human_handoff_enabled=True, appointment_booking_enabled=True,
         )
         self.conversation = SimpleNamespace(id="session-1", chatbot_id="bot-1", messages=Mock())
         self.service = InMemorySessionService()
@@ -94,7 +116,7 @@ class ClientTests(IsolatedAsyncioTestCase):
         model = self.script(call("knowledge_agent", request="Find the opening hours"),
                             call("search_knowledge", query="opening hours"),
                             answer("Open at 9", ["kb-2"]),
-                            answer("We open at 9.", ["kb-2", "invented", "kb-2"]))
+                            say("We open at 9."))
         matches = [SimpleNamespace(knowledge_base_id=s, content="Open at 9") for s in ["kb-1", "kb-2"]]
         with patch("agent.sub_agents.knowledge.tools.KnowledgeVectorService.search", return_value=matches) as search:
             result = await self.client.chat("When do you open?", user_id="visitor")
@@ -108,12 +130,13 @@ class ClientTests(IsolatedAsyncioTestCase):
         for request in model.requests:
             self.assertIn(self.bot.never_answer, request.config.system_instruction)
         session = await self.service.get_session(app_name=self.client.app_name,
-                                                user_id="bot-1:visitor", session_id="session-1")
+                                                 user_id="bot-1:visitor", session_id="session-1")
         self.assertIsNotNone(session)
 
     def test_app_and_coordinator_configuration(self):
         root = self.client.chat_agent
         self.assertEqual(root.mode, "chat")
+        self.assertIsNone(root.output_schema)
         self.assertIs(self.client.runner.app, self.client.app)
         self.assertIs(self.client.app.root_agent, root)
         self.assertEqual(self.client.app.events_compaction_config.compaction_interval, 3)
@@ -123,10 +146,36 @@ class ClientTests(IsolatedAsyncioTestCase):
                          ["knowledge_agent", "appointment_agent"])
         self.assertTrue(all(agent.mode == "single_turn" for agent in root.sub_agents))
         self.assertEqual([tool.name for tool in root.tools],
-                         ["record_lead_score", "request_human_escalation",
-                          "knowledge_agent", "appointment_agent"])
-        self.assertEqual([tool.name for tool in root.sub_agents[0].tools], ["search_knowledge"])
-        self.assertEqual([tool.name for tool in root.sub_agents[1].tools], ["find_appointment_availability"])
+                         ["knowledge_agent", "appointment_agent"])
+        self.assertEqual([tool.name for tool in root.sub_agents[0].tools],
+                         ["search_knowledge", "record_lead_score", "request_human_escalation"])
+        self.assertEqual([tool.name for tool in root.sub_agents[1].tools],
+                         ["find_appointment_availability", "record_lead_score",
+                          "request_human_escalation"])
+
+    def test_composition_follows_chatbot_features(self):
+        self.bot.knowledge_base_enabled = False
+        knowledge_off = AgentClient(self.bot, self.conversation,
+                                    session_service=InMemorySessionService())
+        self.assertEqual([a.name for a in knowledge_off.chat_agent.sub_agents],
+                         ["appointment_agent"])
+        self.assertEqual([t.name for t in knowledge_off.chat_agent.tools],
+                         ["appointment_agent"])
+
+        self.bot.appointment_booking_enabled = False
+        bare = AgentClient(self.bot, self.conversation,
+                           session_service=InMemorySessionService())
+        self.assertEqual(bare.chat_agent.sub_agents, [])
+        self.assertEqual([t.name for t in bare.chat_agent.tools],
+                         ["record_lead_score", "request_human_escalation"])
+
+    def test_escalation_tool_hidden_when_handoff_disabled(self):
+        self.bot.human_handoff_enabled = False
+        client = AgentClient(self.bot, self.conversation,
+                             session_service=InMemorySessionService())
+        knowledge = client.chat_agent.sub_agents[0]
+        self.assertEqual([t.name for t in knowledge.tools],
+                         ["search_knowledge", "record_lead_score"])
 
     async def test_mixed_request_delegates_to_both_specialists(self):
         slots = [{
@@ -142,7 +191,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             call("appointment_agent", request="Book a consultation on June 16"),
             call("find_appointment_availability", requested_date="2026-06-16"),
             answer("June 16 is available."),
-            answer("We offer consultations. Select a June 16 slot in the UI.", ["kb-1"]),
+            say("We offer consultations. Select a June 16 slot in the UI."),
         )
         with patch("agent.sub_agents.knowledge.tools.KnowledgeVectorService.search", return_value=[
             SimpleNamespace(knowledge_base_id="kb-1", content="Consultations")
@@ -154,15 +203,57 @@ class ClientTests(IsolatedAsyncioTestCase):
         self.assertEqual(result["token"]["total_tokens"], 7 * 125)
         self.assertEqual(len(model.requests), 7)
 
+    async def test_context_answer_cites_previously_retrieved_sources(self):
+        matches = [SimpleNamespace(knowledge_base_id="kb-1", content="Open at 9")]
+        self.script(
+            call("knowledge_agent", request="Find the opening hours"),
+            call("search_knowledge", query="opening hours"),
+            answer("Open at 9", ["kb-1"]),
+            say("We open at 9."),
+            # Second turn answers from conversation context without a search.
+            call("knowledge_agent", request="Confirm the opening hours already discussed"),
+            answer("Still open at 9", ["kb-1"]),
+            say("Still open at 9."),
+        )
+        with patch("agent.sub_agents.knowledge.tools.KnowledgeVectorService.search", return_value=matches) as search:
+            first = await self.client.chat("When do you open?")
+            second = await self.client.chat("Right, and you said?")
+        search.assert_called_once()
+        self.assertEqual(first["result"]["source_ids"], ["kb-1"])
+        self.assertEqual(second["result"]["source_ids"], ["kb-1"])
+
+    async def test_chat_stream_yields_deltas_and_done(self):
+        matches = [SimpleNamespace(knowledge_base_id="kb-2", content="Open at 9")]
+        self.script(call("knowledge_agent", request="Find the opening hours"),
+                    call("search_knowledge", query="opening hours"),
+                    answer("Open at 9", ["kb-2"]),
+                    partial("We "),
+                    partial("open at 9."),
+                    say("We open at 9."))
+        with patch("agent.sub_agents.knowledge.tools.KnowledgeVectorService.search", return_value=matches):
+            items = [item async for item in
+                     self.client.chat_stream("When do you open?", user_id="visitor")]
+        self.assertEqual([i["content"] for i in items if i["type"] == "delta"],
+                         ["We ", "open at 9."])
+        done = items[-1]
+        self.assertEqual(done["type"], "done")
+        self.assertEqual(done["response"]["result"]["content"], "We open at 9.")
+        self.assertEqual(done["response"]["result"]["source_ids"], ["kb-2"])
+        # The streamed answer's chunks plus its completed response are one
+        # model call: delegate, search, specialist answer, streamed relay.
+        self.assertEqual(done["response"]["token"]["total_tokens"], 4 * 125)
+
     async def test_redelegating_does_not_reset_seven_day_search_budget(self):
         payload = dict(status="unavailable", available=False, date=None,
                        requested_date="2026-06-16", searched_through="2026-06-22")
         self.script(
             call("appointment_agent", request="Search June 16"),
-            call("find_appointment_availability", requested_date="2026-06-16"), answer("No availability."),
+            call("find_appointment_availability", requested_date="2026-06-16"),
+            answer("No availability."),
             call("appointment_agent", request="Try June 23 too"),
-            call("find_appointment_availability", requested_date="2026-06-23"), answer("No availability."),
-            answer("Would you like to try next week?"),
+            call("find_appointment_availability", requested_date="2026-06-23"),
+            answer("No availability."),
+            say("Would you like to try next week?"),
         )
         with patch("agent.sub_agents.appointment.tools.booking.find_availability", return_value=payload) as search:
             result = await self.client.chat("Book June 16")
@@ -175,7 +266,9 @@ class ClientTests(IsolatedAsyncioTestCase):
         self.script(call("appointment_agent", request="Book June 16"),
                     call("find_appointment_availability", requested_date="2026-06-16"),
                     call("find_appointment_availability", requested_date="2026-06-23"),
-                    answer("June 18 is available."), answer("June 18 is available."), answer("You're welcome"))
+                    answer("June 18 is available."),
+                    say("June 18 is available."),
+                    say("You're welcome"))
         with patch("agent.sub_agents.appointment.tools.booking.find_availability", return_value=payload) as search:
             result = await self.client.chat("Book June 16")
             next_turn = await self.client.chat("Thanks")
@@ -190,10 +283,10 @@ class ClientTests(IsolatedAsyncioTestCase):
         self.script(call("appointment_agent", request="Find June 16 availability"), response(
             types.Part.from_function_call(name="find_appointment_availability", args={"requested_date": "2026-06-16"}),
             types.Part.from_function_call(name="find_appointment_availability", args={"requested_date": "2026-06-23"}),
-        ), answer("No availability. Try next week?"), answer("No availability. Try next week?"),
+        ), answer("No availability. Try next week?"), say("No availability. Try next week?"),
             call("appointment_agent", request="Visitor agreed to search June 23"),
             call("find_appointment_availability", requested_date="2026-06-23"),
-            answer("No availability."), answer("No availability."))
+            answer("No availability."), say("No availability."))
         with patch("agent.sub_agents.appointment.tools.booking.find_availability", return_value=payload) as search:
             result = await self.client.chat("June 16 please")
             self.assertEqual(search.call_count, 1)
@@ -207,9 +300,11 @@ class ClientTests(IsolatedAsyncioTestCase):
                        appointment_status="pending", starts_at="2026-06-18T09:00:00+06:00",
                        ends_at="2026-06-18T09:30:00+06:00")
         model = self.script(call("appointment_agent", request="Acknowledge the backend booking event"),
-                            answer("Your request is awaiting approval."), answer("Your request is awaiting approval."),
+                            answer("Your request is awaiting approval."),
+                            say("Your request is awaiting approval."),
                             call("appointment_agent", request="Visitor asks whether their booking is confirmed"),
-                            answer("No new booking event."), answer("No new booking event."))
+                            answer("No new booking event."),
+                            say("No new booking event."))
         with patch("agent.client.verified_booking", return_value=payload) as verify:
             result = await self.client.confirm_booking("appt-1")
         verify.assert_called_once_with("bot-1", "session-1", "appt-1")
@@ -221,17 +316,18 @@ class ClientTests(IsolatedAsyncioTestCase):
         await self.client.chat("Is my booking confirmed?")
         self.assertIn("Backend-verified booking event for this turn: null", model.requests[4].config.system_instruction)
         names = [tool.name for tool in self.client.chat_agent.tools]
-        self.assertEqual(names, ["record_lead_score", "request_human_escalation",
-                                 "knowledge_agent", "appointment_agent"])
+        self.assertEqual(names, ["knowledge_agent", "appointment_agent"])
 
-    async def test_agent_records_lead_score_during_conversation(self):
+    async def test_specialist_records_lead_score_during_conversation(self):
         self.script(
+            call("knowledge_agent", request="Visitor needs this this month and wants a call"),
             call(
                 "record_lead_score",
                 score=82,
                 summary="Needs implementation this month and requested a booking.",
             ),
             answer("I can help you schedule that."),
+            say("I can help you schedule that."),
         )
         payload = {
             "score": 82,
@@ -248,13 +344,15 @@ class ClientTests(IsolatedAsyncioTestCase):
         )
         self.assertEqual(result["result"]["lead_score"], payload)
 
-    async def test_agent_escalation_is_returned_to_caller(self):
+    async def test_specialist_escalation_is_returned_to_caller(self):
         self.script(
+            call("knowledge_agent", request="Visitor wants a person"),
             call(
                 "request_human_escalation",
                 escalation_reason="Visitor explicitly asked to speak with a person.",
             ),
-            answer("I have requested human assistance."),
+            answer("A human teammate will follow up."),
+            say("A human teammate will follow up."),
         )
         payload = {
             "requires_attention": True,
@@ -264,10 +362,12 @@ class ClientTests(IsolatedAsyncioTestCase):
             result = await self.client.chat("Let me speak with a human")
         self.assertEqual(result["result"]["escalation"], payload)
 
-    async def test_invalid_chat_output_fails_closed(self):
-        self.script(response(types.Part.from_text(text="not JSON")))
-        with self.assertRaisesRegex(RuntimeError, "invalid structured"):
-            await self.client.chat("Hello")
+    async def test_invalid_specialist_output_fails_closed(self):
+        self.script(call("knowledge_agent", request="Find hours"),
+                    response(types.Part.from_text(text="not JSON")))
+        with patch("agent.sub_agents.knowledge.tools.KnowledgeVectorService.search", return_value=[]):
+            with self.assertRaisesRegex(RuntimeError, "ValidationError"):
+                await self.client.chat("Hours?")
 
     async def test_booking_event_survives_model_failure(self):
         payload = dict(status="booking_recorded", appointment_id="appt-1", appointment_status="confirmed")
@@ -281,7 +381,7 @@ class ClientTests(IsolatedAsyncioTestCase):
     async def test_missing_knowledge_returns_empty_citations(self):
         self.script(call("knowledge_agent", request="Find hours"),
                     call("search_knowledge", query="hours"), answer("Unknown"),
-                    answer("Unknown", ["stale-source"]))
+                    say("Unknown"))
         with patch("agent.sub_agents.knowledge.tools.KnowledgeVectorService.search", return_value=[]):
             result = await self.client.chat("Hours?")
         self.assertEqual(result["result"]["source_ids"], [])

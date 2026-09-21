@@ -61,19 +61,17 @@ class SocketAccessTests(SimpleTestCase):
         )
 
     @patch("base.socket.services.access.ChatbotUser.objects")
-    @patch("base.socket.services.access.WorkspaceUser.objects")
     @patch("base.socket.services.access.ChatSession.objects")
-    def test_session_access_requires_both_memberships_and_management_permission(self, sessions, workspaces, chatbots):
+    def test_session_access_requires_chatbot_membership_and_management_permission(
+        self,
+        sessions,
+        chatbots,
+    ):
         user_id, session_id, workspace_id, chatbot_id = uuid4(), uuid4(), uuid4(), uuid4()
         session = SimpleNamespace(chatbot_id=chatbot_id, chatbot=SimpleNamespace(workspace_id=workspace_id))
         sessions.select_related.return_value.get.return_value = session
         agent = Mock()
         chatbots.select_related.return_value.get.return_value = agent
-        workspaces.filter.return_value.exists.return_value = False
-        self.assertIsNone(session_access(user_id, session_id))
-        chatbots.select_related.assert_not_called()
-
-        workspaces.filter.return_value.exists.return_value = True
         agent.has_permission.return_value = False
         self.assertIsNone(session_access(user_id, session_id))
         agent.has_permission.assert_called_with(ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT)

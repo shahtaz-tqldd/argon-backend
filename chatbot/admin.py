@@ -2,11 +2,12 @@ from django.contrib import admin
 
 from chatbot.models import (
     Chatbot,
+    ChatbotActivityLog,
     ChatbotAllowedOrigin,
+    ChatbotCapacity,
     ChatbotInvitation,
     ChatbotUser,
     ChatbotWidgetSettings,
-    ChatbotCapacity
 )
 
 
@@ -58,6 +59,30 @@ class ChatbotUserAdmin(admin.ModelAdmin):
     )
     autocomplete_fields = ("chatbot", "user")
     readonly_fields = ("id", "created_at", "updated_at")
+
+
+@admin.register(ChatbotActivityLog)
+class ChatbotActivityLogAdmin(admin.ModelAdmin):
+    list_display = ("action", "chatbot", "user", "created_at")
+    list_filter = ("action", "created_at")
+    search_fields = (
+        "action",
+        "description",
+        "chatbot__chatbot_name",
+        "user__email",
+        "user__name",
+    )
+    autocomplete_fields = ("chatbot", "user")
+    readonly_fields = (
+        "id",
+        "chatbot",
+        "user",
+        "action",
+        "description",
+        "metadata",
+        "created_at",
+        "updated_at",
+    )
 
 
 @admin.register(ChatbotInvitation)

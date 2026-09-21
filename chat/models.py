@@ -428,6 +428,9 @@ class ChatSessionTakeover(BaseMinModel):
         related_name="chat_session_takeovers",
     )
 
+    is_forced = models.BooleanField(default=False)
+    takeover_reason = models.CharField(max_length=256, blank=True, default="")
+
     # release
     released_at = models.DateTimeField(null=True, blank=True)
     release_reason = models.CharField(
@@ -499,6 +502,10 @@ class ChatSessionTakeover(BaseMinModel):
                 ),
                 name="chat_takeover_released_to_requires_transfer",
             ),
+            models.CheckConstraint(
+                condition=Q(is_forced=False) | Q(takeover_reason__gt=""),
+                name="takeover_force_requires_reason",
+            ),
         ]
 
     @property
@@ -514,6 +521,10 @@ class ChatSessionTakeover(BaseMinModel):
 
     def clean(self):
         super().clean()
+        if self.is_forced and not self.takeover_reason.strip():
+            raise ValidationError(
+                {"takeover_reason": "A reason is required for a forced takeover."}
+            )
         if self.agent_id and self.chat_session_id:
             if self.agent.chatbot_id != self.chat_session.chatbot_id:
                 raise ValidationError(

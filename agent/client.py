@@ -5,7 +5,7 @@ from asgiref.sync import async_to_sync, sync_to_async
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from google.adk.agents.context_cache_config import ContextCacheConfig
-from google.adk.agents.run_config import RunConfig
+from google.adk.agents.run_config import RunConfig, StreamingMode
 from google.adk.apps.app import App, EventsCompactionConfig
 from google.adk.events import Event
 from google.adk.events.event_actions import EventActions
@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from agent.root_agent import root_agent
 from agent.sub_agents.appointment.tools.booking import verified_booking
+from agent.sub_agents.knowledge.tools import RETRIEVED_SOURCE_IDS_KEY
 from agent.utils.schema import (
     AgentResponseSchema,
     AgentResultSchema,
@@ -32,6 +33,7 @@ class AgentClient:
 
     app_name = "argon_agents"
     MESSAGE_TEXT_LIMIT = 1000
+    MAX_LLM_CALLS = 12
     MIN_TOKENS_FOR_CONTEXT = 2048
     CACHE_TTL_SECONDS = 600
     CACHE_INTERVALS = 5
@@ -41,14 +43,17 @@ class AgentClient:
     def __init__(self, chatbot, session, *, session_service=None):
         if str(session.chatbot_id) != str(chatbot.id):
             raise ValueError("The conversation does not belong to this chatbot.")
+
         if session_service is None:
             if not settings.ADK_DB_URL:
                 raise ImproperlyConfigured("Set ADK_DB_URL for persistent agent sessions.")
             session_service = DatabaseSessionService(db_url=settings.ADK_DB_URL)
+
         self.session_service = session_service
         self.chatbot = chatbot
         self.session = session
         self.chat_agent = root_agent(chatbot, session)
+        self.specialist_names = {agent.name for agent in self.chat_agent.sub_agents}
         self.app = App(
             name=self.app_name,
             root_agent=self.chat_agent,
@@ -82,95 +87,21 @@ class AgentClient:
         return f"{self.chatbot.id}:{user_id if user_id is not None else self.session.id}"
 
     async def _get_or_create_session(self, scoped_user):
-        kwargs = dict(app_name=self.app_name, user_id=scoped_user,
-                      session_id=str(self.session.id))
+        kwargs = dict(
+            app_name=self.app_name,
+            user_id=scoped_user,
+            session_id=str(self.session.id)
+        )
+
         session = await self.session_service.get_session(**kwargs)
+
         if session is None:
             session = await self.session_service.create_session(**kwargs)
+
         return session
 
-    async def _run(
-        self,
-        *,
-        user_id,
-        session_id,
-        message,
-    ):
-        reply = ""
-        usage = TokenUsageSchema()
-        source_ids = set()
-        appointment = None
-        lead_score = None
-        escalation = None
-        seen_usage_events = set()
-        async with aclosing(
-            self.runner.run_async(
-                user_id=user_id,
-                session_id=session_id,
-                new_message=types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text=message)],
-                ),
-                run_config=RunConfig(max_llm_calls=12),
-            )
-        ) as events:
-            async for event in events:
-                if event.error_code:
-                    raise RuntimeError(f"Agent execution failed: {event.error_code}")
-                if (
-                    event.usage_metadata
-                    and not event.partial
-                    and event.id not in seen_usage_events
-                ):
-                    seen_usage_events.add(event.id)
-                    metadata = event.usage_metadata
-                    prompt = metadata.prompt_token_count or 0
-                    output = metadata.candidates_token_count or 0
-                    thinking = metadata.thoughts_token_count or 0
-                    usage.input_tokens += prompt
-                    usage.output_tokens += output + thinking
-                    usage.thinking_tokens += thinking
-                    usage.cached_input_tokens += metadata.cached_content_token_count or 0
-                    usage.total_tokens += metadata.total_token_count or (prompt + output + thinking)
-                for response in event.get_function_responses():
-                    payload = response.response or {}
-                    if response.name == "search_knowledge" and payload.get("status") == "ok":
-                        source_ids.update(str(s["source_id"]) for s in payload.get("sources", []))
-                    if (response.name == "find_appointment_availability"
-                            and payload.get("status") != "search_in_progress"):
-                        appointment = AppointmentSchema.model_validate(payload)
-                    if response.name == "record_lead_score":
-                        lead_score = LeadScoreSchema.model_validate(payload)
-                    if response.name == "request_human_escalation":
-                        escalation = EscalationSchema.model_validate(payload)
-                if (
-                    event.author == self.chat_agent.name
-                    and event.is_final_response()
-                    and event.content
-                    and not event.partial
-                ):
-                    text = "".join(
-                        p.text
-                        for p in event.content.parts or []
-                        if p.text and not p.thought
-                    )
-                    if text.strip():
-                        reply = text.strip()
-        return reply, usage, source_ids, appointment, lead_score, escalation
-
-    @staticmethod
-    def _response(result, usage):
-        cost = (
-            usage.input_tokens * settings.GEMINI_INPUT_COST_PER_MILLION
-            + usage.output_tokens * settings.GEMINI_OUTPUT_COST_PER_MILLION
-        ) / 1_000_000
-        return AgentResponseSchema(
-            result=result,
-            token=usage,
-            cost=round(cost, 10),
-        ).model_dump(mode="json")
-
-    async def _chat_turn(self, message, user_id, *, confirmation=None):
+    async def _prepare_turn(self, user_id, *, confirmation=None):
+        """Load the ADK session and commit trusted backend state before the run."""
         scoped_user = self._scoped_user(user_id)
         session = await self._get_or_create_session(scoped_user)
         state_delta = {"current_booking_confirmation": confirmation}
@@ -191,34 +122,114 @@ class AgentClient:
                 actions=EventActions(state_delta=state_delta),
             ),
         )
+        return session
 
-        (
-            reply,
-            usage,
-            retrieved_ids,
-            appointment,
-            lead_score,
-            escalation,
-        ) = await self._run(
-            user_id=scoped_user,
-            session_id=session.id,
-            message=message,
+    async def _turn_stream(self, message, user_id, *, confirmation=None, streaming=False):
+        """Yield ``{"type": "delta", "content": ...}`` chunks (streaming only)
+        and finally ``{"type": "done", "response": <envelope>``."""
+        session = await self._prepare_turn(user_id, confirmation=confirmation)
+
+        reply = ""
+        usage = TokenUsageSchema()
+        retrieved_ids = set()
+        cited_ids = []
+        appointment = None
+        lead_score = None
+        escalation = None
+        seen_usage_events = set()
+        run_config = RunConfig(
+            max_llm_calls=self.MAX_LLM_CALLS,
+            streaming_mode=StreamingMode.SSE if streaming else StreamingMode.NONE,
         )
 
-        if reply:
-            try:
-                answer = KnowledgeBaseAgentOutputSchema.model_validate_json(reply)
+        async with aclosing(
+            self.runner.run_async(
+                user_id=self._scoped_user(user_id),
+                session_id=session.id,
+                new_message=types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=message)],
+                ),
+                run_config=run_config,
+            )
+        ) as events:
+            async for event in events:
+                if event.error_code:
+                    raise RuntimeError(f"Agent execution failed: {event.error_code}")
+                if (
+                    event.usage_metadata
+                    and not event.partial
+                    and event.id not in seen_usage_events
+                ):
+                    seen_usage_events.add(event.id)
+                    metadata = event.usage_metadata
+                    prompt = metadata.prompt_token_count or 0
+                    output = metadata.candidates_token_count or 0
+                    thinking = metadata.thoughts_token_count or 0
+                    usage.input_tokens += prompt
+                    usage.output_tokens += output + thinking
+                    usage.thinking_tokens += thinking
+                    usage.cached_input_tokens += metadata.cached_content_token_count or 0
+                    usage.total_tokens += metadata.total_token_count or (prompt + output + thinking)
 
-            except ValidationError as exc:
-                raise RuntimeError("Agent returned an invalid structured chat response.") from exc
-        else:
-            answer = KnowledgeBaseAgentOutputSchema(content=self.chatbot.fallback_message)
+                if (
+                    streaming
+                    and event.partial
+                    and event.author == self.chat_agent.name
+                    and event.content
+                ):
+                    delta = "".join(
+                        p.text
+                        for p in event.content.parts or []
+                        if p.text and not p.thought
+                    )
+                    if delta:
+                        yield {"type": "delta", "content": delta}
 
-        # Reject invented/stale citations; preserve the model's selection of used sources.
-        used_ids = list(dict.fromkeys(s for s in answer.source_ids if s in retrieved_ids))
+                for response in event.get_function_responses():
+                    payload = response.response or {}
+                    if response.name == "search_knowledge" and payload.get("status") == "ok":
+                        retrieved_ids.update(str(s["source_id"]) for s in payload.get("sources", []))
+                    if response.name in self.specialist_names:
+                        cited_ids.extend(self._cited_source_ids(payload))
+                    if (response.name == "find_appointment_availability"
+                            and payload.get("status") != "search_in_progress"):
+                        appointment = AppointmentSchema.model_validate(payload)
+                    if response.name == "record_lead_score":
+                        lead_score = LeadScoreSchema.model_validate(payload)
+                    if response.name == "request_human_escalation":
+                        escalation = EscalationSchema.model_validate(payload)
+
+                if (
+                    event.author in self.specialist_names
+                    and event.is_final_response()
+                    and event.content
+                    and not event.partial
+                ):
+                    text = "".join(p.text or "" for p in event.content.parts or [])
+                    cited_ids.extend(self._cited_source_ids(text))
+
+                if (
+                    event.author == self.chat_agent.name
+                    and event.is_final_response()
+                    and event.content
+                    and not event.partial
+                ):
+                    text = "".join(
+                        p.text
+                        for p in event.content.parts or []
+                        if p.text and not p.thought
+                    )
+                    if text.strip():
+                        reply = text.strip()
+
+        # Citations may reference sources retrieved in earlier turns, which the
+        # knowledge tool accumulates in session state for exactly this case.
+        allowed_ids = retrieved_ids | set(session.state.get(RETRIEVED_SOURCE_IDS_KEY) or [])
+        used_ids = list(dict.fromkeys(s for s in cited_ids if s in allowed_ids))
 
         result = AgentResultSchema(
-            content=answer.content,
+            content=reply or self.chatbot.fallback_message,
             source_ids=used_ids,
             appointment=(
                 AppointmentSchema.model_validate(confirmation)
@@ -229,14 +240,72 @@ class AgentClient:
             escalation=escalation,
         )
 
-        return self._response(result, usage)
+        yield {"type": "done", "response": self._response(result, usage)}
+
+    def _cited_source_ids(self, payload):
+        """Extract source_ids from a specialist's structured answer."""
+        if isinstance(payload, types.Content):
+            payload = "".join(p.text or "" for p in payload.parts or [])
+        if isinstance(payload, list):
+            payload = "".join(getattr(p, "text", "") or "" for p in payload)
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (TypeError, ValueError):
+                return []
+        if isinstance(payload, dict) and "result" in payload and "source_ids" not in payload:
+            payload = payload.get("result")
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except (TypeError, ValueError):
+                    return []
+        if isinstance(payload, dict):
+            try:
+                return KnowledgeBaseAgentOutputSchema.model_validate(payload).source_ids
+            except ValidationError:
+                return []
+        return []
+
+    @staticmethod
+    def _response(result, usage):
+        cost = (
+            usage.input_tokens * settings.GEMINI_INPUT_COST_PER_MILLION
+            + usage.output_tokens * settings.GEMINI_OUTPUT_COST_PER_MILLION
+        ) / 1_000_000
+        return AgentResponseSchema(
+            result=result,
+            token=usage,
+            cost=round(cost, 10),
+        ).model_dump(mode="json")
+
+    async def _turn(self, message, user_id, *, confirmation=None):
+        response = None
+        async for item in self._turn_stream(message, user_id, confirmation=confirmation):
+            if item["type"] == "done":
+                response = item["response"]
+        return response
 
     async def chat(self, message: str, user_id: str | None = None):
         self._check_validation(message)
-        return await self._chat_turn(message, user_id)
+        return await self._turn(message, user_id)
 
     def chat_sync(self, **kwargs):
         return async_to_sync(self.chat)(**kwargs)
+
+    async def chat_stream(self, message: str, user_id: str | None = None):
+        """Stream one visitor turn for socket-style consumers.
+
+        Yields ``{"type": "delta", "content": str}`` text chunks as the
+        coordinator produces them, then a single
+        ``{"type": "done", "response": <AgentResponseSchema dump>}`` frame with
+        the same envelope ``chat`` returns (content, source_ids, appointment,
+        lead_score, escalation, tokens, cost). Consumers should emit an error
+        frame if this generator raises mid-stream.
+        """
+        self._check_validation(message)
+        async for item in self._turn_stream(message, user_id, streaming=True):
+            yield item
 
     async def confirm_booking(self, appointment_id: str, user_id: str | None = None):
         """
@@ -247,7 +316,7 @@ class AgentClient:
         confirmation = await sync_to_async(verified_booking)(
             self.chatbot.id, self.session.id, appointment_id,
         )
-        return await self._chat_turn(
+        return await self._turn(
             json.dumps({"event": "booking_confirmation", "booking": confirmation}),
             user_id,
             confirmation=confirmation,
