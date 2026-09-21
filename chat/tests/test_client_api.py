@@ -68,7 +68,11 @@ class ChatSessionClientAPITests(APITestCase):
             chatbot=self.chatbot,
             lead=lead,
             ai_enabled=False,
-            user_metadata={"name": "Metadata Name"},
+            user_metadata={
+                "name": "Metadata Name",
+                "email": "visitor@example.com",
+                "browser": "Firefox",
+            },
             metadata={"Ref": "metadata-ref"},
         )
         ChatMessage.objects.create(
@@ -106,11 +110,10 @@ class ChatSessionClientAPITests(APITestCase):
                 "ai_enabled",
                 "status",
                 "assigned_to",
+                "transfer_requested_to",
                 "requires_attention",
                 "attention_reason",
-                "attention_requested_at",
-                "resolved_at",
-                "closed_at",
+                "is_recently_active",
                 "last_activity_at",
             },
         )
@@ -119,9 +122,10 @@ class ChatSessionClientAPITests(APITestCase):
             {
                 "name": "Lead Name",
                 "detected_country": "BD",
-                "Ref": "lead-ref",
             },
         )
+        self.assertIsNone(item["assigned_to"])
+        self.assertIsNone(item["transfer_requested_to"])
         self.assertEqual(item["unread_message_count"], 1)
         self.assertEqual(
             item["last_message"],
@@ -187,13 +191,28 @@ class ChatSessionClientAPITests(APITestCase):
             "system",
         )
 
-    def test_session_list_returns_assigned_agent_avatar_url(self):
-        avatar_url = "https://example.com/agents/support.png"
-        self.user.profile.avatar_url = avatar_url
-        self.user.profile.save(update_fields=["avatar_url"])
+    def test_session_list_returns_minimal_assignee_and_transfer_recipient(self):
+        self.user.name = "Assigned Agent"
+        self.user.save(update_fields=["name"])
+        recipient_user = User.objects.create_user(
+            email="transfer-recipient@example.com",
+            password="StrongPass123!",
+            name="Transfer Recipient",
+        )
+        recipient = ChatbotUser.objects.create(
+            chatbot=self.chatbot,
+            user=recipient_user,
+            role=ChatbotRoleTypes.MEMBER,
+        )
         ChatSession.objects.create(
             chatbot=self.chatbot,
             assigned_to=self.agent,
+        )
+        session = ChatSession.objects.get()
+        ChatSessionTransfer.objects.create(
+            chat_session=session,
+            from_agent=self.agent,
+            to_agent=recipient,
         )
 
         response = self.client.get(
@@ -202,8 +221,12 @@ class ChatSessionClientAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(
-            response.data["data"][0]["assigned_to"]["avatar_url"],
-            avatar_url,
+            response.data["data"][0]["assigned_to"],
+            {"name": "Assigned Agent"},
+        )
+        self.assertEqual(
+            response.data["data"][0]["transfer_requested_to"],
+            {"name": "Transfer Recipient"},
         )
 
     def test_session_list_orders_newest_message_activity_first(self):
@@ -333,6 +356,45 @@ class ChatSessionClientAPITests(APITestCase):
                 "slug": self.chatbot.slug,
                 "chatbot_name": self.chatbot.chatbot_name,
                 "logo": self.chatbot.logo,
+            },
+        )
+
+    def test_session_detail_merges_lead_contact_fields_into_user_metadata(self):
+        lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={
+                "name": "Lead Name",
+                "email": "lead@example.com",
+                "phone": "+8801700000000",
+            },
+        )
+        session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            lead=lead,
+            user_metadata={
+                "name": "Metadata Name",
+                "email": "metadata@example.com",
+                "phone": "unknown",
+                "browser": "Firefox",
+            },
+        )
+
+        response = self.client.get(
+            reverse("chat-session-detail"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["data"]["user_metadata"],
+            {
+                "name": "Lead Name",
+                "email": "lead@example.com",
+                "phone": "+8801700000000",
+                "browser": "Firefox",
             },
         )
 
@@ -653,6 +715,91 @@ class ChatSessionClientAPITests(APITestCase):
         session.refresh_from_db()
         self.assertEqual(session.assigned_to, other_agent)
 
+    def test_forced_takeover_replaces_owner_and_cancels_pending_transfer(self):
+        _, recipient = self._create_agent(
+            "forced-takeover-recipient@example.com"
+        )
+        forced_user, forced_agent = self._create_agent(
+            "forced-takeover-agent@example.com"
+        )
+        session = self._owned_session()
+        original_takeover = ChatSessionTakeover.objects.get(
+            chat_session=session,
+            released_at__isnull=True,
+        )
+        response = self.client.post(
+            reverse("transfer-request"),
+            {"to_agent_id": recipient.id},
+            format="json",
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+        transfer_id = response.data["data"]["id"]
+
+        self.client.force_authenticate(forced_user)
+        response = self.client.post(
+            reverse("session-take-over"),
+            {
+                "is_forced": True,
+                "reason": "The requested agent is unavailable.",
+            },
+            format="json",
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        session.refresh_from_db()
+        original_takeover.refresh_from_db()
+        transfer = ChatSessionTransfer.objects.get(pk=transfer_id)
+        forced_takeover = ChatSessionTakeover.objects.get(
+            chat_session=session,
+            released_at__isnull=True,
+        )
+        self.assertEqual(transfer.status, ChatSessionTransferStatus.CANCELLED)
+        self.assertEqual(session.assigned_to, forced_agent)
+        self.assertEqual(
+            original_takeover.release_reason,
+            ChatSessionTakeoverReleaseReason.FORCED_TAKEOVER,
+        )
+        self.assertEqual(forced_takeover.agent, forced_agent)
+        self.assertTrue(forced_takeover.is_forced)
+        self.assertEqual(
+            forced_takeover.takeover_reason,
+            "The requested agent is unavailable.",
+        )
+        self.assertTrue(response.data["data"]["is_forced"])
+        self.assertEqual(
+            response.data["data"]["takeover_reason"],
+            "The requested agent is unavailable.",
+        )
+
+    def test_forced_takeover_requires_a_reason_of_at_most_256_characters(self):
+        session = ChatSession.objects.create(chatbot=self.chatbot)
+
+        for reason in ("", "x" * 257):
+            with self.subTest(reason_length=len(reason)):
+                response = self.client.post(
+                    reverse("session-take-over"),
+                    {"is_forced": True, "reason": reason},
+                    format="json",
+                    query_params={
+                        "chatbot_slug": self.chatbot.slug,
+                        "session_id": session.id,
+                    },
+                )
+
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertFalse(
+                    ChatSessionTakeover.objects.filter(
+                        chat_session=session
+                    ).exists()
+                )
+
     def test_any_agent_can_view_a_sessions_pending_transfer_status(self):
         recipient_user, recipient = self._create_agent(
             "session-transfer-status-recipient@example.com"
@@ -844,6 +991,41 @@ class ChatSessionClientAPITests(APITestCase):
         self.assertEqual(
             cancelled_notification.metadata["transfer_id"],
             str(transfer_id),
+        )
+
+    def test_only_requester_can_cancel_transfer(self):
+        recipient_user, recipient = self._create_agent(
+            "cancel-permission-recipient@example.com"
+        )
+        session = self._owned_session()
+        response = self.client.post(
+            reverse("transfer-request"),
+            {"to_agent_id": recipient.id},
+            format="json",
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+        transfer_id = response.data["data"]["id"]
+
+        self.client.force_authenticate(recipient_user)
+        response = self.client.post(
+            reverse("transfer-cancel"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "transfer_id": transfer_id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["message"],
+            "Only the requesting agent can cancel this transfer.",
+        )
+        self.assertEqual(
+            ChatSessionTransfer.objects.get(pk=transfer_id).status,
+            ChatSessionTransferStatus.PENDING,
         )
 
     @staticmethod

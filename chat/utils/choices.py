@@ -48,6 +48,7 @@ class ChatSessionTakeoverReleaseReason(models.TextChoices):
     RESOLVED = "resolved", "Resolved"
     CLOSED = "closed", "Closed"
     RELEASED = "released", "Released"
+    FORCED_TAKEOVER = "forced_takeover", "Forced takeover"
 
 
 class ChatSessionTransferStatus(models.TextChoices):

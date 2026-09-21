@@ -1714,7 +1714,7 @@
               "name": "List Sessions",
               "request": {
                 "method": "GET",
-                "description": "Paginated chat sessions.\n\n**Query**: `chatbot_slug` (required), `status` (`open|resolved|closed`), `assignment` (`all|mine|assigned|unassigned`, default `all`), `requires_attention` (bool), `is_recently_active` (bool — active in last 10 min), `page`, `page_size`.\n\n**200** → `data`: `{id, channel (web_widget|messenger|instagram|whatsapp|api), user_data, unread_message_count, last_message {sender, content}|null, ai_enabled, is_recently_active, status, assigned_to {id, name, email, avatar_url}|null, requires_attention, attention_reason, last_activity_at}`.",
+                "description": "Paginated chat sessions.\n\n**Query**: `chatbot_slug` (required), `status` (`open|resolved|closed`), `assignment` (`all|mine|assigned|unassigned`, default `all`), `requires_attention` (bool), `is_recently_active` (bool — active in last 10 min), `page`, `page_size`.\n\n**200** → `data`: `{id, channel (web_widget|messenger|instagram|whatsapp|api), user_data {name, detected_country}, unread_message_count, last_message {sender, content}|null, ai_enabled, is_recently_active, status, assigned_to {name}|null, transfer_requested_to {name}|null, requires_attention, attention_reason, last_activity_at}`.",
                 "url": {
                   "raw": "{{base_url}}/api/v1/chat/sessions/list/?chatbot_slug={{chatbot_slug}}&status=open&assignment=all&page=1&page_size=20",
                   "host": [

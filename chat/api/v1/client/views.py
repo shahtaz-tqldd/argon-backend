@@ -1,8 +1,8 @@
 from datetime import datetime, time, timedelta
 
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Count, OuterRef, Q, Subquery
-from django.db.models.functions import TruncDate
+from django.db.models import Count, OuterRef, Q, Subquery, Value
+from django.db.models.functions import Coalesce, TruncDate
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -28,6 +28,7 @@ from chat.api.v1.client.serializers import (
     ChatSessionTransferSerializer,
     ResolveSessionSerializer,
     SessionOverviewQuerySerializer,
+    TakeOverSessionSerializer,
     TransferSessionSerializer,
 )
 from chat.models import ChatMessage, ChatSession, ChatSessionTransfer
@@ -38,7 +39,6 @@ from chat.services.takeover import (
     decline_transfer,
     expire_pending_transfers,
     release_session,
-    reopen_session,
     request_transfer,
     resolve_session,
     take_over_session,
@@ -184,20 +184,34 @@ class ChatSessionListView(
         last_message = ChatMessage.objects.filter(
             chat_session=OuterRef("pk")
         ).order_by("-created_at", "-id")
+        unread_messages = (
+            ChatMessage.objects.filter(
+                chat_session=OuterRef("pk"),
+                sender_type=ChatMessageSenderType.VISITOR,
+            )
+            .exclude(status=ChatMessageStatus.READ)
+            .order_by()
+            .values("chat_session")
+            .annotate(total=Count("id"))
+            .values("total")
+        )
+        pending_transfer = ChatSessionTransfer.objects.filter(
+            chat_session=OuterRef("pk"),
+            status=ChatSessionTransferStatus.PENDING,
+        ).filter(
+            Q(expires_at__isnull=True) | Q(expires_at__gte=timezone.now())
+        )
         queryset = (
             ChatSession.objects.filter(chatbot=self.get_chatbot())
             .select_related(
                 "chatbot",
                 "lead",
-                "assigned_to__user__profile",
+                "assigned_to__user",
             )
             .annotate(
-                unread_message_count=Count(
-                    "messages",
-                    filter=(
-                        Q(messages__sender_type=ChatMessageSenderType.VISITOR)
-                        & ~Q(messages__status=ChatMessageStatus.READ)
-                    ),
+                unread_message_count=Coalesce(
+                    Subquery(unread_messages),
+                    Value(0),
                 ),
                 last_message_sender=Subquery(
                     last_message.values("sender_type")[:1]
@@ -207,6 +221,9 @@ class ChatSessionListView(
                 ),
                 last_message_agent_name=Subquery(
                     last_message.values("sender__user__name")[:1]
+                ),
+                transfer_requested_to_name=Subquery(
+                    pending_transfer.values("to_agent__user__name")[:1]
                 ),
             )
         )
@@ -451,12 +468,17 @@ class AgentMessageCreateView(ChatSessionObjectMixin, GenericAPIView):
 class TakeOverSessionView(ChatSessionObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     required_chatbot_permission = ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT
+    serializer_class = TakeOverSessionSerializer
 
     def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         try:
             takeover = take_over_session(
                 self.get_chat_session(),
                 self.get_chatbot_user(),
+                is_forced=serializer.validated_data["is_forced"],
+                takeover_reason=serializer.validated_data["reason"],
             )
         except DjangoValidationError as exc:
             return validation_error_response(exc)
@@ -636,22 +658,4 @@ class ResolveSessionView(ChatSessionObjectMixin, GenericAPIView):
         return APIResponse.success(
             data=ChatSessionTakeoverSerializer(takeover).data,
             message="Chat session resolved successfully.",
-        )
-
-
-class ReopenSessionView(ChatSessionObjectMixin, GenericAPIView):
-    permission_classes = [IsChatbotUser]
-    required_chatbot_permission = ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT
-
-    def post(self, request, *args, **kwargs):
-        try:
-            takeover = reopen_session(
-                self.get_chat_session(),
-                self.get_chatbot_user(),
-            )
-        except DjangoValidationError as exc:
-            return validation_error_response(exc)
-        return APIResponse.success(
-            data=ChatSessionTakeoverSerializer(takeover).data,
-            message="Chat session reopened successfully.",
         )

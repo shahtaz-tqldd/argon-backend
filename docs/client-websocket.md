@@ -160,18 +160,20 @@ These events share `{"type", "session_id", "data"}`:
 | Event | `data` fields |
 | --- | --- |
 | `session.created` | `chatbot_id`, `channel`, `status` |
-| `session.taken_over` | `takeover_id`, `agent_id` |
+| `session.taken_over` | `takeover_id`, `agent_id`, `is_forced`, `takeover_reason` |
 | `session.released` | `takeover_id` |
 | `session.resolved` / `session.closed` | `takeover_id`, `status` |
 | `session.reopened` | `reopened_by_id` |
-| `session.transfer_requested` | `transfer_id`, `takeover_id`, `from_agent_id`, `to_agent_id` |
-| `session.transferred` | `transfer_id`, `takeover_id`, `from_agent_id`, `to_agent_id` |
-| `session.transfer_declined` / `session.transfer_cancelled` | `transfer_id` |
+| `session.transfer_requested` | `transfer_id`, `transfer_status`, `takeover_id`, `from_agent_id`, `to_agent_id` |
+| `session.transferred` | `transfer_id`, `transfer_status`, `takeover_id`, `from_agent_id`, `to_agent_id` |
+| `session.transfer_declined` / `session.transfer_cancelled` | `transfer_id`, `transfer_status` |
 | `ai.response.started` | `in_reply_to` message UUID |
 | `ai.response.failed` | `code`, `retryable` |
 
-Every specific session transition also produces this dashboard-only partial
-event:
+Every management transition also includes `status`, `ai_enabled`,
+`assigned_to`, `has_pending_transfer`, and `transfer_requested_to`. It produces
+this canonical dashboard-only event for every authorized member of the
+chatbot:
 
 ```json
 {
@@ -180,14 +182,23 @@ event:
   "data": {
     "change": "session.taken_over",
     "takeover_id": "takeover-uuid",
-    "agent_id": "chatbot-membership-uuid"
+    "agent_id": "chatbot-membership-uuid",
+    "status": "open",
+    "ai_enabled": false,
+    "assigned_to": {
+      "id": "chatbot-membership-uuid",
+      "name": "Support Agent"
+    },
+    "has_pending_transfer": false,
+    "transfer_requested_to": null
   }
 }
 ```
 
 Choose either the specific transition or `session.updated` for state changes;
-handling both applies the same change twice. Payloads are partial, so refetch the
-session through REST when a complete record is needed.
+handling both applies the same change twice. New frontend code should use
+`session.updated`. See [Frontend: real-time chat-session management](frontend-chat-session-realtime.md)
+for the complete implementation contract.
 
 Known AI failure codes are `queue_unavailable`, `message_limit_reached`, and
 `generation_failed`. AI replies are not streamed; the complete reply arrives

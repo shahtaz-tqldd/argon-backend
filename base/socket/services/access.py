@@ -41,11 +41,6 @@ def session_access(user_id, session_id):
             pk=session_id, chatbot__is_deleted=False,
             chatbot__workspace__is_active=True,
         )
-        if not WorkspaceUser.objects.filter(
-            user_id=user_id, workspace_id=session.chatbot.workspace_id,
-            is_active=True, user__is_active=True,
-        ).exists():
-            return None
         agent = ChatbotUser.objects.select_related("user", "chatbot").get(
             chatbot_id=session.chatbot_id, user_id=user_id,
             is_active=True, user__is_active=True,
