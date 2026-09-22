@@ -15,7 +15,7 @@ from google.genai import types
 from pydantic import ValidationError
 
 from agent.root_agent import root_agent
-from agent.sub_agents.appointment.tools.booking import verified_booking
+from agent.sub_agents.appointment.tools import verified_booking
 from agent.sub_agents.knowledge.tools import RETRIEVED_SOURCE_IDS_KEY
 from agent.utils.schema import (
     AgentResponseSchema,
@@ -26,6 +26,10 @@ from agent.utils.schema import (
     LeadScoreSchema,
     TokenUsageSchema,
 )
+
+# global instruction
+from google.adk.plugins.global_instruction_plugin import GlobalInstructionPlugin
+from agent.helpers.instructions import business_instruction
 
 
 class AgentClient:
@@ -66,6 +70,11 @@ class AgentClient:
                 ttl_seconds=self.CACHE_TTL_SECONDS,
                 cache_intervals=self.CACHE_INTERVALS,
             ),
+            plugins=[
+                GlobalInstructionPlugin(
+                    global_instruction=lambda _ctx: business_instruction(chatbot)
+                )
+            ]
         )
         self.runner = Runner(app=self.app, session_service=self.session_service)
 

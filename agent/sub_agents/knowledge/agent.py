@@ -4,7 +4,7 @@ from agent.helpers.instructions import business_instruction
 from agent.helpers.load_instruction import load_sub_agent_instruction
 from agent.helpers.model import chat_model, generation_config
 from agent.sub_agents.knowledge.tools import create_knowledge_tools
-from agent.tools import create_conversation_tools
+from agent.helpers.global_tools import create_global_tools
 from agent.utils.schema import KnowledgeBaseAgentOutputSchema
 
 
@@ -28,7 +28,7 @@ def build(chatbot, session) -> LlmAgent | None:
         instruction=instruction,
         tools=[
             *create_knowledge_tools(chatbot),
-            *create_conversation_tools(chatbot, session),
+            *create_global_tools(chatbot, session),
         ],
         output_schema=KnowledgeBaseAgentOutputSchema,
         generate_content_config=generation_config(),

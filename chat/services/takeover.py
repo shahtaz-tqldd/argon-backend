@@ -182,16 +182,10 @@ def take_over_session(
         takeover.save()
         chat_session.assigned_to = agent
         chat_session.ai_enabled = False
-        chat_session.requires_attention = False
-        chat_session.attention_reason = ""
-        chat_session.attention_requested_at = None
         chat_session.save(
             update_fields=[
                 "assigned_to",
                 "ai_enabled",
-                "requires_attention",
-                "attention_reason",
-                "attention_requested_at",
                 "updated_at",
             ]
         )

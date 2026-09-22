@@ -12,7 +12,8 @@ from google.genai import types
 from pydantic import Field
 
 from agent.client import AgentClient
-from agent.sub_agents.appointment.tools import booking
+from agent.sub_agents.appointment import tools as booking
+from subscription.choices import PlanFeature
 
 
 class ScriptedModel(BaseLlm):
@@ -89,8 +90,8 @@ class ClientTests(IsolatedAsyncioTestCase):
         for module in [
             "agent.client",
             "agent.sub_agents.knowledge.tools",
-            "agent.sub_agents.appointment.tools.availability",
-            "agent.tools.conversation",
+            "agent.sub_agents.appointment.tools",
+            "agent.helpers.global_tools",
         ]:
             self.enterContext(patch(f"{module}.sync_to_async", side_effect=inline_async))
         self.bot = SimpleNamespace(
@@ -99,6 +100,10 @@ class ClientTests(IsolatedAsyncioTestCase):
             escalation_rule="", fallback_message="Please try again.", ai_enabled=True,
             is_active=True, knowledge_base_enabled=True,
             human_handoff_enabled=True, appointment_booking_enabled=True,
+            capacity=SimpleNamespace(
+                active_features=[PlanFeature.LEAD_CAPTURE],
+                has_feature=lambda feature: feature == PlanFeature.LEAD_CAPTURE,
+            ),
         )
         self.conversation = SimpleNamespace(id="session-1", chatbot_id="bot-1", messages=Mock())
         self.service = InMemorySessionService()
@@ -177,6 +182,17 @@ class ClientTests(IsolatedAsyncioTestCase):
         self.assertEqual([t.name for t in knowledge.tools],
                          ["search_knowledge", "record_lead_score"])
 
+    def test_lead_score_tool_and_instruction_hidden_when_feature_disabled(self):
+        self.bot.capacity.active_features = []
+        self.bot.capacity.has_feature = lambda _feature: False
+        client = AgentClient(self.bot, self.conversation,
+                             session_service=InMemorySessionService())
+
+        self.assertEqual([t.name for t in client.chat_agent.sub_agents[0].tools],
+                         ["search_knowledge", "request_human_escalation"])
+        instruction = client.app.plugins[0].global_instruction(None)
+        self.assertNotIn("Lead scoring:", instruction)
+
     async def test_mixed_request_delegates_to_both_specialists(self):
         slots = [{
             "starts_at": "2026-06-16T09:00:00+06:00",
@@ -195,7 +211,7 @@ class ClientTests(IsolatedAsyncioTestCase):
         )
         with patch("agent.sub_agents.knowledge.tools.KnowledgeVectorService.search", return_value=[
             SimpleNamespace(knowledge_base_id="kb-1", content="Consultations")
-        ]), patch("agent.sub_agents.appointment.tools.booking.find_availability", return_value=payload):
+        ]), patch("agent.sub_agents.appointment.tools.find_availability", return_value=payload):
             result = await self.client.chat("What service can I book on June 16?")
         self.assertEqual(result["result"]["source_ids"], ["kb-1"])
         self.assertEqual(result["result"]["appointment"]["date"], "2026-06-16")
@@ -255,7 +271,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             answer("No availability."),
             say("Would you like to try next week?"),
         )
-        with patch("agent.sub_agents.appointment.tools.booking.find_availability", return_value=payload) as search:
+        with patch("agent.sub_agents.appointment.tools.find_availability", return_value=payload) as search:
             result = await self.client.chat("Book June 16")
         search.assert_called_once_with("bot-1", "2026-06-16")
         self.assertEqual(result["result"]["appointment"]["searched_through"], "2026-06-22")
@@ -269,7 +285,7 @@ class ClientTests(IsolatedAsyncioTestCase):
                     answer("June 18 is available."),
                     say("June 18 is available."),
                     say("You're welcome"))
-        with patch("agent.sub_agents.appointment.tools.booking.find_availability", return_value=payload) as search:
+        with patch("agent.sub_agents.appointment.tools.find_availability", return_value=payload) as search:
             result = await self.client.chat("Book June 16")
             next_turn = await self.client.chat("Thanks")
         search.assert_called_once_with("bot-1", "2026-06-16")
@@ -287,7 +303,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             call("appointment_agent", request="Visitor agreed to search June 23"),
             call("find_appointment_availability", requested_date="2026-06-23"),
             answer("No availability."), say("No availability."))
-        with patch("agent.sub_agents.appointment.tools.booking.find_availability", return_value=payload) as search:
+        with patch("agent.sub_agents.appointment.tools.find_availability", return_value=payload) as search:
             result = await self.client.chat("June 16 please")
             self.assertEqual(search.call_count, 1)
             self.assertEqual(result["result"]["appointment"]["status"], "unavailable")
@@ -334,7 +350,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             "summary": "Needs implementation this month and requested a booking.",
             "recorded": True,
         }
-        with patch("agent.tools.conversation._record_lead_score", return_value=payload) as record:
+        with patch("agent.helpers.global_tools._record_lead_score", return_value=payload) as record:
             result = await self.client.chat("We need this this month. Can we book a call?")
         record.assert_called_once_with(
             "bot-1",
@@ -358,7 +374,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             "requires_attention": True,
             "escalation_reason": "Visitor explicitly asked to speak with a person.",
         }
-        with patch("agent.tools.conversation._request_human_escalation", return_value=payload):
+        with patch("agent.helpers.global_tools._request_human_escalation", return_value=payload):
             result = await self.client.chat("Let me speak with a human")
         self.assertEqual(result["result"]["escalation"], payload)
 
@@ -396,8 +412,8 @@ class AvailabilityTests(SimpleTestCase):
     def setUp(self):
         self.config = SimpleNamespace(chatbot=SimpleNamespace(timezone="Asia/Dhaka"), maximum_advance_days=30)
         self.now = datetime(2026, 6, 15, 20, tzinfo=timezone.utc)  # June 16 locally.
-        self.config_patch = patch("agent.sub_agents.appointment.tools.booking.get_config", return_value=self.config)
-        self.now_patch = patch("agent.sub_agents.appointment.tools.booking.timezone.now", return_value=self.now)
+        self.config_patch = patch("agent.sub_agents.appointment.tools.get_config", return_value=self.config)
+        self.now_patch = patch("agent.sub_agents.appointment.tools.timezone.now", return_value=self.now)
         self.config_patch.start()
         self.now_patch.start()
         self.addCleanup(self.config_patch.stop)
@@ -408,7 +424,7 @@ class AvailabilityTests(SimpleTestCase):
             "starts_at": "2026-06-18T09:00:00+06:00",
             "ends_at": "2026-06-18T09:30:00+06:00",
         }]
-        with patch("agent.sub_agents.appointment.tools.booking.available_slots", side_effect=[[], [], available]) as slots:
+        with patch("agent.sub_agents.appointment.tools.available_slots", side_effect=[[], [], available]) as slots:
             result = booking.find_availability("bot", "2026-06-16")
         self.assertEqual(result["date"], "2026-06-18")
         self.assertTrue(result["available"])
@@ -416,7 +432,7 @@ class AvailabilityTests(SimpleTestCase):
         self.assertEqual([c.args[1] for c in slots.call_args_list], [date(2026, 6, d) for d in (16, 17, 18)])
 
     def test_searches_exactly_seven_days_including_preferred(self):
-        with patch("agent.sub_agents.appointment.tools.booking.available_slots", return_value=[]) as slots:
+        with patch("agent.sub_agents.appointment.tools.available_slots", return_value=[]) as slots:
             result = booking.find_availability("bot", "2026-06-16")
         self.assertEqual(slots.call_count, 7)
         self.assertEqual(result["searched_through"], "2026-06-22")
@@ -428,33 +444,33 @@ class AvailabilityTests(SimpleTestCase):
             "starts_at": "2026-06-16T09:00:00+06:00",
             "ends_at": "2026-06-16T09:30:00+06:00",
         }]
-        with patch("agent.sub_agents.appointment.tools.booking.available_slots", return_value=available) as slots:
+        with patch("agent.sub_agents.appointment.tools.available_slots", return_value=available) as slots:
             result = booking.find_availability("bot", "2026-06-16")
         self.assertEqual(result["date"], "2026-06-16")
         self.assertEqual(result["slots"], available)
         self.assertEqual(slots.call_count, 1)
 
     def test_invalid_past_and_beyond_horizon_never_query_slots(self):
-        with patch("agent.sub_agents.appointment.tools.booking.available_slots") as slots:
+        with patch("agent.sub_agents.appointment.tools.available_slots") as slots:
             for day in ["garbage", "2026-02-30", "20260616", "2026-06-15", "2027-01-01"]:
                 self.assertEqual(booking.find_availability("bot", day)["status"], "invalid")
         slots.assert_not_called()
 
     def test_horizon_truncates_search_without_offering_next_week(self):
         self.config.maximum_advance_days = 2
-        with patch("agent.sub_agents.appointment.tools.booking.available_slots", return_value=[]) as slots:
+        with patch("agent.sub_agents.appointment.tools.available_slots", return_value=[]) as slots:
             result = booking.find_availability("bot", "2026-06-16")
         self.assertEqual(slots.call_count, 3)
         self.assertIsNone(result["next_search_date"])
         self.assertEqual(result["searched_through"], "2026-06-18")
 
     def test_disabled_booking(self):
-        with patch("agent.sub_agents.appointment.tools.booking.get_config", return_value=None), patch("agent.sub_agents.appointment.tools.booking.available_slots") as slots:
+        with patch("agent.sub_agents.appointment.tools.get_config", return_value=None), patch("agent.sub_agents.appointment.tools.available_slots") as slots:
             self.assertEqual(booking.find_availability("bot", "2026-06-16")["status"], "disabled")
         slots.assert_not_called()
 
     def test_booking_verification_scopes_tenant_conversation_and_status(self):
-        with patch("agent.sub_agents.appointment.tools.booking.Appointment.objects.filter") as query:
+        with patch("agent.sub_agents.appointment.tools.Appointment.objects.filter") as query:
             query.return_value.first.return_value = None
             with self.assertRaises(ValueError):
                 booking.verified_booking("bot", "session", "appointment")
@@ -473,7 +489,7 @@ class AvailabilityTests(SimpleTestCase):
         config.schedules.filter.return_value = [schedule]
         existing = SimpleNamespace(starts_at=datetime.fromisoformat("2026-06-16T09:30:00+06:00"),
                                    ends_at=datetime.fromisoformat("2026-06-16T10:00:00+06:00"))
-        with patch("agent.sub_agents.appointment.tools.booking.Appointment.objects.filter", return_value=[existing]):
+        with patch("agent.sub_agents.appointment.tools.Appointment.objects.filter", return_value=[existing]):
             slots = booking.available_slots(config, date(2026, 6, 16),
                         now=datetime.fromisoformat("2026-06-16T09:00:00+06:00"))
             self.assertEqual([s["starts_at"] for s in slots],

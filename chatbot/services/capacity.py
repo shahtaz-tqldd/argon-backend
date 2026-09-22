@@ -30,6 +30,19 @@ def get_chatbot_capacity(
     return ChatbotCapacity.objects.get(chatbot_id=chatbot.id)
 
 
+def chatbot_has_feature(chatbot, feature):
+    """
+    Return whether the chatbot's current capacity enables ``feature``.
+    """
+    try:
+        capacity = chatbot.capacity
+
+    except (AttributeError, ChatbotCapacity.DoesNotExist):
+        return False
+    
+    return capacity.has_feature(feature)
+
+
 def _normalized_features(features):
     try:
         normalized = [PlanFeature(feature).value for feature in features]

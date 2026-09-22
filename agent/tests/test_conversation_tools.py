@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from agent.tools.conversation import (
+from agent.helpers.global_tools import (
     LEAD_SCORE_SUMMARY_KEY,
     _record_lead_score,
     _request_human_escalation,

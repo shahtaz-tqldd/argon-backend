@@ -6,6 +6,10 @@ from google.adk.tools import FunctionTool
 from chat.models import ChatSession
 from lead_capture.models import Lead
 
+# features
+from chatbot.services.capacity import chatbot_has_feature
+from subscription.choices import PlanFeature
+
 
 LEAD_SCORE_SUMMARY_KEY = "lead_score_summary"
 MAX_LEAD_SUMMARY_LENGTH = 240
@@ -92,9 +96,9 @@ def _request_human_escalation(
     }
 
 
-def create_conversation_tools(chatbot, session):
+def create_global_tools(chatbot, session):
     """
-    Lead scoring for every agent; escalation only when handoff is enabled.
+    Feature-enabled global tools shared by every agent.
     """
     async def record_lead_score(score: int, summary: str) -> dict:
         """Record a qualified lead score and a very short evidence-based reason.
@@ -113,7 +117,10 @@ def create_conversation_tools(chatbot, session):
             summary,
         )
 
-    tools = [FunctionTool(record_lead_score)]
+    tools = []
+
+    if chatbot_has_feature(chatbot, PlanFeature.LEAD_CAPTURE):
+        tools.append(FunctionTool(record_lead_score))
 
     if getattr(chatbot, "human_handoff_enabled", True):
         async def request_human_escalation(
