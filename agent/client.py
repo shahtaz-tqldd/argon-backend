@@ -22,14 +22,14 @@ from agent.utils.schema import (
     AgentResultSchema,
     AppointmentSchema,
     EscalationSchema,
-    KnowledgeBaseAgentOutputSchema,
+    SpecialistResponseSchema,
     LeadScoreSchema,
     TokenUsageSchema,
 )
 
 # global instruction
 from google.adk.plugins.global_instruction_plugin import GlobalInstructionPlugin
-from agent.helpers.instructions import business_instruction
+from agent.helpers.global_instruction import global_instruction
 
 
 class AgentClient:
@@ -72,7 +72,7 @@ class AgentClient:
             ),
             plugins=[
                 GlobalInstructionPlugin(
-                    global_instruction=lambda _ctx: business_instruction(chatbot)
+                    global_instruction=lambda _ctx: global_instruction(chatbot)
                 )
             ]
         )
@@ -271,7 +271,7 @@ class AgentClient:
                     return []
         if isinstance(payload, dict):
             try:
-                return KnowledgeBaseAgentOutputSchema.model_validate(payload).source_ids
+                return SpecialistResponseSchema.model_validate(payload).source_ids
             except ValidationError:
                 return []
         return []

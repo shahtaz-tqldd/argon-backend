@@ -6,9 +6,10 @@ composed specialists, currently `knowledge_agent` and `appointment_agent`.
 ## Architecture
 
 - **Root coordinator** (`agent/root_agent.py`): greets, delegates, and relays.
-  It owns no business tools and no `output_schema`, so its final answer is
-  plain text that can be streamed token-by-token. Its instruction is built
-  from the specialist roster that the chatbot's features actually enable.
+  It owns only the feature-gated cross-cutting conversation tools (lead score
+  and human escalation), plus dynamically generated specialist delegation
+  tools. It has no `output_schema`, so its final answer is plain text that can
+  be streamed token-by-token.
 - **Specialists** (`agent/sub_agents/<name>/agent.py`): `mode="single_turn"`
   agents exposed to the coordinator as delegate tools. Each keeps a structured
   output schema (`content` + `source_ids`), owns its domain tools, and shares
@@ -20,6 +21,11 @@ composed specialists, currently `knowledge_agent` and `appointment_agent`.
   quotation generation, product recommendation) means adding a package with a
   `build` factory and appending it to `SUB_AGENT_FACTORIES`; coordinator
   instructions, delegate tools, and streaming adapt automatically.
+- **Shared policy** (`agent/helpers/global_instruction.py`): the one source of
+  truth for identity, greeting, scope, safety, fallback, lead scoring, and
+  escalation. `GlobalInstructionPlugin` applies it once to the root and every
+  enabled specialist. Domain prompts do not repeat it. Agents are explicitly
+  prohibited from exposing Gemini or other provider identity.
 - **Feature gates**: the knowledge specialist requires
   `Chatbot.knowledge_base_enabled`; the appointment specialist requires
   `Chatbot.appointment_booking_enabled`; the escalation tool requires
@@ -39,12 +45,8 @@ ADK session before each App run; this avoids relying on
 `Runner.run_async(state_delta=...)`, which ADK 2.1.0's App node path does not
 expose to agent context.
 
-Booking operations live together under `agent/sub_agents/appointment/tools/`:
-
-- `booking.py`: slot calculation, bounded date search, saved-booking
-  verification, and the appointment transcript query.
-- `availability.py`: the appointment specialist's ADK tool factory.
-- `__init__.py`: exports the factory.
+Booking operations and the appointment tool factory live in
+`agent/sub_agents/appointment/tools.py`.
 
 ## Usage
 
@@ -175,7 +177,7 @@ metadata.
 
 ## Human escalation
 
-Specialists (and the root, when it is the whole chatbot) call
+Specialists and the root call
 `request_human_escalation` for explicit human requests, configured
 escalation rules, questions they cannot safely or confidently answer, or
 required tool failures; the tool is only exposed when

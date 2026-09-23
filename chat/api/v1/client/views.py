@@ -26,6 +26,7 @@ from chat.api.v1.client.serializers import (
     ChatSessionTransferListQuerySerializer,
     ChatSessionTransferObjectQuerySerializer,
     ChatSessionTransferSerializer,
+    ForceReturnToAISerializer,
     ResolveSessionSerializer,
     SessionOverviewQuerySerializer,
     TakeOverSessionSerializer,
@@ -38,6 +39,7 @@ from chat.services.takeover import (
     cancel_transfer,
     decline_transfer,
     expire_pending_transfers,
+    force_return_to_ai,
     release_session,
     request_transfer,
     resolve_session,
@@ -636,6 +638,28 @@ class ReleaseSessionView(ChatSessionObjectMixin, GenericAPIView):
         return APIResponse.success(
             data=ChatSessionTakeoverSerializer(takeover).data,
             message="Chat session released successfully.",
+        )
+
+
+class ForceReturnToAIView(ChatSessionObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT
+    serializer_class = ForceReturnToAISerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            takeover = force_return_to_ai(
+                self.get_chat_session(),
+                self.get_chatbot_user(),
+                **serializer.validated_data,
+            )
+        except DjangoValidationError as exc:
+            return validation_error_response(exc)
+        return APIResponse.success(
+            data=ChatSessionTakeoverSerializer(takeover).data,
+            message="Chat session forcefully returned to AI.",
         )
 
 

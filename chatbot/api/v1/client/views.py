@@ -420,6 +420,7 @@ class VisitorConversationView(GenericAPIView):
 
         messages = list(
             ChatMessage.objects.filter(chat_session=chat_session)
+            .exclude(metadata__visibility="internal")
             .select_related("sender__user__profile")
             .prefetch_related("attachments")
             .order_by("-created_at")[:50]

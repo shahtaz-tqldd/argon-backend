@@ -176,6 +176,11 @@ class VisitorChatSessionConsumer(AsyncJsonWebsocketConsumer):
     async def chat_session_event(self, event):
         payload = event["event"]
         if payload.get("type") == "message.created":
+            visibility = (
+                payload.get("data", {}).get("metadata", {}).get("visibility")
+            )
+            if visibility == "internal":
+                return
             payload = {**payload, "data": dict(payload["data"])}
             sender = payload["data"].get("sender")
             if sender:
@@ -200,10 +205,15 @@ class VisitorChatSessionConsumer(AsyncJsonWebsocketConsumer):
             "session.reopened",
         }:
             payload = {**payload, "data": {"ai_enabled": True}}
-        elif payload.get("type") in {
-            "session.resolved",
-            "session.closed",
-        }:
+        elif payload.get("type") == "session.resolved":
+            payload = {
+                **payload,
+                "data": {
+                    "ai_enabled": payload["data"].get("ai_enabled", True),
+                    "status": payload["data"].get("status"),
+                },
+            }
+        elif payload.get("type") == "session.closed":
             payload = {
                 **payload,
                 "data": {

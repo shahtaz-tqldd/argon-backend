@@ -7,7 +7,8 @@ from agent.helpers.global_tools import (
     _request_human_escalation,
 )
 from chatbot.models import Chatbot
-from chat.models import ChatSession
+from chat.models import ChatMessage, ChatSession
+from chat.utils.choices import ChatMessageSenderType
 from lead_capture.models import Lead
 from workspace.models import Workspace
 
@@ -70,6 +71,16 @@ class ConversationToolPersistenceTests(TestCase):
             first["escalation_reason"],
             "Visitor explicitly requested a person.",
         )
+        first_timeline_message = ChatMessage.objects.get(
+            chat_session=self.session,
+            metadata__event_type="session.attention_requested",
+            metadata__reason="Visitor explicitly requested a person.",
+        )
+        self.assertEqual(
+            first_timeline_message.sender_type,
+            ChatMessageSenderType.SYSTEM,
+        )
+        self.assertIsNone(first_timeline_message.sender)
 
         changed = _request_human_escalation(
             self.chatbot.id,
@@ -82,6 +93,13 @@ class ConversationToolPersistenceTests(TestCase):
             "Availability lookup failed.",
         )
         self.assertEqual(changed["escalation_reason"], "Availability lookup failed.")
+        self.assertEqual(
+            ChatMessage.objects.filter(
+                chat_session=self.session,
+                metadata__event_type="session.attention_requested",
+            ).count(),
+            2,
+        )
 
     def test_score_is_not_recorded_without_a_captured_lead(self):
         self.session.lead = None

@@ -1950,7 +1950,7 @@
               "name": "Take Over Session",
               "request": {
                 "method": "POST",
-                "description": "Take over the session from the AI.\n\n**Query**: `chatbot_slug`, `session_id`.\n\n**201** → `data`: takeover object `{id, chat_session_id, agent {...}, released_at, release_reason (transferred|resolved|closed|released), released_to, resolution_note, reopened_at, created_at, updated_at}`.",
+                "description": "Take over the session from the AI.\n\n**Query**: `chatbot_slug`, `session_id`.\n\n**201** → `data`: takeover object `{id, chat_session_id, agent {...}, released_at, release_reason (transferred|resolved|closed|released|forced_takeover|forced_release), released_to, resolution_note, reopened_at, created_at, updated_at}`.",
                 "url": {
                   "raw": "{{base_url}}/api/v1/chat/takeovers/take-over/?chatbot_slug={{chatbot_slug}}&session_id={{session_id}}",
                   "host": [
@@ -2006,6 +2006,47 @@
                       "value": "{{session_id}}"
                     }
                   ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Force Return Session to AI",
+              "request": {
+                "method": "POST",
+                "description": "Force-release another agent's active takeover and return the open session to AI. Requires chat-session management permission.\n\n**Query**: `chatbot_slug`, `session_id`.\n\n**Body**: `note` (required, non-blank, ≤5000).",
+                "url": {
+                  "raw": "{{base_url}}/api/v1/chat/takeovers/force-return-to-ai/?chatbot_slug={{chatbot_slug}}&session_id={{session_id}}",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "chat",
+                    "takeovers",
+                    "force-return-to-ai",
+                    ""
+                  ],
+                  "query": [
+                    {
+                      "key": "chatbot_slug",
+                      "value": "{{chatbot_slug}}"
+                    },
+                    {
+                      "key": "session_id",
+                      "value": "{{session_id}}"
+                    }
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"note\": \"The visitor returned while the assigned agent was unavailable.\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
                 }
               },
               "response": []

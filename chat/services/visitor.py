@@ -106,9 +106,11 @@ def get_public_visitor_details(chatbot, visitor_id):
 
 def get_public_visitor_sessions(chatbot, visitor_id):
     _anchor, _lead, sessions = _get_visitor_sessions(chatbot, visitor_id)
-    last_message = ChatMessage.objects.filter(
-        chat_session=OuterRef("pk")
-    ).order_by("-created_at", "-id")
+    last_message = (
+        ChatMessage.objects.filter(chat_session=OuterRef("pk"))
+        .exclude(metadata__visibility="internal")
+        .order_by("-created_at", "-id")
+    )
     return sessions.select_related("lead", "chatbot").annotate(
         last_message_sender_type=Subquery(
             last_message.values("sender_type")[:1]

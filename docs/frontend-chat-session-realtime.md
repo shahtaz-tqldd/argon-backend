@@ -75,7 +75,8 @@ depend on them when the stable fields above already express the current state.
 | `session.transfer_declined` | The recipient declined | Owner is unchanged; pending transfer is cleared |
 | `session.transfer_cancelled` | The requester cancelled, or a forced takeover superseded it | Pending transfer is cleared; use `assigned_to` from the event |
 | `session.released` | The owner released the session | `assigned_to` is `null` |
-| `session.resolved` / `session.closed` | The owner ended the session | `assigned_to` is `null`; update `status` |
+| `session.resolved` | The owner resolved the issue and released the conversation | `assigned_to` is `null`; the session remains `open` |
+| `session.closed` | The owner ended the session | `assigned_to` is `null`; update `status` to `closed` |
 
 For a forced takeover, `session.taken_over` also contains `is_forced: true` and
 `takeover_reason`. If it supersedes a pending transfer, a

@@ -161,8 +161,9 @@ These events share `{"type", "session_id", "data"}`:
 | --- | --- |
 | `session.created` | `chatbot_id`, `channel`, `status` |
 | `session.taken_over` | `takeover_id`, `agent_id`, `is_forced`, `takeover_reason` |
-| `session.released` | `takeover_id` |
-| `session.resolved` / `session.closed` | `takeover_id`, `status` |
+| `session.released` | `takeover_id`; forced returns also include `agent_id`, `is_forced`, and `note` |
+| `session.resolved` | `takeover_id`, `status` (`open`) |
+| `session.closed` | `takeover_id`, `status` (`closed`) |
 | `session.reopened` | `reopened_by_id` |
 | `session.transfer_requested` | `transfer_id`, `transfer_status`, `takeover_id`, `from_agent_id`, `to_agent_id` |
 | `session.transferred` | `transfer_id`, `transfer_status`, `takeover_id`, `from_agent_id`, `to_agent_id` |

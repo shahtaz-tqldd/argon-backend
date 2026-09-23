@@ -260,8 +260,9 @@ same time.
 
 The socket also emits `session.taken_over`, `session.transferred`,
 `session.released`, `session.reopened`, `session.resolved`, or `session.closed`.
-Their public payload contains `ai_enabled` and, for ended conversations,
-`status`; internal agent and takeover identifiers are not exposed.
+Their public payload contains `ai_enabled` and relevant session `status`; a
+resolution keeps the conversation open and returns it to AI, while a close
+ends it. Internal agent and takeover identifiers are not exposed.
 
 Send `{"type":"ping"}` during idle periods; the server responds with
 `{"type":"pong"}`. On disconnect, reconnect with the same URL while the token

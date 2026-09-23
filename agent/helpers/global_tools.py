@@ -4,6 +4,7 @@ from django.utils import timezone
 from google.adk.tools import FunctionTool
 
 from chat.models import ChatSession
+from chat.services.messages import create_system_message
 from lead_capture.models import Lead
 
 # features
@@ -88,6 +89,12 @@ def _request_human_escalation(
                 "attention_requested_at",
                 "updated_at",
             ]
+        )
+        create_system_message(
+            chat_session,
+            content=f"Human attention requested: {escalation_reason}",
+            event_type="session.attention_requested",
+            metadata={"reason": escalation_reason},
         )
 
     return {

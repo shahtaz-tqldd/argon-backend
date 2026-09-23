@@ -428,6 +428,7 @@ class GoogleLoginSerializer(serializers.Serializer):
     def save(self, **kwargs):
         email = self.validated_data["email"]
         firebase_uid = self.validated_data["firebase_uid"]
+        created_account = False
         is_new_or_unclaimed_account = False
 
         try:
@@ -445,6 +446,7 @@ class GoogleLoginSerializer(serializers.Serializer):
                     )
 
                 if user is None:
+                    created_account = True
                     is_new_or_unclaimed_account = True
                     user = User.objects.create_user(
                         email=email,
@@ -475,7 +477,6 @@ class GoogleLoginSerializer(serializers.Serializer):
                         )
 
                     user.email = email
-                    user.name = self.validated_data.get("name") or user.name
                     user.provider = AccountProvider.GOOGLE
                     user.firebase_uid = firebase_uid
                     user.firebase_id_token = self.validated_data["firebase_id_token"]
@@ -486,18 +487,20 @@ class GoogleLoginSerializer(serializers.Serializer):
                         user.is_email_verified or self.validated_data["email_verified"]
                     )
                 phone_number = self.validated_data.get("phone_number")
+                profile_update_fields = []
                 if phone_number is not None:
                     profile.phone = phone_number or None
+                    profile_update_fields.append("phone")
 
                 photo_url = self.validated_data.get("photo_url")
-                if photo_url and not profile.avatar_url:
+                if created_account and photo_url:
                     profile.avatar_url = photo_url
+                    profile_update_fields.append("avatar_url")
 
                 user.last_login = timezone.now()
                 user.save(
                     update_fields=[
                         "email",
-                        "name",
                         "provider",
                         "firebase_uid",
                         "firebase_id_token",
@@ -507,7 +510,8 @@ class GoogleLoginSerializer(serializers.Serializer):
                         "updated_at",
                     ]
                 )
-                profile.save(update_fields=["phone", "avatar_url"])
+                if profile_update_fields:
+                    profile.save(update_fields=profile_update_fields)
                 if is_new_or_unclaimed_account:
                     provision_direct_signup(user)
         except IntegrityError as exc:

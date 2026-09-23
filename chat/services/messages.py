@@ -30,6 +30,24 @@ def serialize_message_event(message):
     }
 
 
+def create_system_message(chat_session, *, content, event_type, metadata=None):
+    """Append an auditable lifecycle event to a conversation's timeline."""
+    event_metadata = {
+        "event_type": event_type,
+        "visibility": "internal",
+        **(metadata or {}),
+    }
+    message = ChatMessage(
+        chat_session=chat_session,
+        sender_type=ChatMessageSenderType.SYSTEM,
+        content=content,
+        metadata=event_metadata,
+    )
+    message.full_clean()
+    message.save()
+    return message
+
+
 def send_agent_message(chat_session, agent, *, content, metadata=None):
     with transaction.atomic():
         chat_session = ChatSession.objects.select_for_update().get(

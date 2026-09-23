@@ -222,6 +222,38 @@ class WidgetPreservationTests(SimpleTestCase):
             async_to_sync(consumer.chat_session_event)({"event": {"type": event_type}})
         consumer.send_json.assert_not_awaited()
 
+    def test_widget_hides_internal_system_messages(self):
+        consumer = VisitorChatSessionConsumer()
+        consumer.send_json = AsyncMock()
+        event = {
+            "event": {
+                "type": "message.created",
+                "data": {
+                    "sender_type": "system",
+                    "content": "Conversation transferred from A to B.",
+                    "metadata": {"visibility": "internal"},
+                },
+            }
+        }
+
+        async_to_sync(consumer.chat_session_event)(event)
+
+        consumer.send_json.assert_not_awaited()
+
+    def test_widget_keeps_resolved_conversation_open(self):
+        consumer = VisitorChatSessionConsumer()
+        consumer.send_json = AsyncMock()
+        event = {
+            "event": {
+                "type": "session.resolved",
+                "data": {"ai_enabled": True, "status": "open"},
+            }
+        }
+
+        async_to_sync(consumer.chat_session_event)(event)
+
+        consumer.send_json.assert_awaited_once_with(event["event"])
+
     @patch("base.socket.consumers.widget.decode_conversation_token")
     @patch("base.socket.consumers.widget.require_allowed_widget_origin")
     @patch("base.socket.consumers.widget.get_public_chatbot")

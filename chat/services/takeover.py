@@ -8,6 +8,7 @@ from chat.models import (
     ChatSessionTransfer,
 )
 from chat.services.events import publish_session_event
+from chat.services.messages import create_system_message
 from chat.utils.choices import (
     ChatSessionStatus,
     ChatSessionTakeoverReleaseReason,
@@ -189,6 +190,18 @@ def take_over_session(
                 "updated_at",
             ]
         )
+        create_system_message(
+            chat_session,
+            content=f"{agent.user} took over the conversation.",
+            event_type="session.taken_over",
+            metadata={
+                "takeover_id": str(takeover.id),
+                "agent_id": str(agent.id),
+                "agent_name": str(agent.user),
+                "is_forced": takeover.is_forced,
+                "takeover_reason": takeover.takeover_reason,
+            },
+        )
         transaction.on_commit(
             lambda: publish_session_event(
                 chat_session.id,
@@ -318,6 +331,22 @@ def accept_transfer(transfer, agent):
             chat_session.ai_enabled = False
             chat_session.save(
                 update_fields=["assigned_to", "ai_enabled", "updated_at"]
+            )
+            create_system_message(
+                chat_session,
+                content=(
+                    f"Conversation transferred from {transfer.from_agent.user} "
+                    f"to {agent.user}."
+                ),
+                event_type="session.transferred",
+                metadata={
+                    "transfer_id": str(transfer.id),
+                    "takeover_id": str(takeover.id),
+                    "from_agent_id": str(transfer.from_agent_id),
+                    "from_agent_name": str(transfer.from_agent.user),
+                    "to_agent_id": str(agent.id),
+                    "to_agent_name": str(agent.user),
+                },
             )
             _notify_transfer_agent(
                 transfer,
@@ -451,6 +480,17 @@ def release_session(chat_session, agent):
         chat_session.assigned_to = None
         chat_session.ai_enabled = chat_session.chatbot.ai_enabled
         chat_session.save(update_fields=["assigned_to", "ai_enabled", "updated_at"])
+        create_system_message(
+            chat_session,
+            content=f"Conversation returned to AI by {agent.user}.",
+            event_type="session.released",
+            metadata={
+                "takeover_id": str(active.id),
+                "agent_id": str(agent.id),
+                "agent_name": str(agent.user),
+                "agent_role": agent.role,
+            },
+        )
         transaction.on_commit(
             lambda: publish_session_event(
                 chat_session.id,
@@ -458,6 +498,74 @@ def release_session(chat_session, agent):
                 "session.released",
                 {
                     "takeover_id": str(active.id),
+                    **_session_management_state(chat_session),
+                },
+            )
+        )
+    return active
+
+
+def force_return_to_ai(chat_session, agent, *, note):
+    note = note.strip()
+    if not note:
+        raise ValidationError("A note is required for a forced return to AI.")
+
+    with transaction.atomic():
+        chat_session = _locked_session(chat_session)
+        _validate_agent(chat_session, agent)
+        if chat_session.status != ChatSessionStatus.OPEN:
+            raise ValidationError("Only an open session can be returned to AI.")
+
+        active = _active_takeover(chat_session)
+        if active is None:
+            raise ValidationError("Session does not have an active takeover.")
+
+        previous_agent = active.agent
+        now = timezone.now()
+        active.released_at = now
+        active.release_reason = ChatSessionTakeoverReleaseReason.FORCED_RELEASE
+        active.resolution_note = note
+        active.full_clean()
+        active.save(
+            update_fields=[
+                "released_at",
+                "release_reason",
+                "resolution_note",
+                "updated_at",
+            ]
+        )
+        _cancel_pending_transfers(chat_session, now)
+        chat_session.assigned_to = None
+        chat_session.ai_enabled = chat_session.chatbot.ai_enabled
+        chat_session.save(update_fields=["assigned_to", "ai_enabled", "updated_at"])
+        create_system_message(
+            chat_session,
+            content=(
+                f"Conversation forcefully returned to AI by {agent.user}. "
+                f"Reason: {note}"
+            ),
+            event_type="session.released",
+            metadata={
+                "takeover_id": str(active.id),
+                "agent_id": str(agent.id),
+                "agent_name": str(agent.user),
+                "agent_role": agent.role,
+                "previous_agent_id": str(previous_agent.id),
+                "previous_agent_name": str(previous_agent.user),
+                "is_forced": True,
+                "note": note,
+            },
+        )
+        transaction.on_commit(
+            lambda: publish_session_event(
+                chat_session.id,
+                chat_session.chatbot_id,
+                "session.released",
+                {
+                    "takeover_id": str(active.id),
+                    "agent_id": str(agent.id),
+                    "is_forced": True,
+                    "note": note,
                     **_session_management_state(chat_session),
                 },
             )
@@ -489,18 +597,23 @@ def resolve_session(chat_session, agent, resolution_type, note=""):
             ]
         )
         _cancel_pending_transfers(chat_session, now)
-        chat_session.status = resolution_type
+        is_resolved = (
+            resolution_type == ChatSessionTakeoverReleaseReason.RESOLVED
+        )
+        # Resolving records the outcome and releases the human owner without
+        # terminating the conversation. Closing remains the terminal action.
+        chat_session.status = (
+            ChatSessionStatus.OPEN if is_resolved else ChatSessionStatus.CLOSED
+        )
         chat_session.assigned_to = None
-        chat_session.ai_enabled = False
+        chat_session.ai_enabled = (
+            chat_session.chatbot.ai_enabled if is_resolved else False
+        )
         chat_session.requires_attention = False
         chat_session.attention_reason = ""
         chat_session.attention_requested_at = None
-        chat_session.resolved_at = (
-            now if resolution_type == ChatSessionStatus.RESOLVED else None
-        )
-        chat_session.closed_at = (
-            now if resolution_type == ChatSessionStatus.CLOSED else None
-        )
+        chat_session.resolved_at = None
+        chat_session.closed_at = None if is_resolved else now
         chat_session.save(
             update_fields=[
                 "status",
@@ -513,6 +626,25 @@ def resolve_session(chat_session, agent, resolution_type, note=""):
                 "closed_at",
                 "updated_at",
             ]
+        )
+        resolution_label = (
+            "resolved"
+            if resolution_type == ChatSessionTakeoverReleaseReason.RESOLVED
+            else "closed"
+        )
+        create_system_message(
+            chat_session,
+            content=f"Conversation {resolution_label} by {agent.user}.",
+            event_type=f"session.{resolution_type}",
+            metadata={
+                "takeover_id": str(active.id),
+                "agent_id": str(agent.id),
+                "agent_name": str(agent.user),
+                "agent_role": agent.role,
+                "resolution_type": resolution_type,
+                "note": note,
+                "resolution_note": note,
+            },
         )
         transaction.on_commit(
             lambda: publish_session_event(

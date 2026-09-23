@@ -16,6 +16,7 @@ message_patterns = [
 takeover_patterns = [
     path("take-over/", views.TakeOverSessionView.as_view(), name="session-take-over"),
     path("release/", views.ReleaseSessionView.as_view(), name="session-release"),
+    path("force-return-to-ai/",views.ForceReturnToAIView.as_view(),name="session-force-return-to-ai"),
     path("resolve/", views.ResolveSessionView.as_view(), name="session-resolve"),
 ]
 

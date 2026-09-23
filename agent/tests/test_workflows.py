@@ -134,6 +134,12 @@ class ClientTests(IsolatedAsyncioTestCase):
         self.assertEqual(len(model.requests), 4)
         for request in model.requests:
             self.assertIn(self.bot.never_answer, request.config.system_instruction)
+            self.assertEqual(
+                request.config.system_instruction.count(
+                    "You are Assistant, the customer-facing AI assistant for Business."
+                ),
+                1,
+            )
         session = await self.service.get_session(app_name=self.client.app_name,
                                                  user_id="bot-1:visitor", session_id="session-1")
         self.assertIsNotNone(session)
@@ -151,7 +157,8 @@ class ClientTests(IsolatedAsyncioTestCase):
                          ["knowledge_agent", "appointment_agent"])
         self.assertTrue(all(agent.mode == "single_turn" for agent in root.sub_agents))
         self.assertEqual([tool.name for tool in root.tools],
-                         ["knowledge_agent", "appointment_agent"])
+                         ["record_lead_score", "request_human_escalation",
+                          "knowledge_agent", "appointment_agent"])
         self.assertEqual([tool.name for tool in root.sub_agents[0].tools],
                          ["search_knowledge", "record_lead_score", "request_human_escalation"])
         self.assertEqual([tool.name for tool in root.sub_agents[1].tools],
@@ -165,7 +172,8 @@ class ClientTests(IsolatedAsyncioTestCase):
         self.assertEqual([a.name for a in knowledge_off.chat_agent.sub_agents],
                          ["appointment_agent"])
         self.assertEqual([t.name for t in knowledge_off.chat_agent.tools],
-                         ["appointment_agent"])
+                         ["record_lead_score", "request_human_escalation",
+                          "appointment_agent"])
 
         self.bot.appointment_booking_enabled = False
         bare = AgentClient(self.bot, self.conversation,
@@ -181,6 +189,23 @@ class ClientTests(IsolatedAsyncioTestCase):
         knowledge = client.chat_agent.sub_agents[0]
         self.assertEqual([t.name for t in knowledge.tools],
                          ["search_knowledge", "record_lead_score"])
+        instruction = client.app.plugins[0].global_instruction(None)
+        self.assertNotIn("request_human_escalation", instruction)
+        self.assertNotIn("Escalation triggers:", instruction)
+
+    def test_global_identity_and_greeting_are_business_facing(self):
+        instruction = self.client.app.plugins[0].global_instruction(None)
+
+        self.assertIn(
+            'For a greeting-only message, reply: "Hey, I am Assistant. '
+            'I am here to help with Business. How may I help you?"',
+            instruction,
+        )
+        self.assertIn("Never identify yourself as Gemini", instruction)
+        self.assertIn(
+            "If asked who or what you are, state only the business-facing identity",
+            instruction,
+        )
 
     def test_lead_score_tool_and_instruction_hidden_when_feature_disabled(self):
         self.bot.capacity.active_features = []
@@ -332,7 +357,8 @@ class ClientTests(IsolatedAsyncioTestCase):
         await self.client.chat("Is my booking confirmed?")
         self.assertIn("Backend-verified booking event for this turn: null", model.requests[4].config.system_instruction)
         names = [tool.name for tool in self.client.chat_agent.tools]
-        self.assertEqual(names, ["knowledge_agent", "appointment_agent"])
+        self.assertEqual(names, ["record_lead_score", "request_human_escalation",
+                                 "knowledge_agent", "appointment_agent"])
 
     async def test_specialist_records_lead_score_during_conversation(self):
         self.script(

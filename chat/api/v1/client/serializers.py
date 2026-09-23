@@ -290,6 +290,17 @@ class TakeOverSessionSerializer(serializers.Serializer):
         return attrs
 
 
+class ForceReturnToAISerializer(serializers.Serializer):
+    note = serializers.CharField(max_length=5000, trim_whitespace=True)
+
+    def validate_note(self, value):
+        if not value:
+            raise serializers.ValidationError(
+                "A note is required for a forced return to AI."
+            )
+        return value
+
+
 class AgentMessageCreateSerializer(serializers.Serializer):
     content = serializers.CharField(trim_whitespace=False, max_length=10000)
     metadata = serializers.JSONField(required=False, default=dict)

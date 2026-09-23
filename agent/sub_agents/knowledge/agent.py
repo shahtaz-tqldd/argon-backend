@@ -1,11 +1,10 @@
 from google.adk.agents import LlmAgent
 
-from agent.helpers.instructions import business_instruction
+from agent.helpers.global_tools import create_global_tools
 from agent.helpers.load_instruction import load_sub_agent_instruction
 from agent.helpers.model import chat_model, generation_config
 from agent.sub_agents.knowledge.tools import create_knowledge_tools
-from agent.helpers.global_tools import create_global_tools
-from agent.utils.schema import KnowledgeBaseAgentOutputSchema
+from agent.utils.schema import SpecialistResponseSchema
 
 
 def build(chatbot, session) -> LlmAgent | None:
@@ -13,8 +12,9 @@ def build(chatbot, session) -> LlmAgent | None:
     if not getattr(chatbot, "knowledge_base_enabled", False):
         return None
 
-    async def instruction(context):
-        return business_instruction(chatbot) + load_sub_agent_instruction("knowledge")
+    def instruction(_context):
+        # GlobalInstructionPlugin supplies identity and shared business policy.
+        return load_sub_agent_instruction("knowledge")
 
     return LlmAgent(
         name="knowledge_agent",
@@ -30,6 +30,6 @@ def build(chatbot, session) -> LlmAgent | None:
             *create_knowledge_tools(chatbot),
             *create_global_tools(chatbot, session),
         ],
-        output_schema=KnowledgeBaseAgentOutputSchema,
+        output_schema=SpecialistResponseSchema,
         generate_content_config=generation_config(),
     )

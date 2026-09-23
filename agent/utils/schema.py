@@ -12,9 +12,15 @@ class TokenUsageSchema(BaseModel):
     total_tokens: int = 0
 
 
-class KnowledgeBaseAgentOutputSchema(BaseModel):
+class SpecialistResponseSchema(BaseModel):
+    """Structured handoff from any specialist to the coordinator."""
+
     content: str = Field(min_length=1)
     source_ids: list[str] = Field(default_factory=list)
+
+
+class KnowledgeBaseAgentOutputSchema(SpecialistResponseSchema):
+    """Backward-compatible name for older imports."""
 
 
 class AppointmentSlotSchema(BaseModel):
@@ -48,7 +54,7 @@ class EscalationSchema(BaseModel):
     escalation_reason: str = Field(min_length=1, max_length=500)
 
 
-class AgentResultSchema(KnowledgeBaseAgentOutputSchema):
+class AgentResultSchema(SpecialistResponseSchema):
     appointment: AppointmentSchema | None = None
     lead_score: LeadScoreSchema | None = None
     escalation: EscalationSchema | None = None
@@ -57,4 +63,4 @@ class AgentResultSchema(KnowledgeBaseAgentOutputSchema):
 class AgentResponseSchema(BaseModel):
     result: AgentResultSchema
     token: TokenUsageSchema = Field(default_factory=TokenUsageSchema)
-    cost: float = 0.0  # Estimated USD from configured model rates.
+    cost: float = Field(default=0.0, ge=0)  # Estimated USD.

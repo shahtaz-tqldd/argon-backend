@@ -210,7 +210,7 @@ The widget receives only visitor-safe state:
 | `session.transferred` | `{"ai_enabled":false}` | Human ownership changed; identities stay hidden |
 | `session.released` | `{"ai_enabled":true}` | AI may respond again |
 | `session.reopened` | `{"ai_enabled":true}` | The conversation is open again |
-| `session.resolved` | `{"ai_enabled":false,"status":"resolved"}` | Disable composer and offer a new-conversation flow |
+| `session.resolved` | `{"ai_enabled":true,"status":"open"}` | The human owner resolved the issue and returned the open conversation to AI |
 | `session.closed` | `{"ai_enabled":false,"status":"closed"}` | Disable composer and offer a new-conversation flow |
 
 Internal `session.transfer_requested`, `session.transfer_declined`, and
