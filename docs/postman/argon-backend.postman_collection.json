@@ -1074,7 +1074,7 @@
           "name": "Chatbot Base Info",
           "request": {
             "method": "GET",
-            "description": "Overview for the chatbot dashboard: features, capacity/limits, and current subscription.\n\n**Query**: `chatbot` (slug, required).\n\n**200** → `data`: `{workspace {name, slug}, chatbot_name, slug, language, timezone, features {knowledge_base_enabled, human_handoff_enabled, appointment_booking_enabled, lead_captures_enabled}, capacity {ai_message_limit, current_ai_message_count, file_size_limit_bytes, current_file_size_bytes, knowledge_chunk_limit, current_knowledge_chunk_count, active_features}, current_subscription_plan {...}|null, ai_enabled, logo, status, allowed_urls [{id, url, is_active}]}`.",
+            "description": "Overview for the chatbot dashboard: features, capacity/limits, and current subscription.\n\n**Query**: `chatbot` (slug, required).\n\n**200** → `data`: `{workspace {name, slug}, chatbot_name, slug, language, timezone, features {knowledge_base_enabled, human_handoff_enabled, appointment_booking_enabled, lead_captures_enabled}, capacity {ai_message_limit, current_ai_message_count, test_ai_message_limit, current_test_ai_message_count, file_size_limit_bytes, current_file_size_bytes, knowledge_chunk_limit, current_knowledge_chunk_count, active_features}, current_subscription_plan {...}|null, ai_enabled, logo, status, allowed_urls [{id, url, is_active}]}`.",
             "url": {
               "raw": "{{base_url}}/api/v1/chatbots/base/?chatbot={{chatbot_slug}}",
               "host": [
@@ -1714,7 +1714,7 @@
               "name": "List Sessions",
               "request": {
                 "method": "GET",
-                "description": "Paginated chat sessions.\n\n**Query**: `chatbot_slug` (required), `status` (`open|resolved|closed`), `assignment` (`all|mine|assigned|unassigned`, default `all`), `requires_attention` (bool), `is_recently_active` (bool — active in last 10 min), `page`, `page_size`.\n\n**200** → `data`: `{id, channel (web_widget|messenger|instagram|whatsapp|api), user_data {name, detected_country}, unread_message_count, last_message {sender, content}|null, ai_enabled, is_recently_active, status, assigned_to {name}|null, transfer_requested_to {name}|null, requires_attention, attention_reason, last_activity_at}`.",
+                "description": "Paginated chat sessions.\n\n**Query**: `chatbot_slug` (required), `search` (matches message content or visitor name/email), `assigned_to` (chatbot-member email; matches current ownership or a live pending transfer request), `status` (`open|resolved|closed`), `assignment` (`all|mine|assigned|unassigned`, default `all`), `my_session` (bool), `requires_attention` (bool), `is_recently_active` (bool — active in last 10 min), `page`, `page_size`.\n\n**200** → `data`: `{id, channel (web_widget|messenger|instagram|whatsapp|api), user_data {name, detected_country}, unread_message_count, last_message {sender, content}|null, ai_enabled, is_recently_active, status, assigned_to {name}|null, transfer_requested_to {name}|null, requires_attention, attention_reason, last_activity_at}`.",
                 "url": {
                   "raw": "{{base_url}}/api/v1/chat/sessions/list/?chatbot_slug={{chatbot_slug}}&status=open&assignment=all&page=1&page_size=20",
                   "host": [
@@ -1743,6 +1743,18 @@
                       "key": "assignment",
                       "value": "all",
                       "description": "Optional: all|mine|assigned|unassigned"
+                    },
+                    {
+                      "key": "search",
+                      "value": "",
+                      "description": "Optional: message content or visitor name/email",
+                      "disabled": true
+                    },
+                    {
+                      "key": "assigned_to",
+                      "value": "agent@example.com",
+                      "description": "Optional: current assignee or pending transfer recipient email",
+                      "disabled": true
                     },
                     {
                       "key": "page",
@@ -2385,7 +2397,7 @@
     },
     {
       "name": "Knowledge",
-      "description": "Knowledge source ingestion and asynchronous training. Base path: `/api/v1/knowledge/`. Uses the **`chatbot`** query param (slug). Upload/update require the `setup_configuration` permission; delete requires chatbot/workspace admin. Training runs asynchronously — poll `training-logs/` or the `status` field (`pending|processing|ready|failed`).",
+      "description": "Knowledge source ingestion, retrieval, and asynchronous training. Base path: `/api/v1/knowledge/`. Most endpoints use the **`chatbot`** query param (slug); search accepts `chatbotSlug` in its JSON body. Upload/update/search require the `setup_configuration` permission; delete requires chatbot/workspace admin. Training runs asynchronously — poll `training-logs/` or the `status` field (`pending|processing|ready|failed`).",
       "item": [
         {
           "name": "Upload Knowledge",
@@ -2510,6 +2522,36 @@
                   "value": "20"
                 }
               ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Search Knowledge",
+          "request": {
+            "method": "POST",
+            "description": "Return up to 10 ranked retrieval chunks from enabled knowledge sources belonging to the requested chatbot. This endpoint performs hybrid vector/full-text retrieval only and does not call an LLM.\n\n**JSON body**: `chatbotSlug` (required), `query` (required, non-blank, max 2,000 characters).",
+            "url": {
+              "raw": "{{base_url}}/api/v1/knowledge/search/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "knowledge",
+                "search",
+                ""
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chatbotSlug\": \"{{chatbot_slug}}\",\n  \"query\": \"What is the refund policy?\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             }
           },
           "response": []
@@ -2820,6 +2862,38 @@
                     {
                       "key": "page_size",
                       "value": "20"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Export Leads",
+              "request": {
+                "method": "GET",
+                "description": "Download up to 1,000 newest leads as CSV or Excel. Collected fields are flattened into columns. Without dates, all available leads are considered.\n\n**Query**: `chatbot_slug` and `file_format` (`csv`, `xlsx`, or `excel`) are required. `start_date` and `end_date` are optional inclusive dates in `YYYY-MM-DD` format.",
+                "url": {
+                  "raw": "{{base_url}}/api/v1/lead-captures/leads/export/?chatbot_slug={{chatbot_slug}}&file_format=csv",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "lead-captures",
+                    "leads",
+                    "export",
+                    ""
+                  ],
+                  "query": [
+                    {
+                      "key": "chatbot_slug",
+                      "value": "{{chatbot_slug}}"
+                    },
+                    {
+                      "key": "file_format",
+                      "value": "csv"
                     }
                   ]
                 }

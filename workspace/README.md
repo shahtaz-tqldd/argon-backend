@@ -21,8 +21,12 @@ Workspace admins can call `add_workspace_user` to add or reactivate members.
 
 Client API routes:
 
-- `POST /api/v1/workspaces/create/` creates a workspace and its owner membership.
-- `GET /api/v1/workspaces/list/` lists every active workspace membership for the authenticated user.
+- `POST /api/v1/workspaces/create/` creates the user's single owned workspace and
+  its owner membership. Users may belong to any number of shared workspaces but
+  can own only one workspace.
+- `GET /api/v1/workspaces/list/` returns a paginated list of every active
+  workspace the authenticated user owns or belongs to, with their owned
+  workspace first. Users with only chatbot access receive an empty list.
 - `GET /api/v1/workspaces/?workspace=<slug>` gets a selected accessible workspace
   (the query parameter is optional for backward compatibility).
 - `PUT/PATCH /api/v1/workspaces/update/?workspace=<slug>` owner-updates a workspace.
@@ -34,10 +38,11 @@ Client API routes:
 - `DELETE /api/v1/workspaces/team/remove-member/?workspace=<slug>&member_email=<email>` removes a member.
 - `POST /api/v1/workspaces/team/accept-invite/` accepts an emailed token for the authenticated user.
 
-Chatbot access remains membership-specific. `GET /api/v1/chatbots/list/` returns
-only chatbots assigned to the user (plus all chatbots for workspace admins), and
-each item includes its workspace. Pass `workspace=<slug>` to restrict the list to
-one accessible workspace.
+`GET /api/v1/chatbots/list/` returns only chatbots created by the authenticated
+user by default. Pass `shared_with_me=true` to return chatbots shared through an
+active workspace membership or direct chatbot assignment instead. Each item
+includes its workspace, and `workspace=<slug>` restricts either list mode to one
+workspace.
 
 
 ---

@@ -468,6 +468,125 @@ class ChatSessionClientAPITests(APITestCase):
             {str(owned_session.id), str(transfer_requested_session.id)},
         )
 
+    def test_session_list_searches_messages_and_visitor_name_or_email(self):
+        message_session = ChatSession.objects.create(chatbot=self.chatbot)
+        ChatMessage.objects.create(
+            chat_session=message_session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="Please find the search-marker in this conversation.",
+        )
+        ChatMessage.objects.create(
+            chat_session=message_session,
+            sender_type=ChatMessageSenderType.AI,
+            content="The same search-marker appears twice.",
+        )
+        lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={
+                "name": "Search-marker Customer",
+                "email": "customer@example.com",
+            },
+        )
+        lead_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            lead=lead,
+        )
+        metadata_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            user_metadata={
+                "name": "Another Customer",
+                "email": "search-marker@example.com",
+            },
+        )
+        ChatSession.objects.create(
+            chatbot=self.chatbot,
+            user_metadata={"name": "Unrelated Customer"},
+        )
+
+        response = self.client.get(
+            reverse("chat-session-list"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "search": "SEARCH-MARKER",
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 3)
+        self.assertEqual(
+            {item["id"] for item in response.data["data"]},
+            {
+                str(message_session.id),
+                str(lead_session.id),
+                str(metadata_session.id),
+            },
+        )
+
+    def test_session_list_filters_current_and_requested_assignment_by_email(self):
+        admin_user = User.objects.create_user(
+            email="FILTER-ADMIN@example.com",
+            password="StrongPass123!",
+        )
+        admin = ChatbotUser.objects.create(
+            chatbot=self.chatbot,
+            user=admin_user,
+            role=ChatbotRoleTypes.ADMIN,
+        )
+        assigned_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            assigned_to=admin,
+        )
+        requested_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            assigned_to=self.agent,
+        )
+        ChatSessionTransfer.objects.create(
+            chat_session=requested_session,
+            from_agent=self.agent,
+            to_agent=admin,
+        )
+        expired_request_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            assigned_to=self.agent,
+        )
+        ChatSessionTransfer.objects.create(
+            chat_session=expired_request_session,
+            from_agent=self.agent,
+            to_agent=admin,
+            expires_at=timezone.now() - timedelta(minutes=1),
+        )
+        ChatSession.objects.create(
+            chatbot=self.chatbot,
+            assigned_to=self.agent,
+        )
+
+        response = self.client.get(
+            reverse("chat-session-list"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "assigned_to": "filter-admin@EXAMPLE.com",
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 2)
+        self.assertEqual(
+            {item["id"] for item in response.data["data"]},
+            {str(assigned_session.id), str(requested_session.id)},
+        )
+
+    def test_session_list_rejects_invalid_assigned_to_email(self):
+        response = self.client.get(
+            reverse("chat-session-list"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "assigned_to": "not-an-email",
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("assigned_to", response.data["errors"])
+
     def test_session_list_does_not_filter_my_sessions_when_false(self):
         own_session = ChatSession.objects.create(
             chatbot=self.chatbot,

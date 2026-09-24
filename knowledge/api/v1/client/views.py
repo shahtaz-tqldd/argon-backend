@@ -3,6 +3,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
 
+from app.utils.logger import logger
 from app.utils.pagination import CustomPagination
 from app.utils.permission import IsChatbotUser
 from app.utils.response import APIResponse
@@ -16,6 +17,8 @@ from knowledge.api.v1.client.serializers import (
     KnowledgeBaseSerializer,
     KnowledgeChatbotQuerySerializer,
     KnowledgeMetadataUpdateSerializer,
+    KnowledgeSearchResultSerializer,
+    KnowledgeSearchSerializer,
     KnowledgeTrainingLogSerializer,
     KnowledgeUpdateQuerySerializer,
     KnowledgeUploadQuerySerializer,
@@ -35,6 +38,7 @@ from knowledge.utils.choices import (
     KnowledgeTrainingStageTypes,
     StatusTypes,
 )
+from vector_store.services.vectorize import KnowledgeVectorService
 
 
 ACTIVE_TRAINING_STAGES = {
@@ -137,7 +141,7 @@ class KnowledgeObjectMixin:
         return self._knowledge_base
 
 
-class KnowledgeUploadView(KnowledgeChatbotMixin, GenericAPIView):
+class KnowledgeUploadAPIView(KnowledgeChatbotMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     required_chatbot_permission = ChatbotPermissionTypes.SETUP_CONFIGURATION
     chatbot_query_serializer_class = KnowledgeUploadQuerySerializer
@@ -175,7 +179,7 @@ class KnowledgeUploadView(KnowledgeChatbotMixin, GenericAPIView):
         )
 
 
-class KnowledgeListView(
+class KnowledgeListAPIView(
     KnowledgeChatbotMixin,
     PaginatedKnowledgeMixin,
     GenericAPIView,
@@ -210,7 +214,49 @@ class KnowledgeListView(
         )
 
 
-class KnowledgeUsageView(KnowledgeChatbotMixin, GenericAPIView):
+class KnowledgeSearchAPIView(GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.SETUP_CONFIGURATION
+    serializer_class = KnowledgeSearchSerializer
+    result_serializer_class = KnowledgeSearchResultSerializer
+    search_limit = 10
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        chatbot = get_object_or_404(
+            Chatbot.objects.select_related("workspace"),
+            slug=serializer.validated_data["chatbotSlug"],
+            is_deleted=False,
+            workspace__is_active=True,
+        )
+        self.check_object_permissions(request, chatbot)
+
+        query = serializer.validated_data["query"]
+        try:
+            chunks = KnowledgeVectorService().search(
+                query,
+                chatbot_id=chatbot.id,
+                limit=self.search_limit,
+            )
+        except Exception:
+            logger.exception(
+                "Knowledge search failed for chatbot %s",
+                chatbot.id,
+            )
+            return APIResponse.error(
+                message="Knowledge search is temporarily unavailable.",
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        return APIResponse.success(
+            data=self.result_serializer_class(chunks, many=True).data,
+            meta={"count": len(chunks), "limit": self.search_limit},
+            message="Knowledge search completed successfully.",
+        )
+
+
+class KnowledgeUsageAPIView(KnowledgeChatbotMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     serializer_class = KnowledgeUsageSerializer
 
@@ -228,7 +274,7 @@ class KnowledgeUsageView(KnowledgeChatbotMixin, GenericAPIView):
         )
 
 
-class KnowledgeDetailView(KnowledgeObjectMixin, GenericAPIView):
+class KnowledgeDetailAPIView(KnowledgeObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     serializer_class = KnowledgeBaseSerializer
 
@@ -239,7 +285,7 @@ class KnowledgeDetailView(KnowledgeObjectMixin, GenericAPIView):
         )
 
 
-class KnowledgeUpdateView(KnowledgeObjectMixin, GenericAPIView):
+class KnowledgeUpdateAPIView(KnowledgeObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     required_chatbot_permission = ChatbotPermissionTypes.SETUP_CONFIGURATION
     knowledge_query_serializer_class = KnowledgeUpdateQuerySerializer
@@ -351,7 +397,7 @@ class KnowledgeUpdateView(KnowledgeObjectMixin, GenericAPIView):
         return self._update(request)
 
 
-class KnowledgeTrainingListView(
+class KnowledgeTrainingListAPIView(
     KnowledgeChatbotMixin,
     PaginatedKnowledgeMixin,
     GenericAPIView,
@@ -369,7 +415,7 @@ class KnowledgeTrainingListView(
         )
 
 
-class KnowledgeDeleteView(KnowledgeObjectMixin, GenericAPIView):
+class KnowledgeDeleteAPIView(KnowledgeObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     serializer_class = KnowledgeBaseSerializer
     chatbot_admin_only = True

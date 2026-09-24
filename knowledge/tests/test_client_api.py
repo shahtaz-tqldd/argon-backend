@@ -1,6 +1,7 @@
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
+from uuid import uuid4
 
 from django.contrib.auth import get_user_model
 from django.urls import reverse
@@ -27,6 +28,7 @@ from subscription.choices import (
 )
 from subscription.models import ChatbotSubscription, PlanPrice, SubscriptionPlan
 from vector_store.models import VectorDocument
+from vector_store.services.vectorize import VectorSearchResult
 from workspace.services import ensure_personal_workspace
 
 
@@ -141,6 +143,107 @@ class KnowledgeClientAPITests(APITestCase):
                 "created_at",
                 "updated_at",
             },
+        )
+
+    @patch("knowledge.api.v1.client.views.KnowledgeVectorService.search")
+    def test_search_returns_ranked_retrieval_chunks_without_an_llm(self, search):
+        source_id = uuid4()
+        chunk_id = uuid4()
+        search.return_value = [
+            VectorSearchResult(
+                id=str(chunk_id),
+                knowledge_base_id=str(source_id),
+                chatbot_id=str(self.chatbot.id),
+                chunk_index=2,
+                token_count=24,
+                content="The refund period is thirty days.",
+                metadata={"title": "Refund policy"},
+                distance=0.12,
+                text_rank=0.8,
+                rrf_score=0.03,
+            )
+        ]
+
+        response = self.client.post(
+            reverse("knowledge-search"),
+            {
+                "chatbotSlug": self.chatbot.slug,
+                "query": "What is the refund period?",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        search.assert_called_once_with(
+            "What is the refund period?",
+            chatbot_id=self.chatbot.id,
+            limit=10,
+        )
+        self.assertEqual(response.data["meta"], {"count": 1, "limit": 10})
+        self.assertEqual(
+            response.data["data"][0],
+            {
+                "id": str(chunk_id),
+                "knowledge_base_id": str(source_id),
+                "chatbot_id": str(self.chatbot.id),
+                "chunk_index": 2,
+                "token_count": 24,
+                "content": "The refund period is thirty days.",
+                "metadata": {"title": "Refund policy"},
+                "distance": 0.12,
+                "text_rank": 0.8,
+                "rrf_score": 0.03,
+            },
+        )
+
+    @patch("knowledge.api.v1.client.views.KnowledgeVectorService.search")
+    def test_search_validates_input_before_retrieval(self, search):
+        response = self.client.post(
+            reverse("knowledge-search"),
+            {"chatbotSlug": self.chatbot.slug, "query": "   "},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("query", response.data["errors"])
+        search.assert_not_called()
+
+    @patch("knowledge.api.v1.client.views.KnowledgeVectorService.search")
+    def test_search_requires_access_to_the_requested_chatbot(self, search):
+        outsider = User.objects.create_user(
+            email="knowledge-outsider@example.com",
+            password="StrongPass123!",
+        )
+        self.client.force_authenticate(outsider)
+
+        response = self.client.post(
+            reverse("knowledge-search"),
+            {
+                "chatbotSlug": self.chatbot.slug,
+                "query": "private policy",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        search.assert_not_called()
+
+    @patch("knowledge.api.v1.client.views.KnowledgeVectorService.search")
+    def test_search_returns_service_unavailable_when_retrieval_fails(self, search):
+        search.side_effect = RuntimeError("embedding service unavailable")
+
+        response = self.client.post(
+            reverse("knowledge-search"),
+            {
+                "chatbotSlug": self.chatbot.slug,
+                "query": "refund policy",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
     def test_usage_returns_chatbot_totals_and_subscription_snapshot_limits(self):

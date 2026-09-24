@@ -18,6 +18,7 @@ def book_visitor_appointment(chat_session, *, starts_at, collected_fields):
         .filter(
             pk=chat_session.pk,
             chatbot_id=chat_session.chatbot_id,
+            is_test=False,
             status=ChatSessionStatus.OPEN,
         )
         .first()

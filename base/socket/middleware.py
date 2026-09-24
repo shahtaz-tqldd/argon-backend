@@ -8,7 +8,7 @@ from rest_framework_simplejwt.exceptions import (
     TokenError
 )
 
-from app.utils.jwt import SafeJWTAuthentication
+from app.services.jwt import SafeJWTAuthentication
 
 
 class JWTAuthMiddleware:

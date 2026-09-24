@@ -30,6 +30,28 @@ class KnowledgeChatbotQuerySerializer(serializers.Serializer):
     chatbot = serializers.SlugField()
 
 
+class KnowledgeSearchSerializer(serializers.Serializer):
+    chatbotSlug = serializers.SlugField()
+    query = serializers.CharField(
+        max_length=2000,
+        allow_blank=False,
+        trim_whitespace=True,
+    )
+
+
+class KnowledgeSearchResultSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
+    knowledge_base_id = serializers.UUIDField(read_only=True)
+    chatbot_id = serializers.UUIDField(read_only=True)
+    chunk_index = serializers.IntegerField(read_only=True)
+    token_count = serializers.IntegerField(read_only=True)
+    content = serializers.CharField(read_only=True)
+    metadata = serializers.JSONField(read_only=True)
+    distance = serializers.FloatField(read_only=True, allow_null=True)
+    text_rank = serializers.FloatField(read_only=True, allow_null=True)
+    rrf_score = serializers.FloatField(read_only=True)
+
+
 class KnowledgeUsageSerializer(serializers.Serializer):
     total_chunks = serializers.IntegerField(read_only=True)
     chunk_limit = serializers.IntegerField(read_only=True)

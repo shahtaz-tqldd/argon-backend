@@ -9,6 +9,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
 
+from app.utils.logger import logger
 from app.utils.pagination import CustomPagination
 from app.utils.permission import IsChatbotUser
 from app.utils.response import APIResponse
@@ -24,6 +25,9 @@ from chat.api.v1.client.serializers import (
     ChatSessionObjectQuerySerializer,
     ChatSessionQuerySerializer,
     ChatSessionSerializer,
+    TestChatCapacitySerializer,
+    TestChatMessageCreateSerializer,
+    TestChatSessionSerializer,
     ChatSessionTakeoverSerializer,
     ChatSessionTransferListQuerySerializer,
     ChatSessionTransferObjectQuerySerializer,
@@ -52,6 +56,11 @@ from chat.services.takeover import (
     request_transfer,
     resolve_session,
     take_over_session,
+)
+from chat.services.test_sessions import (
+    TestChatMessageLimitExceeded,
+    create_test_session,
+    send_test_message,
 )
 from chat.utils.choices import (
     ChatMessageSenderType,
@@ -156,9 +165,32 @@ class ChatSessionObjectMixin(ChatSessionChatbotMixin):
                 ),
                 pk=self.get_query()["session_id"],
                 chatbot=self.get_chatbot(),
+                is_test=False,
             )
             self.check_object_permissions(self.request, self._chat_session)
         return self._chat_session
+
+
+class TestChatSessionObjectMixin(ChatSessionChatbotMixin):
+    query_serializer_class = ChatSessionObjectQuerySerializer
+    _test_chat_session = None
+
+    def get_test_chat_session(self):
+        if self._test_chat_session is None:
+            self._test_chat_session = get_object_or_404(
+                ChatSession.objects.select_related(
+                    "chatbot",
+                    "chatbot__workspace",
+                ),
+                pk=self.get_query()["session_id"],
+                chatbot=self.get_chatbot(),
+                is_test=True,
+            )
+            self.check_object_permissions(
+                self.request,
+                self._test_chat_session,
+            )
+        return self._test_chat_session
 
 
 class ChatSessionTransferObjectMixin(ChatSessionChatbotMixin):
@@ -175,6 +207,7 @@ class ChatSessionTransferObjectMixin(ChatSessionChatbotMixin):
                 ),
                 pk=self.get_query()["transfer_id"],
                 chat_session__chatbot=self.get_chatbot(),
+                chat_session__is_test=False,
             )
         return self._transfer
 
@@ -216,7 +249,10 @@ class ChatSessionListView(
             visitor_id=OuterRef("visitor_id"),
         )
         queryset = (
-            ChatSession.objects.filter(chatbot=self.get_chatbot())
+            ChatSession.objects.filter(
+                chatbot=self.get_chatbot(),
+                is_test=False,
+            )
             .select_related(
                 "chatbot",
                 "lead",
@@ -256,6 +292,27 @@ class ChatSessionListView(
             queryset = queryset.filter(assigned_to__isnull=False)
         elif assignment == "unassigned":
             queryset = queryset.filter(assigned_to__isnull=True)
+        assigned_to = query.get("assigned_to")
+        if assigned_to:
+            queryset = queryset.filter(
+                Q(
+                    assigned_to__user__email__iexact=assigned_to,
+                    assigned_to__is_active=True,
+                    assigned_to__user__is_active=True,
+                )
+                | (
+                    Q(
+                        transfers__to_agent__user__email__iexact=assigned_to,
+                        transfers__to_agent__is_active=True,
+                        transfers__to_agent__user__is_active=True,
+                        transfers__status=ChatSessionTransferStatus.PENDING,
+                    )
+                    & (
+                        Q(transfers__expires_at__isnull=True)
+                        | Q(transfers__expires_at__gte=timezone.now())
+                    )
+                )
+            ).distinct()
         if query.get("my_session"):
             chatbot_user = self.get_chatbot_user()
             queryset = queryset.filter(
@@ -270,6 +327,15 @@ class ChatSessionListView(
                         | Q(transfers__expires_at__gte=timezone.now())
                     )
                 )
+            ).distinct()
+        search = query.get("search")
+        if search:
+            queryset = queryset.filter(
+                Q(messages__content__icontains=search)
+                | Q(lead__collected_fields__name__icontains=search)
+                | Q(lead__collected_fields__email__icontains=search)
+                | Q(user_metadata__name__icontains=search)
+                | Q(user_metadata__email__icontains=search)
             ).distinct()
         if query.get("requires_attention"):
             queryset = queryset.filter(requires_attention=True)
@@ -289,6 +355,121 @@ class ChatSessionListView(
         )
 
 
+class TestChatSessionCreateView(ChatSessionChatbotMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    chatbot_admin_only = True
+    query_serializer_class = ChatSessionQuerySerializer
+    serializer_class = TestChatSessionSerializer
+
+    def post(self, request, *args, **kwargs):
+        session = create_test_session(self.get_chatbot())
+        return APIResponse.success(
+            data=self.get_serializer(session).data,
+            message="Test chat session created successfully.",
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class TestChatSessionListView(
+    ChatSessionChatbotMixin,
+    PaginatedChatSessionMixin,
+    GenericAPIView,
+):
+    permission_classes = [IsChatbotUser]
+    chatbot_admin_only = True
+    query_serializer_class = ChatSessionQuerySerializer
+    serializer_class = TestChatSessionSerializer
+
+    def get(self, request, *args, **kwargs):
+        queryset = (
+            ChatSession.objects.filter(
+                chatbot=self.get_chatbot(),
+                is_test=True,
+            )
+            .annotate(message_count=Count("messages"))
+            .order_by("-last_activity_at", "-created_at", "-id")
+        )
+        return self.paginated_response(
+            queryset,
+            message="Test chat sessions fetched successfully.",
+        )
+
+
+class TestChatSessionDetailView(TestChatSessionObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    chatbot_admin_only = True
+    serializer_class = TestChatSessionSerializer
+
+    def get(self, request, *args, **kwargs):
+        session = self.get_test_chat_session()
+        session.message_count = session.messages.count()
+        return APIResponse.success(
+            data=self.get_serializer(session).data,
+            message="Test chat session fetched successfully.",
+        )
+
+
+class TestChatMessageListView(
+    TestChatSessionObjectMixin,
+    PaginatedChatSessionMixin,
+    GenericAPIView,
+):
+    permission_classes = [IsChatbotUser]
+    chatbot_admin_only = True
+    serializer_class = ChatMessageSerializer
+
+    def get(self, request, *args, **kwargs):
+        messages = ChatMessage.objects.filter(
+            chat_session=self.get_test_chat_session(),
+        ).select_related("sender__user__profile")
+        return self.paginated_response(
+            messages,
+            message="Test chat messages fetched successfully.",
+        )
+
+
+class TestChatMessageCreateView(TestChatSessionObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    chatbot_admin_only = True
+    serializer_class = TestChatMessageCreateSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            reply = send_test_message(
+                self.get_test_chat_session(),
+                content=serializer.validated_data["content"],
+            )
+        except TestChatMessageLimitExceeded as exc:
+            return APIResponse.error(
+                errors={"capacity": [str(exc)]},
+                message=str(exc),
+                status=status.HTTP_402_PAYMENT_REQUIRED,
+            )
+        except DjangoValidationError as exc:
+            return validation_error_response(exc)
+        except Exception:
+            logger.exception("Test chat AI response generation failed.")
+            return APIResponse.error(
+                message="The test chat response could not be generated.",
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        return APIResponse.success(
+            data={
+                "visitor_message": ChatMessageSerializer(
+                    reply.visitor_message,
+                ).data,
+                "ai_message": ChatMessageSerializer(reply.ai_message).data,
+                "usage_source": reply.usage_source,
+                "capacity": TestChatCapacitySerializer(reply.capacity).data,
+            },
+            message="Test chat response generated successfully.",
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class SessionStatsAPIView(ChatSessionChatbotMixin, GenericAPIView):
     """Chatbot session/message totals and rolling 30-day comparisons."""
 
@@ -302,8 +483,11 @@ class SessionStatsAPIView(ChatSessionChatbotMixin, GenericAPIView):
         current_period_start = now - timedelta(days=30)
         previous_period_start = now - timedelta(days=60)
 
-        sessions = ChatSession.objects.filter(chatbot=chatbot)
-        messages = ChatMessage.objects.filter(chat_session__chatbot=chatbot)
+        sessions = ChatSession.objects.filter(chatbot=chatbot, is_test=False)
+        messages = ChatMessage.objects.filter(
+            chat_session__chatbot=chatbot,
+            chat_session__is_test=False,
+        )
 
         session_counts = sessions.aggregate(
             total=Count("id"),
@@ -381,6 +565,7 @@ class SessionOverviewAPIView(ChatSessionChatbotMixin, GenericAPIView):
             item["date"]: item["session_count"]
             for item in ChatSession.objects.filter(
                 chatbot=self.get_chatbot(),
+                is_test=False,
                 created_at__gte=_aware_start(start_date),
                 created_at__lt=_aware_start(end_date + timedelta(days=1)),
             )
@@ -680,6 +865,7 @@ class IncomingTransferListView(
         query = self.get_query()
         queryset = ChatSessionTransfer.objects.filter(
             chat_session__chatbot=self.get_chatbot(),
+            chat_session__is_test=False,
             to_agent=self.get_chatbot_user(),
         )
         expire_pending_transfers(queryset)

@@ -219,6 +219,14 @@ class ChatbotCapacity(BaseMinModel):
         help_text="Maximum AI messages for the period; null means unlimited.",
     )
     current_ai_message_count = models.PositiveIntegerField(default=0)
+    test_ai_message_limit = models.PositiveIntegerField(
+        default=100,
+        help_text=(
+            "Free AI replies reserved for chatbot test sessions before "
+            "subscription messages are used."
+        ),
+    )
+    current_test_ai_message_count = models.PositiveIntegerField(default=0)
 
     file_size_limit_bytes = models.PositiveBigIntegerField(
         null=True,
@@ -571,5 +579,4 @@ class ChatbotActivityLog(BaseMinModel):
     def __str__(self):
         actor = self.user or "System"
         return f"{actor}: {self.action} in {self.chatbot}"
-
 

@@ -72,6 +72,7 @@ def _get_visitor_sessions(chatbot, visitor_id):
         chatbot=chatbot,
         visitor_id=visitor_id,
         channel=ChatSessionChannel.WEB_WIDGET,
+        is_test=False,
     )
     anchor = direct_sessions.select_related("lead").first()
     if anchor is None:
@@ -90,6 +91,7 @@ def _get_visitor_sessions(chatbot, visitor_id):
         filters,
         chatbot=chatbot,
         channel=ChatSessionChannel.WEB_WIDGET,
+        is_test=False,
     )
     return anchor, lead, sessions
 
@@ -184,6 +186,7 @@ def create_or_resume_conversation(
             chatbot=chatbot,
             visitor_id=payload["visitor_id"],
             channel=ChatSessionChannel.WEB_WIDGET,
+            is_test=False,
             status__in=RESUMABLE_SESSION_STATUSES,
         ).first()
         resumed = session is not None
@@ -250,6 +253,7 @@ def get_visitor_chat_session(chatbot, session_id, conversation_token):
             chatbot=chatbot,
             visitor_id=payload["visitor_id"],
             channel=ChatSessionChannel.WEB_WIDGET,
+            is_test=False,
             status__in=RESUMABLE_SESSION_STATUSES,
         )
     except ChatSession.DoesNotExist as exc:
@@ -265,7 +269,8 @@ def send_visitor_message(
     external_id="",
 ):
     chat_session = ChatSession.objects.select_for_update().get(
-        pk=chat_session.pk
+        pk=chat_session.pk,
+        is_test=False,
     )
     if chat_session.status not in RESUMABLE_SESSION_STATUSES:
         raise ValidationError("Cannot send a message to an ended conversation.")

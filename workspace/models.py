@@ -28,6 +28,12 @@ class Workspace(BaseModel):
 
     class Meta:
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["owner"],
+                name="unique_workspace_per_owner",
+            ),
+        ]
         indexes = [
             models.Index(
                 fields=["owner", "is_active"],

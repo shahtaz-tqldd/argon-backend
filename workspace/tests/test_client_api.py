@@ -128,6 +128,69 @@ class WorkspaceClientAPITests(APITestCase):
             ).exists()
         )
 
+        response = self.client.post(
+            reverse("workspace-create"),
+            {"name": "Second Workspace"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Workspace.objects.filter(owner=creator).count(), 1)
+
+    def test_workspace_list_puts_owned_workspace_first_and_returns_metadata(self):
+        first_inviter = User.objects.create_user(
+            email="first-inviter@example.com",
+            password="StrongPass123!",
+        )
+        first_shared_workspace = ensure_personal_workspace(first_inviter)
+        add_workspace_user(
+            workspace=first_shared_workspace,
+            user=self.owner,
+            added_by=first_inviter,
+        )
+        second_inviter = User.objects.create_user(
+            email="second-inviter@example.com",
+            password="StrongPass123!",
+        )
+        second_shared_workspace = ensure_personal_workspace(second_inviter)
+        add_workspace_user(
+            workspace=second_shared_workspace,
+            user=self.owner,
+            added_by=second_inviter,
+        )
+        self.client.force_authenticate(self.owner)
+
+        response = self.client.get(
+            reverse("workspace-list"),
+            {"page": 1, "page_size": 2},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["data"]), 2)
+        self.assertEqual(response.data["data"][0]["slug"], self.workspace.slug)
+        self.assertEqual(response.data["meta"]["count"], 3)
+        self.assertEqual(response.data["meta"]["page"], 1)
+        self.assertEqual(response.data["meta"]["page_size"], 2)
+        self.assertEqual(response.data["meta"]["num_pages"], 2)
+        self.assertIsNotNone(response.data["meta"]["next"])
+        self.assertIsNone(response.data["meta"]["previous"])
+
+    def test_workspace_list_is_empty_for_user_without_workspace_membership(self):
+        chatbot_only_user = User.objects.create_user(
+            email="chatbot-only@example.com",
+            password="StrongPass123!",
+        )
+        self.client.force_authenticate(chatbot_only_user)
+
+        response = self.client.get(
+            reverse("workspace-list"),
+            {"page_size": 10},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"], [])
+        self.assertEqual(response.data["meta"]["count"], 0)
+
     def test_workspace_detail_returns_the_users_member_workspace(self):
         member = User.objects.create_user(
             email="member@example.com",

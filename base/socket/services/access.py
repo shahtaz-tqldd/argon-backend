@@ -38,7 +38,7 @@ def dashboard_access(user_id):
 def session_access(user_id, session_id):
     try:
         session = ChatSession.objects.select_related("chatbot__workspace").get(
-            pk=session_id, chatbot__is_deleted=False,
+            pk=session_id, is_test=False, chatbot__is_deleted=False,
             chatbot__workspace__is_active=True,
         )
         agent = ChatbotUser.objects.select_related("user", "chatbot").get(

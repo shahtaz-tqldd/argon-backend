@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Case, IntegerField, Q, Value, When
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -150,12 +150,22 @@ class WorkspaceListView(PaginatedListMixin, GenericAPIView):
         return (
             Workspace.objects.select_related("owner")
             .filter(
-                memberships__user=self.request.user,
-                memberships__is_active=True,
+                Q(owner=self.request.user)
+                | Q(
+                    memberships__user=self.request.user,
+                    memberships__is_active=True,
+                ),
                 is_active=True,
             )
             .distinct()
-            .order_by("-created_at")
+            .order_by(
+                Case(
+                    When(owner=self.request.user, then=Value(0)),
+                    default=Value(1),
+                    output_field=IntegerField(),
+                ),
+                "-created_at",
+            )
         )
 
     def get(self, request, *args, **kwargs):

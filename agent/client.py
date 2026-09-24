@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from agent.root_agent import root_agent
 from agent.sub_agents.appointment.tools import verified_booking
 from agent.sub_agents.knowledge.tools import RETRIEVED_SOURCE_IDS_KEY
-from agent.utils.schema import (
+from agent.schema import (
     AgentResponseSchema,
     AgentResultSchema,
     AppointmentSchema,

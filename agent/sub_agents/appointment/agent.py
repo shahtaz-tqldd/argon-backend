@@ -7,7 +7,7 @@ from agent.helpers.global_tools import create_global_tools
 from agent.helpers.load_instruction import load_sub_agent_instruction
 from agent.helpers.model import chat_model, generation_config
 from agent.sub_agents.appointment.tools import create_appointment_tools
-from agent.utils.schema import SpecialistResponseSchema
+from agent.schema import SpecialistResponseSchema
 
 
 def build(chatbot, session) -> LlmAgent | None:

@@ -8,6 +8,25 @@ class LeadChatbotQuerySerializer(serializers.Serializer):
     chatbot_slug = serializers.SlugField()
 
 
+class LeadExportQuerySerializer(LeadChatbotQuerySerializer):
+    start_date = serializers.DateField(required=False)
+    end_date = serializers.DateField(required=False)
+    file_format = serializers.ChoiceField(
+        choices=("csv", "xlsx", "excel"),
+    )
+
+    def validate(self, attrs):
+        start_date = attrs.get("start_date")
+        end_date = attrs.get("end_date")
+        if start_date and end_date and start_date > end_date:
+            raise serializers.ValidationError(
+                {"end_date": "end_date must be on or after start_date."}
+            )
+        if attrs["file_format"] == "excel":
+            attrs["file_format"] = "xlsx"
+        return attrs
+
+
 class LeadQuerySerializer(LeadChatbotQuerySerializer):
     lead_id = serializers.UUIDField()
 

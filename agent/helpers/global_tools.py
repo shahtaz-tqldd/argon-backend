@@ -107,6 +107,9 @@ def create_global_tools(chatbot, session):
     """
     Feature-enabled global tools shared by every agent.
     """
+    if session.is_test:
+        return []
+
     async def record_lead_score(score: int, summary: str) -> dict:
         """Record a qualified lead score and a very short evidence-based reason.
 

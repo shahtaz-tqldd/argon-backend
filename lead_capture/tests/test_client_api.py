@@ -1,5 +1,11 @@
+import csv
+from datetime import timedelta
+from io import BytesIO, StringIO
+
 from django.contrib.auth import get_user_model
 from django.urls import reverse
+from django.utils import timezone
+from openpyxl import load_workbook
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -117,6 +123,123 @@ class LeadCaptureClientAPITests(APITestCase):
         self.assertEqual(response.data["meta"]["count"], 3)
         self.assertEqual(len(response.data["data"]), 2)
         self.assertIn("notes_count", response.data["data"][0])
+
+    def test_all_leads_can_be_exported_as_csv_without_a_date_range(self):
+        Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={
+                "name": "CSV Lead",
+                "email": "csv@example.com",
+            },
+            initial_ip_address="192.0.2.10",
+            detected_country_code="US",
+            detected_city="New York",
+            source="widget",
+        )
+
+        response = self.client.get(
+            f'{self.url("export-lead-data")}&file_format=csv'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
+        self.assertIn("attachment;", response["Content-Disposition"])
+        self.assertEqual(response["X-Lead-Export-Limit"], "1000")
+        self.assertEqual(response["X-Lead-Export-Count"], "1")
+        rows = list(csv.reader(StringIO(response.content.decode("utf-8-sig"))))
+        self.assertEqual(len(rows), 2)
+        self.assertIn("name", rows[0])
+        self.assertIn("email", rows[0])
+        self.assertEqual(rows[1][rows[0].index("name")], "CSV Lead")
+        self.assertEqual(
+            rows[1][rows[0].index("email")],
+            "csv@example.com",
+        )
+
+    def test_lead_export_filters_by_inclusive_date_range(self):
+        old_lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "Old Lead"},
+        )
+        current_lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "Current Lead"},
+        )
+        Lead.objects.filter(pk=old_lead.pk).update(
+            created_at=timezone.now() - timedelta(days=5),
+        )
+        today = timezone.localdate().isoformat()
+
+        response = self.client.get(
+            f'{self.url("export-lead-data")}&file_format=csv'
+            f"&start_date={today}&end_date={today}"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rows = list(csv.reader(StringIO(response.content.decode("utf-8-sig"))))
+        self.assertEqual(response["X-Lead-Export-Count"], "1")
+        self.assertEqual(
+            rows[1][rows[0].index("name")],
+            current_lead.collected_fields["name"],
+        )
+
+    def test_leads_can_be_exported_as_excel(self):
+        Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "Excel Lead"},
+        )
+
+        response = self.client.get(
+            f'{self.url("export-lead-data")}&file_format=excel'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response["Content-Type"],
+            (
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+        )
+        self.assertIn(".xlsx", response["Content-Disposition"])
+        workbook = load_workbook(BytesIO(response.content), read_only=True)
+        rows = list(workbook["Leads"].iter_rows(values_only=True))
+        self.assertIn("name", rows[0])
+        self.assertEqual(rows[1][rows[0].index("name")], "Excel Lead")
+
+    def test_lead_export_has_a_hard_limit_of_1000(self):
+        Lead.objects.bulk_create(
+            [
+                Lead(
+                    chatbot=self.chatbot,
+                    collected_fields={"name": f"Lead {index}"},
+                )
+                for index in range(1001)
+            ]
+        )
+
+        response = self.client.get(
+            f'{self.url("export-lead-data")}&file_format=csv'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rows = list(csv.reader(StringIO(response.content.decode("utf-8-sig"))))
+        self.assertEqual(response["X-Lead-Export-Limit"], "1000")
+        self.assertEqual(response["X-Lead-Export-Count"], "1000")
+        self.assertEqual(len(rows), 1001)
+
+    def test_lead_export_validates_format_and_date_order(self):
+        response = self.client.get(
+            f'{self.url("export-lead-data")}&file_format=pdf'
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        response = self.client.get(
+            f'{self.url("export-lead-data")}&file_format=csv'
+            "&start_date=2026-09-25&end_date=2026-09-24"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("end_date", response.data["errors"])
 
     def test_lead_information_can_be_updated(self):
         LeadCaptureConfig.objects.create(

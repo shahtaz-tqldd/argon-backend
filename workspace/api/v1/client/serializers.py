@@ -2,7 +2,7 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from rest_framework import serializers
 
 from app.services.r2 import delete_image, schedule_delete_image, upload_image
@@ -176,6 +176,23 @@ class WorkspaceListSerializer(WorkspaceBaseSerializer):
 
 class WorkspaceCreateSerializer(WorkspaceBaseSerializer):
     """Validate and serialize workspace creation."""
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        user = self.context["request"].user
+        if Workspace.objects.filter(owner=user).exists():
+            raise serializers.ValidationError(
+                "Each user can create only one workspace."
+            )
+        return attrs
+
+    def create(self, validated_data):
+        try:
+            return super().create(validated_data)
+        except IntegrityError as exc:
+            raise serializers.ValidationError(
+                "Each user can create only one workspace."
+            ) from exc
 
 
 class WorkspaceDetailSerializer(WorkspaceBaseSerializer):

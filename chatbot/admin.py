@@ -100,5 +100,12 @@ class ChatbotInvitationAdmin(admin.ModelAdmin):
 
 @admin.register(ChatbotCapacity)
 class ChatbotCapacityAdmin(admin.ModelAdmin):
-    list_display = ("chatbot__chatbot_name", "created_at")
+    list_display = (
+        "chatbot__chatbot_name",
+        "current_test_ai_message_count",
+        "test_ai_message_limit",
+        "current_ai_message_count",
+        "ai_message_limit",
+        "created_at",
+    )
     readonly_fields = ("id", "created_at", "updated_at")

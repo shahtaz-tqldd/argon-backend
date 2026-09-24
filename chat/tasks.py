@@ -16,6 +16,8 @@ from notification.services import create_notification
 
 
 def is_ai_reply_enabled(session, chatbot=None):
+    if session.is_test:
+        return False
     if session.status != ChatSessionStatus.OPEN:
         return False
     if session.assigned_to_id:
@@ -99,6 +101,8 @@ def generate_ai_reply_task(self, visitor_message_id):
 
     session = visitor_message.chat_session
     chatbot = session.chatbot
+    if session.is_test:
+        return None
     external_id = f"ai:{visitor_message.id}"
     if ChatMessage.objects.filter(
         chat_session=session,

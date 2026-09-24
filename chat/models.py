@@ -27,6 +27,10 @@ class ChatSession(BaseMinModel):
         on_delete=models.CASCADE,
         related_name="chat_sessions",
     )
+    is_test = models.BooleanField(
+        default=False,
+        help_text="Whether this is an admin-only chatbot test conversation.",
+    )
     external_thread_id = models.CharField(
         max_length=255,
         blank=True,
@@ -140,6 +144,10 @@ class ChatSession(BaseMinModel):
     class Meta:
         ordering = ["-last_activity_at", "-created_at"]
         indexes = [
+            models.Index(
+                fields=["chatbot", "is_test", "-last_activity_at"],
+                name="chat_session_test_idx",
+            ),
             # Primary inbox listing: all sessions for a chatbot, by status,
             # newest activity first.
             models.Index(
@@ -164,6 +172,21 @@ class ChatSession(BaseMinModel):
             ),
         ]
         constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(is_test=False)
+                    | Q(
+                        assigned_to__isnull=True,
+                        attention_reason="",
+                        attention_requested_at__isnull=True,
+                        is_test=True,
+                        lead__isnull=True,
+                        requires_attention=False,
+                        visitor_id="",
+                    )
+                ),
+                name="test_session_has_no_live_ownership",
+            ),
             models.UniqueConstraint(
                 fields=["chatbot", "channel", "external_thread_id"],
                 condition=~Q(external_thread_id=""),
@@ -208,6 +231,18 @@ class ChatSession(BaseMinModel):
 
     def clean(self):
         super().clean()
+        if self.is_test and (
+            self.assigned_to_id
+            or self.lead_id
+            or self.visitor_id
+            or self.requires_attention
+            or self.attention_reason
+            or self.attention_requested_at
+        ):
+            raise ValidationError(
+                "A test session cannot have visitor, lead, assignment, or "
+                "attention state."
+            )
         if self.assigned_to_id:
             if not self.assigned_to.is_active:
                 raise ValidationError(

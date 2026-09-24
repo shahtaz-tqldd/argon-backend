@@ -13,7 +13,7 @@ class CreateSubscriptionPlanCommandTests(TestCase):
         "free": {
             "ai_message_limit": 100,
             "file_size_limit_mb": 10,
-            "knowledge_chunk_limit": 30,
+            "knowledge_chunk_limit": 25,
             "amount": Decimal("0.00"),
             "provider": PaymentProvider.MANUAL,
             "features": [
@@ -22,10 +22,10 @@ class CreateSubscriptionPlanCommandTests(TestCase):
             ],
         },
         "starter": {
-            "ai_message_limit": 650,
-            "file_size_limit_mb": 20,
-            "knowledge_chunk_limit": 250,
-            "amount": Decimal("35.00"),
+            "ai_message_limit": 1000,
+            "file_size_limit_mb": 25,
+            "knowledge_chunk_limit": 625,
+            "amount": Decimal("59.00"),
             "provider": PaymentProvider.STRIPE,
             "features": [
                 PlanFeature.HUMAN_HANDOFF,
@@ -33,10 +33,10 @@ class CreateSubscriptionPlanCommandTests(TestCase):
             ],
         },
         "growth": {
-            "ai_message_limit": 1500,
+            "ai_message_limit": 2500,
             "file_size_limit_mb": 50,
-            "knowledge_chunk_limit": 600,
-            "amount": Decimal("49.00"),
+            "knowledge_chunk_limit": 1250,
+            "amount": Decimal("119.00"),
             "provider": PaymentProvider.STRIPE,
             "features": [
                 PlanFeature.HUMAN_HANDOFF,
@@ -45,10 +45,10 @@ class CreateSubscriptionPlanCommandTests(TestCase):
             ],
         },
         "premium": {
-            "ai_message_limit": 3500,
-            "file_size_limit_mb": 75,
-            "knowledge_chunk_limit": 1500,
-            "amount": Decimal("79.00"),
+            "ai_message_limit": 5000,
+            "file_size_limit_mb": 100,
+            "knowledge_chunk_limit": 2500,
+            "amount": Decimal("229.00"),
             "provider": PaymentProvider.STRIPE,
             "features": [
                 PlanFeature.HUMAN_HANDOFF,
@@ -113,7 +113,23 @@ class CreateSubscriptionPlanCommandTests(TestCase):
         starter.refresh_from_db()
         starter_price.refresh_from_db()
         self.assertEqual(SubscriptionPlan.objects.count(), 5)
-        self.assertEqual(starter.ai_message_limit, 650)
+        self.assertEqual(starter.ai_message_limit, 1000)
         self.assertTrue(starter.is_active)
-        self.assertEqual(starter_price.amount, Decimal("35.00"))
+        self.assertEqual(starter_price.amount, Decimal("59.00"))
         self.assertTrue(starter_price.is_active)
+
+    def test_command_restores_the_canonical_slug_when_matched_by_name(self):
+        SubscriptionPlan.objects.create(
+            name="Starter",
+            slug="legacy-starter",
+            ai_message_limit=1,
+        )
+
+        call_command("create_subscription_plan", stdout=StringIO())
+
+        self.assertFalse(
+            SubscriptionPlan.objects.filter(slug="legacy-starter").exists()
+        )
+        starter = SubscriptionPlan.objects.get(slug="starter")
+        self.assertEqual(starter.ai_message_limit, 1000)
+        self.assertEqual(starter.prices.get().amount, Decimal("59.00"))

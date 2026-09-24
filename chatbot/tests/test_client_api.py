@@ -115,6 +115,10 @@ class ChatbotClientAPITests(APITestCase):
                 "capacity": {
                     "ai_message_limit": capacity.ai_message_limit,
                     "current_ai_message_count": capacity.current_ai_message_count,
+                    "test_ai_message_limit": capacity.test_ai_message_limit,
+                    "current_test_ai_message_count": (
+                        capacity.current_test_ai_message_count
+                    ),
                     "file_size_limit_bytes": capacity.file_size_limit_bytes,
                     "current_file_size_bytes": capacity.current_file_size_bytes,
                     "knowledge_chunk_limit": capacity.knowledge_chunk_limit,
@@ -1119,6 +1123,37 @@ class ChatbotClientAPITests(APITestCase):
         self.assertIsNotNone(response.data["meta"]["next"])
         self.assertIsNone(response.data["meta"]["previous"])
 
+    def test_chatbot_list_separates_owned_and_shared_chatbots(self):
+        shared_chatbot = create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Member Bot",
+            created_by=self.member,
+        )
+        ChatbotUser.objects.create(
+            chatbot=shared_chatbot,
+            user=self.owner,
+        )
+
+        response = self.client.get(
+            reverse("chatbot-list"),
+            {"page_size": 10},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            {item["slug"] for item in response.data["data"]},
+            {self.chatbot.slug},
+        )
+
+        response = self.client.get(
+            reverse("chatbot-list"),
+            {"shared_with_me": True, "page_size": 10},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 1)
+        self.assertEqual(response.data["data"][0]["slug"], shared_chatbot.slug)
+
     def test_chatbot_list_returns_compact_details_creator_and_members(self):
         self.owner.name = "Chatbot Owner"
         self.owner.save(update_fields=["name"])
@@ -1200,7 +1235,7 @@ class ChatbotClientAPITests(APITestCase):
             ],
         )
 
-    def test_workspace_member_lists_and_opens_only_assigned_chatbots(self):
+    def test_workspace_member_lists_workspace_chatbots_as_shared(self):
         workspace_chatbot = create_chatbot(
             workspace=self.workspace,
             chatbot_name="Workspace Bot",
@@ -1214,9 +1249,17 @@ class ChatbotClientAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 0)
+
+        response = self.client.get(
+            reverse("chatbot-list"),
+            {"shared_with_me": True, "page_size": 10},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(
             {item["slug"] for item in response.data["data"]},
-            {self.chatbot.slug},
+            {self.chatbot.slug, workspace_chatbot.slug},
         )
         self.assertEqual(
             response.data["data"][0]["workspace"],
@@ -1243,7 +1286,7 @@ class ChatbotClientAPITests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_chatbot_only_member_lists_only_assigned_chatbots(self):
+    def test_chatbot_only_member_lists_direct_assignment_as_shared(self):
         chatbot_only_member = User.objects.create_user(
             email="chatbot-only@example.com",
             password="StrongPass123!",
@@ -1265,6 +1308,14 @@ class ChatbotClientAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 0)
+
+        response = self.client.get(
+            reverse("chatbot-list"),
+            {"shared_with_me": True, "page_size": 10},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["meta"]["count"], 1)
         self.assertEqual(response.data["data"][0]["slug"], self.chatbot.slug)
 
@@ -1274,7 +1325,7 @@ class ChatbotClientAPITests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_user_can_access_multiple_chatbots_across_workspaces_and_filter_them(self):
+    def test_user_can_list_shared_chatbots_across_workspaces_and_filter_them(self):
         user = User.objects.create_user(
             email="multi-chatbot@example.com",
             password="StrongPass123!",
@@ -1308,6 +1359,13 @@ class ChatbotClientAPITests(APITestCase):
             {"page_size": 10},
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 0)
+
+        response = self.client.get(
+            reverse("chatbot-list"),
+            {"shared_with_me": True, "page_size": 10},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["meta"]["count"], 3)
         self.assertEqual(
             {item["workspace"]["slug"] for item in response.data["data"]},
@@ -1316,7 +1374,11 @@ class ChatbotClientAPITests(APITestCase):
 
         response = self.client.get(
             reverse("chatbot-list"),
-            {"workspace": self.workspace.slug, "page_size": 10},
+            {
+                "shared_with_me": True,
+                "workspace": self.workspace.slug,
+                "page_size": 10,
+            },
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(
@@ -1646,7 +1708,10 @@ class ChatbotClientAPITests(APITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        response = self.client.get(reverse("chatbot-list"))
+        response = self.client.get(
+            reverse("chatbot-list"),
+            {"shared_with_me": True},
+        )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["meta"]["count"], 1)
         response = self.client.get(

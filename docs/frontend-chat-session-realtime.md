@@ -116,6 +116,9 @@ If the current list is filtered by `assignment=mine`, compare
 `assigned_to.id` with the current chatbot-membership ID and insert/remove the
 row as appropriate. For status or assignment filters where the client does not
 have enough data to construct a newly eligible row, refetch the current list.
+The REST list also accepts `assigned_to=<email>` for current assignments and
+live incoming transfer requests, plus `search=<text>` for message content and
+visitor name/email.
 
 ## 5. Avoid duplicate handling
 

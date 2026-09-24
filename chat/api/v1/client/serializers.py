@@ -50,6 +50,12 @@ class ChatSessionTranscriptQuerySerializer(ChatSessionObjectQuerySerializer):
 
 
 class ChatSessionListQuerySerializer(ChatSessionQuerySerializer):
+    search = serializers.CharField(
+        required=False,
+        allow_blank=False,
+        max_length=255,
+    )
+    assigned_to = serializers.EmailField(required=False)
     channel = serializers.ChoiceField(
         choices=("web_widget", "api", "messenger", "instagram", "whats_app"),
         required=False,
@@ -66,6 +72,57 @@ class ChatSessionListQuerySerializer(ChatSessionQuerySerializer):
     requires_attention = serializers.BooleanField(required=False)
     is_recently_active = serializers.BooleanField(required=False)
     my_session = serializers.BooleanField(required=False)
+
+    def validate_assigned_to(self, value):
+        return value.strip().casefold()
+
+
+class TestChatSessionSerializer(serializers.ModelSerializer):
+    chatbot_id = serializers.UUIDField(read_only=True)
+    message_count = serializers.IntegerField(read_only=True, required=False)
+
+    class Meta:
+        model = ChatSession
+        fields = (
+            "id",
+            "chatbot_id",
+            "is_test",
+            "status",
+            "message_count",
+            "last_activity_at",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+
+class TestChatMessageCreateSerializer(serializers.Serializer):
+    content = serializers.CharField(trim_whitespace=False, max_length=10000)
+
+    def validate_content(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Message content cannot be blank.")
+        return value
+
+
+class TestChatCapacitySerializer(serializers.Serializer):
+    test_ai_message_limit = serializers.IntegerField(read_only=True)
+    current_test_ai_message_count = serializers.IntegerField(read_only=True)
+    test_ai_messages_remaining = serializers.SerializerMethodField()
+    ai_message_limit = serializers.IntegerField(read_only=True, allow_null=True)
+    current_ai_message_count = serializers.IntegerField(read_only=True)
+    subscription_ai_messages_remaining = serializers.SerializerMethodField()
+
+    def get_test_ai_messages_remaining(self, obj):
+        return max(
+            obj.test_ai_message_limit - obj.current_test_ai_message_count,
+            0,
+        )
+
+    def get_subscription_ai_messages_remaining(self, obj):
+        if obj.ai_message_limit is None:
+            return None
+        return max(obj.ai_message_limit - obj.current_ai_message_count, 0)
 
 
 class SessionOverviewQuerySerializer(ChatSessionQuerySerializer):

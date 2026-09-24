@@ -6,28 +6,31 @@ the knowledge source with its UUID.
 
 ## Endpoints
 
-- POST /api/v1/chatbots/knowledge/upload/?chatbot=<slug>&type=file
+- POST /api/v1/knowledge/upload/?chatbot=<slug>&type=file
   accepts multipart file and optional title.
-- POST /api/v1/chatbots/knowledge/upload/?chatbot=<slug>&type=url
+- POST /api/v1/knowledge/upload/?chatbot=<slug>&type=url
   accepts JSON url and optional title.
-- POST /api/v1/chatbots/knowledge/upload/?chatbot=<slug>&type=custom
+- POST /api/v1/knowledge/upload/?chatbot=<slug>&type=custom
   accepts JSON content and optional title.
-- GET /api/v1/chatbots/knowledge/list/?chatbot=<slug> returns a paginated
+- GET /api/v1/knowledge/list/?chatbot=<slug> returns a paginated
   source list.
-- GET /api/v1/chatbots/knowledge/usage/?chatbot=<slug> returns the chatbot's
+- POST /api/v1/knowledge/search/ accepts JSON `chatbotSlug` and `query`, then
+  returns up to 10 ranked retrieval chunks from enabled sources. It performs
+  retrieval only and does not invoke an LLM.
+- GET /api/v1/knowledge/usage/?chatbot=<slug> returns the chatbot's
   stored chunk and file-size totals with the current static limits.
-- GET /api/v1/chatbots/knowledge/details/?knowledge_base_id=<uuid> returns
+- GET /api/v1/knowledge/details/?knowledge_base_id=<uuid> returns
   one source.
-- PATCH /api/v1/chatbots/knowledge/update/?knowledge_base_id=<uuid>&type=file
+- PATCH /api/v1/knowledge/update/?knowledge_base_id=<uuid>&type=file
   retries training when the file's previous training failed.
-- PATCH /api/v1/chatbots/knowledge/update/?knowledge_base_id=<uuid>&type=url
+- PATCH /api/v1/knowledge/update/?knowledge_base_id=<uuid>&type=url
   retrains the URL.
-- PATCH /api/v1/chatbots/knowledge/update/?knowledge_base_id=<uuid>&type=custom
+- PATCH /api/v1/knowledge/update/?knowledge_base_id=<uuid>&type=custom
   accepts replacement content and retrains it. The training pipeline replaces
   the previous vectors atomically after the new vectors are ready.
-- DELETE /api/v1/chatbots/knowledge/delete/?knowledge_base_id=<uuid> removes
+- DELETE /api/v1/knowledge/delete/?knowledge_base_id=<uuid> removes
   the source, its vectors, logs, and any stored file.
-- GET /api/v1/chatbots/knowledge/training-logs/?chatbot=<slug> returns all
+- GET /api/v1/knowledge/training-logs/?chatbot=<slug> returns all
   training logs for the chatbot as a paginated list.
 
 Paginated endpoints accept page and page_size. Uploads and updates that start

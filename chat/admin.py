@@ -103,6 +103,7 @@ class ChatSessionAdmin(admin.ModelAdmin):
         "id_short",
         "visitor_or_lead",
         "chatbot",
+        "is_test",
         "channel",
         "status",
         "requires_attention",
@@ -111,6 +112,7 @@ class ChatSessionAdmin(admin.ModelAdmin):
         "last_activity_at",
     )
     list_filter = (
+        "is_test",
         "status",
         "channel",
         "requires_attention",
@@ -143,6 +145,7 @@ class ChatSessionAdmin(admin.ModelAdmin):
             {
                 "fields": (
                     "chatbot",
+                    "is_test",
                     "channel",
                     "status",
                     "lead",

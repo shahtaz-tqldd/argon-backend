@@ -1,5 +1,9 @@
+from datetime import datetime, time, timedelta
+
 from django.db.models import Count
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.generics import GenericAPIView
@@ -13,6 +17,7 @@ from chatbot.utils.choices import ChatbotPermissionTypes
 from lead_capture.api.v1.client.serializers import (
     LeadCaptureConfigSerializer,
     LeadChatbotQuerySerializer,
+    LeadExportQuerySerializer,
     LeadNoteQuerySerializer,
     LeadNoteSerializer,
     LeadQuerySerializer,
@@ -20,6 +25,7 @@ from lead_capture.api.v1.client.serializers import (
     LeadUpdateSerializer,
 )
 from lead_capture.models import Lead, LeadCaptureConfig, LeadNote
+from lead_capture.services.exports import build_lead_export
 from subscription.choices import PlanFeature
 
 
@@ -209,6 +215,67 @@ class LeadListView(
             queryset,
             message="Leads fetched successfully.",
         )
+
+
+class ExportLeadAPIView(LeadCaptureChatbotMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.LEAD_MANAGEMENT
+    chatbot_query_serializer_class = LeadExportQuerySerializer
+
+    export_limit = 1000
+
+    @staticmethod
+    def _start_of_day(value):
+        return timezone.make_aware(
+            datetime.combine(value, time.min),
+            timezone.get_current_timezone(),
+        )
+
+    def get(self, request, *args, **kwargs):
+        query = self.get_chatbot_query()
+        chatbot = self.get_chatbot()
+        leads = Lead.objects.filter(chatbot=chatbot)
+
+        start_date = query.get("start_date")
+        if start_date:
+            leads = leads.filter(
+                created_at__gte=self._start_of_day(start_date),
+            )
+
+        end_date = query.get("end_date")
+        if end_date:
+            leads = leads.filter(
+                created_at__lt=self._start_of_day(
+                    end_date + timedelta(days=1),
+                ),
+            )
+
+        exported_leads = list(
+            leads.order_by("-created_at", "-id")[: self.export_limit]
+        )
+        file_format = query["file_format"]
+        content = build_lead_export(exported_leads, file_format)
+        content_types = {
+            "csv": "text/csv; charset=utf-8",
+            "xlsx": (
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+        }
+        filename = (
+            f"{chatbot.slug}-leads-{timezone.localdate().isoformat()}."
+            f"{file_format}"
+        )
+        response = HttpResponse(
+            content,
+            content_type=content_types[file_format],
+        )
+        response["Content-Disposition"] = (
+            f'attachment; filename="{filename}"'
+        )
+        response["X-Lead-Export-Limit"] = str(self.export_limit)
+        response["X-Lead-Export-Count"] = str(len(exported_leads))
+        return response
 
 
 class LeadDetailView(LeadObjectMixin, GenericAPIView):

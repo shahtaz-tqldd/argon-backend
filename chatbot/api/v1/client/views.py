@@ -85,8 +85,6 @@ from chatbot.utils.choices import (
 from chatbot.utils.permissions import available_chatbot_permissions
 from subscription.models import ChatbotSubscription
 from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
-from workspace.models import WorkspaceRole
-
 User = get_user_model()
 
 
@@ -198,6 +196,7 @@ class ChatbotListView(PaginatedListMixin, GenericAPIView):
             data=self.request.query_params,
         )
         query_serializer.is_valid(raise_exception=True)
+        shared_with_me = query_serializer.validated_data["shared_with_me"]
         queryset = (
             Chatbot.objects.select_related(
                 "workspace",
@@ -223,21 +222,30 @@ class ChatbotListView(PaginatedListMixin, GenericAPIView):
                 ),
             )
             .filter(
-                Q(
-                    workspace__memberships__user=self.request.user,
-                    workspace__memberships__is_active=True,
-                    workspace__memberships__role=WorkspaceRole.ADMIN,
-                )
-                | Q(
-                    memberships__user=self.request.user,
-                    memberships__is_active=True,
-                ),
                 workspace__is_active=True,
                 is_deleted=False,
             )
-            .distinct()
             .order_by("-created_at")
         )
+
+        if shared_with_me:
+            queryset = (
+                queryset.filter(
+                    Q(
+                        workspace__memberships__user=self.request.user,
+                        workspace__memberships__is_active=True,
+                    )
+                    | Q(
+                        memberships__user=self.request.user,
+                        memberships__is_active=True,
+                    ),
+                )
+                .exclude(created_by=self.request.user)
+                .distinct()
+            )
+        else:
+            queryset = queryset.filter(created_by=self.request.user)
+
         workspace_slug = query_serializer.validated_data.get("workspace")
         if workspace_slug:
             queryset = queryset.filter(workspace__slug=workspace_slug)

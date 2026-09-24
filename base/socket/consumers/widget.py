@@ -259,6 +259,7 @@ class VisitorChatSessionConsumer(AsyncJsonWebsocketConsumer):
             session = ChatSession.objects.select_related("chatbot").get(
                 pk=session_id,
                 chatbot=chatbot,
+                is_test=False,
                 visitor_id=payload["visitor_id"],
                 status=ChatSessionStatus.OPEN,
             )

@@ -116,6 +116,27 @@ class GenerateAIReplyTaskTests(TestCase):
         self.assertEqual(usage.cost, Decimal("0.00010500"))
         self.assertEqual(usage.model, "gemini-2.5-flash")
 
+    @patch("chat.tasks.AgentClient")
+    def test_async_reply_task_ignores_test_sessions(self, agent_client):
+        test_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            is_test=True,
+        )
+        test_message = ChatMessage.objects.create(
+            chat_session=test_session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="Test prompt",
+        )
+
+        result = generate_ai_reply_task.apply(
+            args=[str(test_message.id)],
+            throw=True,
+        )
+
+        self.assertIsNone(result.result)
+        self.assertEqual(test_session.messages.count(), 1)
+        agent_client.assert_not_called()
+
     @patch("chat.tasks.create_notification")
     @patch("chat.tasks.AgentClient")
     def test_escalation_creates_attention_notification(

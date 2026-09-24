@@ -55,6 +55,7 @@ class ChatbotQuerySerializer(serializers.Serializer):
 
 class ChatbotListQuerySerializer(serializers.Serializer):
     workspace = serializers.SlugField(required=False)
+    shared_with_me = serializers.BooleanField(required=False, default=False)
 
 
 class ChatbotMemberQuerySerializer(ChatbotQuerySerializer):
@@ -454,6 +455,8 @@ class ChatbotCapacitySerializer(serializers.ModelSerializer):
         fields = (
             "ai_message_limit",
             "current_ai_message_count",
+            "test_ai_message_limit",
+            "current_test_ai_message_count",
             "file_size_limit_bytes",
             "current_file_size_bytes",
             "knowledge_chunk_limit",

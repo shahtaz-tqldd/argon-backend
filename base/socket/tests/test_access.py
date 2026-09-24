@@ -81,7 +81,10 @@ class SocketAccessTests(SimpleTestCase):
             chatbot_id=chatbot_id, user_id=user_id, is_active=True, user__is_active=True,
         )
         sessions.select_related.return_value.get.assert_called_with(
-            pk=session_id, chatbot__is_deleted=False, chatbot__workspace__is_active=True,
+            pk=session_id,
+            is_test=False,
+            chatbot__is_deleted=False,
+            chatbot__workspace__is_active=True,
         )
 
     @patch("base.socket.services.access.ChatSession.objects")
