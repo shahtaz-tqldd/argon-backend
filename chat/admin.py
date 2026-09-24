@@ -3,12 +3,22 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
 from chat.models import (
+    ChatbotBlockedVisitor,
     ChatMessage,
     ChatMessageAttachment,
     ChatSession,
     ChatSessionTakeover,
     ChatSessionTransfer,
 )
+
+
+@admin.register(ChatbotBlockedVisitor)
+class ChatbotBlockedVisitorAdmin(admin.ModelAdmin):
+    list_display = ("visitor_id", "chatbot", "blocked_by", "created_at")
+    list_filter = ("chatbot", "created_at")
+    search_fields = ("visitor_id", "chatbot__chatbot_name", "blocked_by__user__email")
+    readonly_fields = ("created_at", "updated_at")
+    autocomplete_fields = ("chatbot", "blocked_by")
 
 
 class ChatMessageAttachmentInline(admin.TabularInline):

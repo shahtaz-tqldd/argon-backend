@@ -25,7 +25,7 @@ from chatbot.services.invitations import (
     hash_invitation_token,
 )
 from chatbot.utils.choices import ChatbotPermissionTypes, ChatbotRoleTypes
-from chat.models import ChatMessage, ChatSession
+from chat.models import ChatbotBlockedVisitor, ChatMessage, ChatSession
 from chat.services.visitor_tokens import issue_conversation_token
 from chat.utils.choices import (
     ChatMessageSenderType,
@@ -612,6 +612,39 @@ class ChatbotClientAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_blocked_visitor_cannot_send_message(self):
+        session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            visitor_id="blocked-public-visitor",
+            channel=ChatSessionChannel.WEB_WIDGET,
+        )
+        ChatbotBlockedVisitor.objects.create(
+            chatbot=self.chatbot,
+            visitor_id=session.visitor_id,
+        )
+        token = issue_conversation_token(session)
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(
+            reverse(
+                "visitor-message-create",
+                kwargs={
+                    "public_key": self.chatbot.widget_settings.public_key,
+                    "session_id": session.id,
+                },
+            ),
+            {"content": "This should be rejected."},
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(
+            response.data["message"],
+            "This visitor has been blocked from sending messages.",
+        )
+        self.assertFalse(ChatMessage.objects.filter(chat_session=session).exists())
 
     @patch("chatbot.api.v1.client.views.record_ai_usage")
     @patch("chatbot.api.v1.client.views.AgentClient")

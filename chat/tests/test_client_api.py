@@ -1,8 +1,12 @@
+import csv
 from datetime import datetime, time, timedelta
+from io import BytesIO, StringIO
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.urls import reverse
 from django.utils import timezone
+from pypdf import PdfReader
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -10,14 +14,17 @@ from agent.helpers.global_tools import _request_human_escalation
 from chatbot.models import Chatbot, ChatbotUser
 from chatbot.utils.choices import ChatbotPermissionTypes, ChatbotRoleTypes
 from chat.models import (
+    ChatbotBlockedVisitor,
     ChatMessage,
     ChatSession,
     ChatSessionTakeover,
     ChatSessionTransfer,
 )
+from chat.services.visitor import send_visitor_message
 from chat.utils.choices import (
     ChatMessageSenderType,
     ChatMessageStatus,
+    ChatSessionChannel,
     ChatSessionStatus,
     ChatSessionTakeoverReleaseReason,
     ChatSessionTransferStatus,
@@ -112,6 +119,7 @@ class ChatSessionClientAPITests(APITestCase):
                 "status",
                 "assigned_to",
                 "transfer_requested_to",
+                "is_blocked",
                 "requires_attention",
                 "attention_reason",
                 "is_recently_active",
@@ -127,6 +135,7 @@ class ChatSessionClientAPITests(APITestCase):
         )
         self.assertIsNone(item["assigned_to"])
         self.assertIsNone(item["transfer_requested_to"])
+        self.assertFalse(item["is_blocked"])
         self.assertEqual(item["unread_message_count"], 1)
         self.assertEqual(
             item["last_message"],
@@ -254,6 +263,76 @@ class ChatSessionClientAPITests(APITestCase):
             [str(newest_session.id), str(older_session.id)],
         )
 
+    def test_session_list_returns_visitor_block_status(self):
+        blocked_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            visitor_id="blocked-list-visitor",
+        )
+        unblocked_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            visitor_id="unblocked-list-visitor",
+        )
+        ChatbotBlockedVisitor.objects.create(
+            chatbot=self.chatbot,
+            visitor_id=blocked_session.visitor_id,
+            blocked_by=self.agent,
+        )
+
+        response = self.client.get(
+            reverse("chat-session-list"),
+            query_params={"chatbot_slug": self.chatbot.slug},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sessions = {item["id"]: item for item in response.data["data"]}
+        self.assertTrue(sessions[str(blocked_session.id)]["is_blocked"])
+        self.assertFalse(sessions[str(unblocked_session.id)]["is_blocked"])
+
+    def test_session_list_filters_web_widget_channel(self):
+        web_widget_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            channel=ChatSessionChannel.WEB_WIDGET,
+        )
+        ChatSession.objects.create(
+            chatbot=self.chatbot,
+            channel=ChatSessionChannel.API,
+        )
+
+        response = self.client.get(
+            reverse("chat-session-list"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "channel": "web_widget",
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 1)
+        self.assertEqual(
+            response.data["data"][0]["id"],
+            str(web_widget_session.id),
+        )
+
+    def test_session_list_accepts_future_channels_but_returns_empty(self):
+        ChatSession.objects.create(
+            chatbot=self.chatbot,
+            channel=ChatSessionChannel.API,
+        )
+
+        for channel in ("api", "messenger", "instagram", "whats_app"):
+            with self.subTest(channel=channel):
+                response = self.client.get(
+                    reverse("chat-session-list"),
+                    query_params={
+                        "chatbot_slug": self.chatbot.slug,
+                        "channel": channel,
+                    },
+                )
+
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                self.assertEqual(response.data["meta"]["count"], 0)
+                self.assertEqual(response.data["data"], [])
+
     def test_session_list_filters_by_recent_visitor_activity(self):
         now = timezone.now()
         recent_session = ChatSession.objects.create(
@@ -335,6 +414,231 @@ class ChatSessionClientAPITests(APITestCase):
             filtered_response.data["data"][0]["id"],
             str(attention_session.id),
         )
+
+    def test_session_list_filters_sessions_owned_by_or_requested_for_user(self):
+        other_user = User.objects.create_user(
+            email="other-session-agent@example.com",
+            password="StrongPass123!",
+        )
+        other_agent = ChatbotUser.objects.create(
+            chatbot=self.chatbot,
+            user=other_user,
+            role=ChatbotRoleTypes.MEMBER,
+        )
+        owned_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            assigned_to=self.agent,
+        )
+        transfer_requested_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            assigned_to=other_agent,
+        )
+        ChatSessionTransfer.objects.create(
+            chat_session=transfer_requested_session,
+            from_agent=other_agent,
+            to_agent=self.agent,
+        )
+        ChatSession.objects.create(
+            chatbot=self.chatbot,
+            assigned_to=other_agent,
+        )
+        expired_transfer_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            assigned_to=other_agent,
+        )
+        ChatSessionTransfer.objects.create(
+            chat_session=expired_transfer_session,
+            from_agent=other_agent,
+            to_agent=self.agent,
+            expires_at=timezone.now() - timedelta(minutes=1),
+        )
+
+        response = self.client.get(
+            reverse("chat-session-list"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "my_session": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 2)
+        self.assertEqual(
+            {item["id"] for item in response.data["data"]},
+            {str(owned_session.id), str(transfer_requested_session.id)},
+        )
+
+    def test_session_list_does_not_filter_my_sessions_when_false(self):
+        own_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            assigned_to=self.agent,
+        )
+        unassigned_session = ChatSession.objects.create(chatbot=self.chatbot)
+
+        response = self.client.get(
+            reverse("chat-session-list"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "my_session": False,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            {item["id"] for item in response.data["data"]},
+            {str(own_session.id), str(unassigned_session.id)},
+        )
+
+    def test_chatbot_admin_can_block_visitor_across_sessions(self):
+        session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            visitor_id="blocked-visitor",
+        )
+        another_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            visitor_id="blocked-visitor",
+        )
+
+        response = self.client.post(
+            reverse("chat-session-block-visitor"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+        repeated_response = self.client.post(
+            reverse("chat-session-block-visitor"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["data"]["visitor_id"], "blocked-visitor")
+        self.assertFalse(response.data["data"]["already_blocked"])
+        self.assertEqual(repeated_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(repeated_response.data["data"]["already_blocked"])
+        self.assertTrue(
+            ChatbotBlockedVisitor.objects.filter(
+                chatbot=self.chatbot,
+                visitor_id="blocked-visitor",
+                blocked_by=self.agent,
+            ).exists()
+        )
+        for blocked_session in (session, another_session):
+            with self.assertRaisesMessage(
+                ValidationError,
+                "This visitor has been blocked from sending messages.",
+            ):
+                send_visitor_message(blocked_session, content="Blocked message")
+
+    def test_non_admin_cannot_block_visitor(self):
+        member_user = User.objects.create_user(
+            email="regular-chat-member@example.com",
+            password="StrongPass123!",
+        )
+        ChatbotUser.objects.create(
+            chatbot=self.chatbot,
+            user=member_user,
+            role=ChatbotRoleTypes.MEMBER,
+            permissions=[ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT],
+        )
+        session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            visitor_id="visitor-for-admin-check",
+        )
+        self.client.force_authenticate(member_user)
+
+        response = self.client.post(
+            reverse("chat-session-block-visitor"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(ChatbotBlockedVisitor.objects.exists())
+
+    def test_block_visitor_rejects_session_without_visitor_id(self):
+        session = ChatSession.objects.create(chatbot=self.chatbot)
+
+        response = self.client.post(
+            reverse("chat-session-block-visitor"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(ChatbotBlockedVisitor.objects.exists())
+
+    def test_session_transcript_csv_contains_only_latest_350_messages(self):
+        session = ChatSession.objects.create(chatbot=self.chatbot)
+        for index in range(355):
+            ChatMessage.objects.create(
+                chat_session=session,
+                sender_type=ChatMessageSenderType.VISITOR,
+                content=f"message-{index:03d}",
+            )
+
+        response = self.client.get(
+            reverse("chat-session-transcript"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+                "file_format": "csv",
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
+        self.assertEqual(response["X-Transcript-Message-Limit"], "350")
+        rows = list(csv.reader(StringIO(response.content.decode("utf-8-sig"))))
+        self.assertEqual(len(rows), 351)
+        self.assertEqual(rows[0], ["timestamp", "sender", "message", "attachments"])
+        self.assertEqual(rows[1][2], "message-005")
+        self.assertEqual(rows[-1][2], "message-354")
+
+    def test_session_transcript_pdf_is_downloadable(self):
+        session = ChatSession.objects.create(chatbot=self.chatbot)
+        ChatMessage.objects.create(
+            chat_session=session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="Please send the transcript.",
+        )
+
+        response = self.client.get(
+            reverse("chat-session-transcript"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+                "format": "pdf",
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertTrue(response.content.startswith(b"%PDF-"))
+        pdf = PdfReader(BytesIO(response.content))
+        self.assertGreaterEqual(len(pdf.pages), 1)
+        self.assertIn("Please send the transcript.", pdf.pages[0].extract_text())
+
+    def test_session_transcript_rejects_unsupported_format(self):
+        session = ChatSession.objects.create(chatbot=self.chatbot)
+
+        response = self.client.get(
+            reverse("chat-session-transcript"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+                "format": "xlsx",
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_session_detail_returns_nested_chatbot(self):
         self.chatbot.logo = "https://example.com/support-bot.png"

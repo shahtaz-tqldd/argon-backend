@@ -9,7 +9,7 @@ from django.shortcuts import get_object_or_404
 from chatbot.models import Chatbot, ChatbotAllowedOrigin
 from chatbot.utils.choices import ChatbotStatusTypes
 from chatbot.utils.validation import normalize_widget_origin
-from chat.models import ChatMessage, ChatSession
+from chat.models import ChatbotBlockedVisitor, ChatMessage, ChatSession
 from chat.services.events import publish_session_event
 from chat.services.visitor_tokens import (
     InvalidConversationToken,
@@ -269,6 +269,12 @@ def send_visitor_message(
     )
     if chat_session.status not in RESUMABLE_SESSION_STATUSES:
         raise ValidationError("Cannot send a message to an ended conversation.")
+
+    if ChatbotBlockedVisitor.objects.filter(
+        chatbot_id=chat_session.chatbot_id,
+        visitor_id=chat_session.visitor_id,
+    ).exists():
+        raise ValidationError("This visitor has been blocked from sending messages.")
 
     if external_id:
         existing = ChatMessage.objects.filter(

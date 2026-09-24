@@ -1,8 +1,9 @@
 from datetime import datetime, time, timedelta
 
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Count, OuterRef, Q, Subquery, Value
+from django.db.models import Count, Exists, OuterRef, Q, Subquery, Value
 from django.db.models.functions import Coalesce, TruncDate
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -15,6 +16,7 @@ from chatbot.models import Chatbot, ChatbotUser
 from chatbot.utils.choices import ChatbotPermissionTypes
 from chat.api.v1.client.serializers import (
     AgentMessageCreateSerializer,
+    ChatSessionTranscriptQuerySerializer,
     ChatbotAgentSerializer,
     ChatMessageSerializer,
     ChatSessionListSerializer,
@@ -32,8 +34,14 @@ from chat.api.v1.client.serializers import (
     TakeOverSessionSerializer,
     TransferSessionSerializer,
 )
-from chat.models import ChatMessage, ChatSession, ChatSessionTransfer
+from chat.models import (
+    ChatbotBlockedVisitor,
+    ChatMessage,
+    ChatSession,
+    ChatSessionTransfer,
+)
 from chat.services.messages import send_agent_message
+from chat.services.transcripts import build_transcript
 from chat.services.takeover import (
     accept_transfer,
     cancel_transfer,
@@ -203,6 +211,10 @@ class ChatSessionListView(
         ).filter(
             Q(expires_at__isnull=True) | Q(expires_at__gte=timezone.now())
         )
+        blocked_visitor = ChatbotBlockedVisitor.objects.filter(
+            chatbot_id=OuterRef("chatbot_id"),
+            visitor_id=OuterRef("visitor_id"),
+        )
         queryset = (
             ChatSession.objects.filter(chatbot=self.get_chatbot())
             .select_related(
@@ -227,10 +239,16 @@ class ChatSessionListView(
                 transfer_requested_to_name=Subquery(
                     pending_transfer.values("to_agent__user__name")[:1]
                 ),
+                is_blocked=Exists(blocked_visitor),
             )
         )
         if query.get("status"):
             queryset = queryset.filter(status=query["status"])
+        channel = query.get("channel")
+        if channel == "web_widget":
+            queryset = queryset.filter(channel=channel)
+        elif channel:
+            queryset = queryset.none()
         assignment = query.get("assignment", "all")
         if assignment == "mine":
             queryset = queryset.filter(assigned_to=self.get_chatbot_user())
@@ -238,6 +256,21 @@ class ChatSessionListView(
             queryset = queryset.filter(assigned_to__isnull=False)
         elif assignment == "unassigned":
             queryset = queryset.filter(assigned_to__isnull=True)
+        if query.get("my_session"):
+            chatbot_user = self.get_chatbot_user()
+            queryset = queryset.filter(
+                Q(assigned_to=chatbot_user)
+                | (
+                    Q(
+                        transfers__to_agent=chatbot_user,
+                        transfers__status=ChatSessionTransferStatus.PENDING,
+                    )
+                    & (
+                        Q(transfers__expires_at__isnull=True)
+                        | Q(transfers__expires_at__gte=timezone.now())
+                    )
+                )
+            ).distinct()
         if query.get("requires_attention"):
             queryset = queryset.filter(requires_attention=True)
         if query.get("is_recently_active"):
@@ -410,6 +443,81 @@ class ChatSessionMarkReadView(ChatSessionObjectMixin, GenericAPIView):
             data={"marked_read_count": marked_read_count},
             message="Chat messages marked as read successfully.",
         )
+
+
+class BlockVisitorView(ChatSessionObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    chatbot_admin_only = True
+
+    def post(self, request, *args, **kwargs):
+        chat_session = self.get_chat_session()
+        if not chat_session.visitor_id:
+            return APIResponse.error(
+                errors={"visitor_id": ["This session has no visitor ID."]},
+                message="Visitor could not be blocked.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        blocking_agent = ChatbotUser.objects.filter(
+            chatbot=chat_session.chatbot,
+            user=request.user,
+            is_active=True,
+        ).first()
+        blocked_visitor, created = ChatbotBlockedVisitor.objects.get_or_create(
+            chatbot=chat_session.chatbot,
+            visitor_id=chat_session.visitor_id,
+            defaults={"blocked_by": blocking_agent},
+        )
+        return APIResponse.success(
+            data={
+                "visitor_id": blocked_visitor.visitor_id,
+                "blocked": True,
+                "already_blocked": not created,
+            },
+            message=(
+                "Visitor blocked successfully."
+                if created
+                else "Visitor is already blocked."
+            ),
+            status=(
+                status.HTTP_201_CREATED
+                if created
+                else status.HTTP_200_OK
+            ),
+        )
+
+
+class ChatSessionTranscriptView(ChatSessionObjectMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT
+    query_serializer_class = ChatSessionTranscriptQuerySerializer
+
+    def perform_content_negotiation(self, request, force=False):
+        # DRF reserves `format` for renderer overrides. This endpoint uses it
+        # as the requested download format and returns its own HttpResponse.
+        renderers = self.get_renderers()
+        renderer = renderers[0]
+        return renderer, renderer.media_type
+
+    def get(self, request, *args, **kwargs):
+        chat_session = self.get_chat_session()
+        file_format = self.get_query()["file_format"]
+        content = build_transcript(chat_session, file_format)
+        content_types = {
+            "csv": "text/csv; charset=utf-8",
+            "pdf": "application/pdf",
+        }
+        response = HttpResponse(
+            content,
+            content_type=content_types[file_format],
+        )
+        response["Content-Disposition"] = (
+            f'attachment; filename="chat-session-{chat_session.id}-transcript.'
+            f'{file_format}"'
+        )
+        response["X-Transcript-Message-Limit"] = "350"
+        return response
+
 
 class ChatSessionDeleteView(ChatSessionObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]

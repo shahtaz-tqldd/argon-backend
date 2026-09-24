@@ -233,6 +233,50 @@ class ChatSession(BaseMinModel):
         return f"{identity} with {self.chatbot}"
 
 
+class ChatbotBlockedVisitor(BaseMinModel):
+    """A visitor identity prevented from messaging a specific chatbot."""
+
+    chatbot = models.ForeignKey(
+        "chatbot.Chatbot",
+        on_delete=models.CASCADE,
+        related_name="blocked_visitors",
+    )
+    visitor_id = models.CharField(max_length=255)
+    blocked_by = models.ForeignKey(
+        "chatbot.ChatbotUser",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="blocked_chat_visitors",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["chatbot", "visitor_id"],
+                name="unique_blocked_visitor_per_chatbot",
+            ),
+            models.CheckConstraint(
+                condition=~Q(visitor_id=""),
+                name="blocked_visitor_id_not_blank",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        self.visitor_id = self.visitor_id.strip()
+        if not self.visitor_id:
+            raise ValidationError({"visitor_id": "Visitor ID cannot be blank."})
+        if self.blocked_by_id and self.blocked_by.chatbot_id != self.chatbot_id:
+            raise ValidationError(
+                {"blocked_by": "The blocking agent must belong to this chatbot."}
+            )
+
+    def __str__(self):
+        return f"{self.visitor_id} blocked from {self.chatbot}"
+
+
 class ChatMessage(BaseMinModel):
     """One ordered message in a chat session."""
     chat_session = models.ForeignKey(

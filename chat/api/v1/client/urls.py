@@ -5,6 +5,8 @@ session_patterns = [
     path("list/", views.ChatSessionListView.as_view(), name="chat-session-list"),
     path("details/", views.ChatSessionDetailView.as_view(), name="chat-session-detail"),
     path("mark-read/", views.ChatSessionMarkReadView.as_view(), name="chat-session-mark-read"),
+    path("block-visitor/", views.BlockVisitorView.as_view(), name="chat-session-block-visitor"),
+    path("transcript/", views.ChatSessionTranscriptView.as_view(), name="chat-session-transcript"),
     path("delete/", views.ChatSessionDeleteView.as_view(), name="chat-session-delete"),
 ]
 

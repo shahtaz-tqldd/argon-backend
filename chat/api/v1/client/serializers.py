@@ -23,7 +23,37 @@ class ChatSessionObjectQuerySerializer(ChatSessionQuerySerializer):
     session_id = serializers.UUIDField()
 
 
+class ChatSessionTranscriptQuerySerializer(ChatSessionObjectQuerySerializer):
+    format = serializers.ChoiceField(
+        choices=("csv", "pdf"),
+        required=False,
+    )
+    file_format = serializers.ChoiceField(
+        choices=("csv", "pdf"),
+        required=False,
+    )
+
+    def validate(self, attrs):
+        requested_format = attrs.get("format")
+        file_format = attrs.get("file_format")
+        if requested_format and file_format and requested_format != file_format:
+            raise serializers.ValidationError(
+                {"format": "format and file_format must match when both are provided."}
+            )
+        resolved_format = requested_format or file_format
+        if resolved_format is None:
+            raise serializers.ValidationError(
+                {"format": "This field is required."}
+            )
+        attrs["file_format"] = resolved_format
+        return attrs
+
+
 class ChatSessionListQuerySerializer(ChatSessionQuerySerializer):
+    channel = serializers.ChoiceField(
+        choices=("web_widget", "api", "messenger", "instagram", "whats_app"),
+        required=False,
+    )
     status = serializers.ChoiceField(
         choices=ChatSessionStatus.choices,
         required=False,
@@ -35,6 +65,7 @@ class ChatSessionListQuerySerializer(ChatSessionQuerySerializer):
     )
     requires_attention = serializers.BooleanField(required=False)
     is_recently_active = serializers.BooleanField(required=False)
+    my_session = serializers.BooleanField(required=False)
 
 
 class SessionOverviewQuerySerializer(ChatSessionQuerySerializer):
@@ -183,6 +214,7 @@ class ChatSessionListSerializer(serializers.ModelSerializer):
     last_message = serializers.SerializerMethodField()
     assigned_to = ChatSessionAgentSerializer(read_only=True)
     transfer_requested_to = serializers.SerializerMethodField()
+    is_blocked = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = ChatSession
@@ -197,6 +229,7 @@ class ChatSessionListSerializer(serializers.ModelSerializer):
             "status",
             "assigned_to",
             "transfer_requested_to",
+            "is_blocked",
             "requires_attention",
             "attention_reason",
             "last_activity_at",
@@ -236,9 +269,9 @@ class ChatSessionListSerializer(serializers.ModelSerializer):
         elif obj.last_message_sender == ChatMessageSenderType.AGENT:
             sender = obj.last_message_agent_name or "agent"
         elif obj.last_message_sender == ChatMessageSenderType.VISITOR:
-            sender = self.get_user_data(obj).get("name") or "visitor"
+            sender = self.get_user_data(obj).get("name") or "Visitor"
         elif obj.last_message_sender == ChatMessageSenderType.SYSTEM:
-            sender = "system"
+            sender = "System"
         else:
             sender = obj.last_message_sender
 
