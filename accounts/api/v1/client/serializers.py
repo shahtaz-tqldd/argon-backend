@@ -104,6 +104,16 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class UserDetailsSerializer(UserSerializer):
+    workspace_slug = serializers.SerializerMethodField()
+
+    class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + ("workspace_slug",)
+
+    def get_workspace_slug(self, user):
+        return user.owned_workspaces.values_list("slug", flat=True).first()
+
+
 class UserUpdateSerializer(serializers.ModelSerializer):
     phone = serializers.CharField(
         required=False,

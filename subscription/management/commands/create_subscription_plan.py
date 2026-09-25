@@ -106,6 +106,8 @@ PLAN_CONFIGURATIONS = (
 class Command(BaseCommand):
     help = "Create or update the default subscription plans and monthly prices."
 
+    # python manage.py create_subscription_plan
+
     @transaction.atomic
     def handle(self, *args, **options):
         created_plans = 0

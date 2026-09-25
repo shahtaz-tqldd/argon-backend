@@ -12,6 +12,7 @@ from accounts.api.v1.client.serializers import (
     RegisterSerializer,
     RequestPasswordResetSerializer,
     ResetPasswordSerializer,
+    UserDetailsSerializer,
     UserSerializer,
     UserUpdateSerializer,
     VerifyOTPSerializer,
@@ -140,7 +141,7 @@ class UserDetailsView(GenericAPIView):
     """Return the authenticated user's account and profile details."""
 
     permission_classes = [IsAuthenticated]
-    serializer_class = UserSerializer
+    serializer_class = UserDetailsSerializer
 
     def get(self, request, *args, **kwargs):
         return APIResponse.success(data=self.get_serializer(request.user).data)
