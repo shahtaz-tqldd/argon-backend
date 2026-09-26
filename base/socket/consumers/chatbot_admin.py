@@ -17,7 +17,7 @@ from chat.models import ChatSession
 from chat.services.messages import send_agent_message
 
 
-class DashboardConsumer(AsyncJsonWebsocketConsumer):
+class ChatbotAdminConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         self.group_names = set()
         self.session_ids = set()

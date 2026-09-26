@@ -1,6 +1,6 @@
 from datetime import datetime, time, timedelta
 
-from django.db.models import Count
+from django.db.models import Avg, Count, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -26,6 +26,7 @@ from lead_capture.api.v1.client.serializers import (
 )
 from lead_capture.models import Lead, LeadCaptureConfig, LeadNote
 from lead_capture.services.exports import build_lead_export
+from lead_capture.utils.choices import LeadStatusType
 from subscription.choices import PlanFeature
 
 
@@ -214,6 +215,82 @@ class LeadListView(
         return self.paginated_response(
             queryset,
             message="Leads fetched successfully.",
+        )
+
+
+class LeadStatsAPIView(LeadCaptureChatbotMixin, GenericAPIView):
+    """Summary metrics for leads collected by a chatbot."""
+
+    permission_classes = [IsChatbotUser]
+    required_chatbot_permission = ChatbotPermissionTypes.LEAD_MANAGEMENT
+    hot_lead_score_threshold = 75
+
+    @staticmethod
+    def _percentage(value, total):
+        if not total:
+            return 0.0
+        return round((value / total) * 100, 2)
+
+    def get(self, request, *args, **kwargs):
+        leads = Lead.objects.filter(chatbot=self.get_chatbot())
+        summary = leads.aggregate(
+            total_leads=Count("id"),
+            hot_leads=Count(
+                "id",
+                filter=Q(lead_score__gt=self.hot_lead_score_threshold),
+            ),
+            scored_leads=Count("lead_score"),
+            average_lead_score=Avg("lead_score"),
+        )
+        total_leads = summary["total_leads"]
+
+        channel_counts = list(
+            leads.values("source")
+            .annotate(count=Count("id"))
+            .order_by("-count", "source")
+        )
+        leads_by_channel = [
+            {
+                "channel": item["source"] or "unknown",
+                "count": item["count"],
+                "percentage": self._percentage(item["count"], total_leads),
+            }
+            for item in channel_counts
+        ]
+
+        status_counts = {
+            item["status"]: item["count"]
+            for item in leads.values("status").annotate(count=Count("id"))
+        }
+        leads_by_status = [
+            {
+                "status": status_value,
+                "label": status_label,
+                "count": status_counts.get(status_value, 0),
+            }
+            for status_value, status_label in LeadStatusType.choices
+        ]
+
+        average_score = summary["average_lead_score"]
+        return APIResponse.success(
+            data={
+                "total_leads": total_leads,
+                "hot_leads": summary["hot_leads"],
+                "hot_lead_percentage": self._percentage(
+                    summary["hot_leads"],
+                    total_leads,
+                ),
+                "scored_leads": summary["scored_leads"],
+                "unscored_leads": total_leads - summary["scored_leads"],
+                "average_lead_score": (
+                    round(float(average_score), 2)
+                    if average_score is not None
+                    else None
+                ),
+                "leads_by_channel": leads_by_channel,
+                "leads_by_status": leads_by_status,
+            },
+            message="Lead stats fetched successfully.",
         )
 
 

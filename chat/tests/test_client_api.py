@@ -652,6 +652,45 @@ class ChatSessionClientAPITests(APITestCase):
             ):
                 send_visitor_message(blocked_session, content="Blocked message")
 
+    def test_agent_cannot_send_message_to_blocked_visitor(self):
+        session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            visitor_id="blocked-agent-message-visitor",
+            assigned_to=self.agent,
+            ai_enabled=False,
+        )
+        ChatSessionTakeover.objects.create(
+            chat_session=session,
+            agent=self.agent,
+        )
+        ChatbotBlockedVisitor.objects.create(
+            chatbot=self.chatbot,
+            visitor_id=session.visitor_id,
+            blocked_by=self.agent,
+        )
+
+        response = self.client.post(
+            reverse("chat-message-send"),
+            {"content": "This message must not be sent."},
+            format="json",
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["message"],
+            "Cannot send a message to a blocked visitor.",
+        )
+        self.assertFalse(
+            ChatMessage.objects.filter(
+                chat_session=session,
+                sender_type=ChatMessageSenderType.AGENT,
+            ).exists()
+        )
+
     def test_non_admin_cannot_block_visitor(self):
         member_user = User.objects.create_user(
             email="regular-chat-member@example.com",

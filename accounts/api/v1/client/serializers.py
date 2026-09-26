@@ -14,7 +14,6 @@ from accounts.services.firebase import (
     FirebaseVerificationError,
     verify_firebase_id_token,
 )
-from accounts.services.onboarding import provision_direct_signup
 from accounts.services.password import (
     resolve_password_reset_user,
     send_user_password_reset_email,
@@ -284,7 +283,6 @@ class RegisterSerializer(serializers.ModelSerializer):
                 profile = get_or_create_profile(user)
                 profile.phone = phone
                 profile.save(update_fields=["phone"])
-                provision_direct_signup(user)
         except IntegrityError as exc:
             if User.objects.filter(email__iexact=validated_data["email"]).exists():
                 raise serializers.ValidationError(
@@ -439,7 +437,6 @@ class GoogleLoginSerializer(serializers.Serializer):
         email = self.validated_data["email"]
         firebase_uid = self.validated_data["firebase_uid"]
         created_account = False
-        is_new_or_unclaimed_account = False
 
         try:
             with transaction.atomic():
@@ -522,8 +519,7 @@ class GoogleLoginSerializer(serializers.Serializer):
                 )
                 if profile_update_fields:
                     profile.save(update_fields=profile_update_fields)
-                if is_new_or_unclaimed_account:
-                    provision_direct_signup(user)
+
         except IntegrityError as exc:
             raise serializers.ValidationError(
                 {"error": "Could not complete Google login. Please try again."}

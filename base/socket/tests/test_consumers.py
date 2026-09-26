@@ -10,16 +10,16 @@ from channels.layers import get_channel_layer
 from django.contrib.auth.models import AnonymousUser
 from django.test import SimpleTestCase, override_settings
 
-from base.socket.consumers.dashboard import DashboardConsumer
-from base.socket.consumers.widget import VisitorChatSessionConsumer
+from base.socket.consumers.chatbot_admin import ChatbotAdminConsumer
+from base.socket.consumers.widget import ChatbotWidgetConsumer
 from base.socket.services.broadcaster import publish_session_event
 from base.socket.services.groups import chatbot_dashboard_group, chat_session_dashboard_group
 
 
-class DashboardConsumerTests(SimpleTestCase):
+class ChatbotAdminConsumerTests(SimpleTestCase):
     def setUp(self):
         self.session_id = str(uuid4())
-        self.consumer = DashboardConsumer()
+        self.consumer = ChatbotAdminConsumer()
         self.consumer.scope = {"user": SimpleNamespace(id=uuid4())}
         self.consumer.send_json = AsyncMock()
         self.consumer.close = AsyncMock()
@@ -95,7 +95,7 @@ class DashboardConsumerTests(SimpleTestCase):
         self.consumer.group_names = {"notifications.global", "notifications.workspace.revoked"}
         self.consumer.session_ids = {self.session_id}
         self.consumer.get_session_access.return_value = None
-        result = async_to_sync(DashboardConsumer.refresh_access)(self.consumer)
+        result = async_to_sync(ChatbotAdminConsumer.refresh_access)(self.consumer)
         self.assertTrue(result)
         self.assertEqual(self.consumer.group_names, {"notifications.global"})
         self.assertFalse(self.consumer.session_ids)
@@ -133,10 +133,10 @@ class DashboardDeliveryTests(SimpleTestCase):
             await consumer.channel_layer.group_add(group, consumer.channel_name)
             return True
 
-        with patch.object(DashboardConsumer, "refresh_access", refresh), patch.object(
-            DashboardConsumer, "update_presence", AsyncMock(return_value=True)
-        ), patch.object(DashboardConsumer, "get_session_access", AsyncMock(return_value=True)):
-            client = ApplicationCommunicator(DashboardConsumer.as_asgi(), {
+        with patch.object(ChatbotAdminConsumer, "refresh_access", refresh), patch.object(
+            ChatbotAdminConsumer, "update_presence", AsyncMock(return_value=True)
+        ), patch.object(ChatbotAdminConsumer, "get_session_access", AsyncMock(return_value=True)):
+            client = ApplicationCommunicator(ChatbotAdminConsumer.as_asgi(), {
                 "type": "websocket", "path": "/ws/dashboard/", "headers": [],
                 "user": SimpleNamespace(id=uuid4(), is_authenticated=True, is_active=True),
             })
@@ -175,7 +175,7 @@ class DashboardDeliveryTests(SimpleTestCase):
                 },
             },
         }
-        consumers = [DashboardConsumer(), DashboardConsumer()]
+        consumers = [ChatbotAdminConsumer(), ChatbotAdminConsumer()]
         for consumer in consumers:
             consumer.get_session_access = AsyncMock(return_value=True)
             consumer.send_json = AsyncMock()
@@ -193,7 +193,7 @@ class DashboardDeliveryTests(SimpleTestCase):
 
 class WidgetPreservationTests(SimpleTestCase):
     def test_widget_presence_event_exposes_only_the_count(self):
-        consumer = VisitorChatSessionConsumer()
+        consumer = ChatbotWidgetConsumer()
         consumer.send_json = AsyncMock()
         async_to_sync(consumer.widget_presence_event)({
             "event": {
@@ -207,7 +207,7 @@ class WidgetPreservationTests(SimpleTestCase):
         })
 
     def test_widget_sanitizes_sender_identity_and_hides_internal_transfer_events(self):
-        consumer = VisitorChatSessionConsumer()
+        consumer = ChatbotWidgetConsumer()
         consumer.send_json = AsyncMock()
         event = {"event": {"type": "message.created", "data": {"sender": {
             "id": "agent", "user_id": "user", "email": "private@example.com",
@@ -223,7 +223,7 @@ class WidgetPreservationTests(SimpleTestCase):
         consumer.send_json.assert_not_awaited()
 
     def test_widget_hides_internal_system_messages(self):
-        consumer = VisitorChatSessionConsumer()
+        consumer = ChatbotWidgetConsumer()
         consumer.send_json = AsyncMock()
         event = {
             "event": {
@@ -241,7 +241,7 @@ class WidgetPreservationTests(SimpleTestCase):
         consumer.send_json.assert_not_awaited()
 
     def test_widget_keeps_resolved_conversation_open(self):
-        consumer = VisitorChatSessionConsumer()
+        consumer = ChatbotWidgetConsumer()
         consumer.send_json = AsyncMock()
         event = {
             "event": {
@@ -260,5 +260,5 @@ class WidgetPreservationTests(SimpleTestCase):
     def test_widget_rejects_token_bound_to_another_conversation(self, chatbot, origin, decode):
         chatbot.return_value = SimpleNamespace(id=uuid4())
         decode.return_value = {"session_id": str(uuid4()), "chatbot_id": str(chatbot.return_value.id)}
-        result = async_to_sync(VisitorChatSessionConsumer().get_access)("key", uuid4(), "token", "https://example.com")
+        result = async_to_sync(ChatbotWidgetConsumer().get_access)("key", uuid4(), "token", "https://example.com")
         self.assertEqual(result, (None, 4403))

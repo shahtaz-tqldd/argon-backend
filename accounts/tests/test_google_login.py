@@ -26,7 +26,6 @@ class GoogleLoginSerializerTests(TestCase):
         return serializer
 
     @patch("accounts.api.v1.client.serializers.complete_email_verification")
-    @patch("accounts.api.v1.client.serializers.provision_direct_signup")
     def test_first_google_login_sets_name_and_avatar(self, provision, complete):
         serializer = self._serializer(
             email="new-google-user@example.com",

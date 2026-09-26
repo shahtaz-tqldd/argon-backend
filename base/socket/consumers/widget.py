@@ -26,7 +26,7 @@ from chat.tasks import dispatch_ai_reply, is_ai_reply_enabled
 from chat.utils.choices import ChatSessionStatus
 
 
-class VisitorChatSessionConsumer(AsyncJsonWebsocketConsumer):
+class ChatbotWidgetConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         public_key = self.scope["url_route"]["kwargs"]["public_key"]
         session_id = self.scope["url_route"]["kwargs"]["session_id"]

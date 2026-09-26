@@ -124,6 +124,94 @@ class LeadCaptureClientAPITests(APITestCase):
         self.assertEqual(len(response.data["data"]), 2)
         self.assertIn("notes_count", response.data["data"][0])
 
+    def test_lead_stats_returns_totals_and_breakdowns_for_chatbot(self):
+        Lead.objects.bulk_create(
+            [
+                Lead(
+                    chatbot=self.chatbot,
+                    status="new",
+                    lead_score=75,
+                    source="widget",
+                ),
+                Lead(
+                    chatbot=self.chatbot,
+                    status="qualified",
+                    lead_score=76,
+                    source="widget",
+                ),
+                Lead(
+                    chatbot=self.chatbot,
+                    status="converted",
+                    lead_score=100,
+                    source="campaign",
+                ),
+                Lead(
+                    chatbot=self.chatbot,
+                    status="new",
+                    lead_score=None,
+                    source="",
+                ),
+            ]
+        )
+        other_chatbot = Chatbot.objects.create(
+            workspace=self.workspace,
+            chatbot_name="Other Lead Bot",
+            created_by=self.user,
+        )
+        Lead.objects.create(
+            chatbot=other_chatbot,
+            lead_score=99,
+            source="other",
+        )
+
+        response = self.client.get(self.url("lead-stats"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["data"]
+        self.assertEqual(data["total_leads"], 4)
+        self.assertEqual(data["hot_leads"], 2)
+        self.assertEqual(data["hot_lead_percentage"], 50.0)
+        self.assertEqual(data["scored_leads"], 3)
+        self.assertEqual(data["unscored_leads"], 1)
+        self.assertEqual(data["average_lead_score"], 83.67)
+        self.assertEqual(
+            data["leads_by_channel"],
+            [
+                {"channel": "widget", "count": 2, "percentage": 50.0},
+                {"channel": "unknown", "count": 1, "percentage": 25.0},
+                {"channel": "campaign", "count": 1, "percentage": 25.0},
+            ],
+        )
+        self.assertEqual(
+            {
+                item["status"]: item["count"]
+                for item in data["leads_by_status"]
+            },
+            {
+                "new": 2,
+                "qualified": 1,
+                "contacted": 0,
+                "converted": 1,
+                "disqualified": 0,
+            },
+        )
+
+    def test_lead_stats_returns_defined_empty_values(self):
+        response = self.client.get(self.url("lead-stats"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["data"]
+        self.assertEqual(data["total_leads"], 0)
+        self.assertEqual(data["hot_leads"], 0)
+        self.assertEqual(data["hot_lead_percentage"], 0.0)
+        self.assertEqual(data["scored_leads"], 0)
+        self.assertEqual(data["unscored_leads"], 0)
+        self.assertIsNone(data["average_lead_score"])
+        self.assertEqual(data["leads_by_channel"], [])
+        self.assertTrue(
+            all(item["count"] == 0 for item in data["leads_by_status"])
+        )
+
     def test_all_leads_can_be_exported_as_csv_without_a_date_range(self):
         Lead.objects.create(
             chatbot=self.chatbot,

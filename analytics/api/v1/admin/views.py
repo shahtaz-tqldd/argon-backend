@@ -56,16 +56,6 @@ class AIUsageStatsAPIView(GenericAPIView):
             total_message=Count("id"),
             total_cost=Sum("cost", default=Decimal("0")),
             total_tokens=Sum("tokens", default=0),
-            trip_planning_cost=Sum(
-                "cost",
-                filter=Q(usage_type=AIUsageType.TRIP_PLANNING),
-                default=Decimal("0"),
-            ),
-            trip_planning_tokens=Sum(
-                "tokens",
-                filter=Q(usage_type=AIUsageType.TRIP_PLANNING),
-                default=0,
-            ),
             chat_cost=Sum(
                 "cost",
                 filter=Q(usage_type=AIUsageType.CHAT),
@@ -76,16 +66,6 @@ class AIUsageStatsAPIView(GenericAPIView):
                 filter=Q(usage_type=AIUsageType.CHAT),
                 default=0,
             ),
-            trip_chat_cost=Sum(
-                "cost",
-                filter=Q(usage_type=AIUsageType.TRIP_CHAT),
-                default=Decimal("0"),
-            ),
-            trip_chat_tokens=Sum(
-                "tokens",
-                filter=Q(usage_type=AIUsageType.TRIP_CHAT),
-                default=0,
-            ),
         )
 
         return APIResponse.success(
@@ -93,17 +73,9 @@ class AIUsageStatsAPIView(GenericAPIView):
                 "total_message": totals["total_message"],
                 "total_cost": float(totals["total_cost"]),
                 "total_tokens": totals["total_tokens"],
-                "trip_planning": {
-                    "cost": float(totals["trip_planning_cost"]),
-                    "tokens": totals["trip_planning_tokens"],
-                },
                 "chat": {
                     "cost": float(totals["chat_cost"]),
                     "tokens": totals["chat_tokens"],
-                },
-                "trip_chat": {
-                    "cost": float(totals["trip_chat_cost"]),
-                    "tokens": totals["trip_chat_tokens"],
                 },
             },
             message="AI usage stats fetched successfully.",

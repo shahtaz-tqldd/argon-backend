@@ -13,6 +13,7 @@ leads = [
     path("details/", views.LeadDetailView.as_view(), name="lead-detail"),
     path("update/", views.LeadUpdateView.as_view(), name="lead-update"),
     path("export/", views.ExportLeadAPIView.as_view(), name="export-lead-data"),
+    path("stats/", views.LeadStatsAPIView.as_view(), name="lead-stats"),
 ]
 
 lead_notes = [

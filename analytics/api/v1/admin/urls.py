@@ -1,12 +1,28 @@
 from django.urls import path
 
-from analytics.api.v1.admin.views import (
-    AIUsageStatsAPIView,
-    UserGrowthAPIView,
+from analytics.api.v1.admin.dashboard import (
+    AIUsageAnalyticsAPIView,
+    ConversationAnalyticsAPIView,
+    GrowthAnalyticsAPIView,
+    PlatformAnalyticsAPIView,
 )
 
 
 urlpatterns = [
-    path("ai-usage/", AIUsageStatsAPIView.as_view(), name="analytics-ai-usage"),
-    path("user-growth/", UserGrowthAPIView.as_view(), name="analytics-user-growth"),
+    path(
+        "ai-usage/",
+        AIUsageAnalyticsAPIView.as_view(),
+        name="analytics-ai-usage",
+    ),
+    path(
+        "platform/",
+        PlatformAnalyticsAPIView.as_view(),
+        name="analytics-platform",
+    ),
+    path("growth/", GrowthAnalyticsAPIView.as_view(), name="analytics-growth"),
+    path(
+        "conversations/",
+        ConversationAnalyticsAPIView.as_view(),
+        name="analytics-conversations",
+    ),
 ]

@@ -1,7 +1,12 @@
 from django.core.exceptions import ValidationError
 from django.db import transaction
 
-from chat.models import ChatMessage, ChatSession, ChatSessionTakeover
+from chat.models import (
+    ChatbotBlockedVisitor,
+    ChatMessage,
+    ChatSession,
+    ChatSessionTakeover,
+)
 from chat.utils.choices import ChatMessageSenderType, ChatSessionStatus
 
 
@@ -58,6 +63,7 @@ def send_agent_message(chat_session, agent, *, content, metadata=None):
             ChatSessionStatus.CLOSED,
         }:
             raise ValidationError("Cannot reply to a resolved or closed session.")
+
         active_takeover = ChatSessionTakeover.objects.filter(
             chat_session=chat_session,
             agent=agent,
@@ -68,6 +74,14 @@ def send_agent_message(chat_session, agent, *, content, metadata=None):
         if active_takeover is None:
             raise ValidationError(
                 "You must be the active takeover agent before replying."
+            )
+
+        if ChatbotBlockedVisitor.objects.filter(
+            chatbot_id=chat_session.chatbot_id,
+            visitor_id=chat_session.visitor_id,
+        ).exists():
+            raise ValidationError(
+                "Cannot send a message to a blocked visitor."
             )
 
         message = ChatMessage(
