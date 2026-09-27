@@ -10,18 +10,6 @@ chatbot = [
     path("details/", views.ChatbotDetailView.as_view(), name="chatbot-detail"),
     path("update/", views.ChatbotUpdateView.as_view(), name="chatbot-update"),
     path("delete/", views.ChatbotDeleteView.as_view(), name="chatbot-delete"),
-
-
-]
-
-# chatbot visistor
-chatbot_visitor = [
-    path("",views.PublicChatbotView.as_view(),name="public-chatbot"),
-    path("visitors/<str:visitor_id>/", views.PublicVisitorDetailView.as_view(), name="public-visitor-detail"),
-    path("visitors/<str:visitor_id>/sessions/", views.PublicVisitorSessionListView.as_view(), name="public-visitor-sessions"),
-    path("conversations/",views.VisitorConversationView.as_view(), name="visitor-conversation"),
-    path("conversations/<uuid:session_id>/messages/", views.VisitorMessageCreateView.as_view(), name="visitor-message-create"),
-    path("conversations/<uuid:session_id>/appointments/", views.VisitorAppointmentCreateView.as_view(), name="visitor-appointment-create"),
 ]
 
 # chatbot widget
@@ -34,7 +22,6 @@ chatbot_widget = [
 activity_logs = [
     path("", views.ChatbotActivityLogListView.as_view(), name="chatbot-activity-logs"),
 ]
-
 
 # chatbot team
 chatbot_team = [
@@ -50,6 +37,5 @@ urlpatterns = [
     path("", include(chatbot)),
     path("", include(chatbot_widget)),
     path("team/", include(chatbot_team)),
-    path("<str:public_key>/", include(chatbot_visitor)),
     path("activity-logs/", include(activity_logs)),
 ]

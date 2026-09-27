@@ -2,13 +2,9 @@ from uuid import uuid4
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import OuterRef, Q, Subquery
+from django.db.models import Count, OuterRef, Q, Subquery
 from django.http import Http404
-from django.shortcuts import get_object_or_404
 
-from chatbot.models import Chatbot, ChatbotAllowedOrigin
-from chatbot.utils.choices import ChatbotStatusTypes
-from chatbot.utils.validation import normalize_widget_origin
 from chat.models import ChatbotBlockedVisitor, ChatMessage, ChatSession
 from chat.services.events import publish_session_event
 from chat.services.visitor_tokens import (
@@ -23,48 +19,9 @@ from chat.utils.choices import (
 from lead_capture.models import Lead, LeadCaptureConfig
 
 
-PUBLIC_CHATBOT_EXCLUDED_STATUSES = (
-    ChatbotStatusTypes.DISABLED,
-    ChatbotStatusTypes.DISABLED_BY_ADMIN,
-)
 RESUMABLE_SESSION_STATUSES = (
     ChatSessionStatus.OPEN,
 )
-
-
-def get_public_chatbot(public_key):
-    return get_object_or_404(
-        Chatbot.objects.select_related(
-            "workspace",
-            "widget_settings",
-            "lead_capture_config",
-            "appointment_booking_config",
-        )
-        .filter(
-            is_deleted=False,
-            workspace__is_active=True,
-            widget_settings__is_enabled=True,
-        )
-        .exclude(status__in=PUBLIC_CHATBOT_EXCLUDED_STATUSES),
-        widget_settings__public_key=public_key,
-    )
-
-
-def require_allowed_widget_origin(chatbot, origin):
-    configured_origins = ChatbotAllowedOrigin.objects.filter(chatbot=chatbot)
-    if not configured_origins.exists():
-        return
-    if not origin:
-        raise PermissionDenied("An allowed Origin header is required.")
-    try:
-        normalized_origin = normalize_widget_origin(origin)
-    except ValidationError as exc:
-        raise PermissionDenied("The widget origin is not allowed.") from exc
-    if not configured_origins.filter(
-        origin=normalized_origin,
-        is_active=True,
-    ).exists():
-        raise PermissionDenied("The widget origin is not allowed.")
 
 
 def _get_visitor_sessions(chatbot, visitor_id):
@@ -110,14 +67,23 @@ def get_public_visitor_sessions(chatbot, visitor_id):
     _anchor, _lead, sessions = _get_visitor_sessions(chatbot, visitor_id)
     last_message = (
         ChatMessage.objects.filter(chat_session=OuterRef("pk"))
-        .exclude(metadata__visibility="internal")
+        .exclude(metadata__contains={"visibility": "internal"})
         .order_by("-created_at", "-id")
     )
     return sessions.select_related("lead", "chatbot").annotate(
+        message_count=Count(
+            "messages",
+            filter=~Q(
+                messages__metadata__contains={"visibility": "internal"}
+            ),
+        ),
         last_message_sender_type=Subquery(
             last_message.values("sender_type")[:1]
         ),
         last_message_content=Subquery(last_message.values("content")[:1]),
+        last_message_created_at=Subquery(
+            last_message.values("created_at")[:1]
+        ),
         last_message_agent_name=Subquery(
             last_message.values("sender__user__name")[:1]
         ),

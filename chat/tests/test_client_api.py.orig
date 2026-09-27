@@ -1163,7 +1163,6 @@ class ChatSessionClientAPITests(APITestCase):
         message = ChatMessage.objects.get(
             chat_session=session,
             sender_type=ChatMessageSenderType.SYSTEM,
-            metadata__contains={"visibility": "internal"},
         )
         self.assertEqual(message.metadata["event_type"], "session.released")
         self.assertTrue(message.metadata["is_forced"])

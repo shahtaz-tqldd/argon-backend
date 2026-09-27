@@ -35,12 +35,19 @@ def serialize_message_event(message):
     }
 
 
-def create_system_message(chat_session, *, content, event_type, metadata=None):
-    """Append an auditable lifecycle event to a conversation's timeline."""
+def create_system_message(
+    chat_session,
+    *,
+    content,
+    event_type,
+    metadata=None,
+    visibility="internal",
+):
+    """Append an auditable lifecycle event to a conversation timeline."""
     event_metadata = {
         "event_type": event_type,
-        "visibility": "internal",
         **(metadata or {}),
+        "visibility": visibility,
     }
     message = ChatMessage(
         chat_session=chat_session,
@@ -51,6 +58,26 @@ def create_system_message(chat_session, *, content, event_type, metadata=None):
     message.full_clean()
     message.save()
     return message
+
+
+def create_visitor_takeover_message(
+    chat_session,
+    *,
+    system_message_type,
+    actor_name,
+    event_type,
+):
+    """Create a visitor-safe ownership message without private audit data."""
+    return create_system_message(
+        chat_session,
+        content=f"{actor_name} took over the conversation.",
+        event_type=event_type,
+        visibility="public",
+        metadata={
+            "system_message_type": system_message_type,
+            "actor_name": actor_name,
+        },
+    )
 
 
 def send_agent_message(chat_session, agent, *, content, metadata=None):

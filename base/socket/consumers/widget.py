@@ -13,11 +13,12 @@ from base.socket.services.groups import chat_session_group, chatbot_widget_group
 from base.socket.services.presence import chatbot_online_count
 from chat.models import ChatSession
 from chat.services.events import publish_session_event
-from chat.services.visitor import (
+from chatbot.services.chatbot_public import (
     get_public_chatbot,
     require_allowed_widget_origin,
-    send_visitor_message,
 )
+from chat.services.chat_public import send_visitor_message
+
 from chat.services.visitor_tokens import (
     InvalidConversationToken,
     decode_conversation_token,

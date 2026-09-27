@@ -485,10 +485,16 @@ class ChatbotClientAPITests(APITestCase):
         third_session = ChatSession.objects.get(
             pk=third_response.data["data"]["session"]["id"]
         )
-        ChatMessage.objects.create(
+        first_message = ChatMessage.objects.create(
             chat_session=first_session,
             sender_type=ChatMessageSenderType.AI,
             content="How can I help?",
+        )
+        ChatMessage.objects.create(
+            chat_session=first_session,
+            sender_type=ChatMessageSenderType.SYSTEM,
+            content="Internal routing note",
+            metadata={"visibility": "internal"},
         )
         self.member.name = "Support Agent"
         self.member.save(update_fields=["name"])
@@ -496,13 +502,13 @@ class ChatbotClientAPITests(APITestCase):
             chatbot=self.chatbot,
             user=self.member,
         )
-        ChatMessage.objects.create(
+        second_message = ChatMessage.objects.create(
             chat_session=second_session,
             sender_type=ChatMessageSenderType.AGENT,
             sender=agent,
             content="I can take it from here.",
         )
-        ChatMessage.objects.create(
+        third_message = ChatMessage.objects.create(
             chat_session=third_session,
             sender_type=ChatMessageSenderType.VISITOR,
             content="I need some help.",
@@ -546,19 +552,37 @@ class ChatbotClientAPITests(APITestCase):
         sessions_by_id = {
             item["id"]: item for item in sessions_response.data["data"]
         }
+        first_session_data = sessions_by_id[str(first_session.id)]
+        self.assertEqual(
+            set(first_session_data),
+            {
+                "id",
+                "status",
+                "created_at",
+                "last_activity_at",
+                "message_count",
+                "last_message",
+            },
+        )
+        self.assertEqual(first_session_data["message_count"], 1)
         self.assertEqual(
             sessions_by_id[str(first_session.id)]["last_message"],
             {
                 "content": "How can I help?",
                 "sender": self.chatbot.chatbot_name,
+                "created_at": timezone.localtime(
+                    first_message.created_at
+                ).isoformat(),
             },
         )
         self.assertEqual(
             sessions_by_id[str(second_session.id)]["last_message"],
             {
                 "content": "I can take it from here.",
-                "sender": "Agent",
-                "agent_name": self.member.name,
+                "sender": self.member.name,
+                "created_at": timezone.localtime(
+                    second_message.created_at
+                ).isoformat(),
             },
         )
         self.assertEqual(
@@ -566,6 +590,9 @@ class ChatbotClientAPITests(APITestCase):
             {
                 "content": "I need some help.",
                 "sender": "You",
+                "created_at": timezone.localtime(
+                    third_message.created_at
+                ).isoformat(),
             },
         )
 
@@ -650,8 +677,8 @@ class ChatbotClientAPITests(APITestCase):
         )
         self.assertFalse(ChatMessage.objects.filter(chat_session=session).exists())
 
-    @patch("chatbot.api.v1.client.views.record_ai_usage")
-    @patch("chatbot.api.v1.client.views.AgentClient")
+    @patch("appointment_booking.api.v1.public.views.record_ai_usage")
+    @patch("appointment_booking.api.v1.public.views.AgentClient")
     @patch("appointment_booking.services.available_slots")
     def test_visitor_can_book_available_slot_and_notify_agent(
         self,

@@ -42,6 +42,13 @@ class PublicWidgetCORSAPITests(SimpleTestCase):
 
         self.assertEqual(response["Access-Control-Allow-Origin"], origin)
 
+    def test_visitor_appointment_api_enables_widget_cors(self):
+        session_id = "d22726eb-533f-4608-bef7-22159e517b0d"
+        self.assert_widget_cors_enabled(
+            f"/api/v1/chatbots/{self.public_key}/conversations/"
+            f"{session_id}/appointments/"
+        )
+
     def test_unrelated_chatbot_api_does_not_enable_widget_cors(self):
         request = self.request_factory.get(
             f"/api/v1/chatbots/{self.public_key}/private/"

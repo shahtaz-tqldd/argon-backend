@@ -675,13 +675,6 @@ def resolve_session(chat_session, agent, resolution_type, note=""):
                 "resolution_note": note,
             },
         )
-        if is_resolved and chat_session.ai_enabled:
-            create_visitor_takeover_message(
-                chat_session,
-                system_message_type="taken_over_by_ai",
-                actor_name=chat_session.chatbot.chatbot_name,
-                event_type="session.resolved",
-            )
         transaction.on_commit(
             lambda: publish_session_event(
                 chat_session.id,

@@ -29,10 +29,26 @@ v1_admin_urls = [
     # path("vector-store/", include("vector_store.api.v1.admin.urls")),
 ]
 
+v1_public_urls = [
+    path(
+        "chatbots/<str:public_key>/",
+        include("chatbot.api.v1.public.urls"),
+    ),
+    path(
+        "chatbots/<str:public_key>/",
+        include("chat.api.v1.public.urls"),
+    ),
+    path(
+        "chatbots/<str:public_key>/",
+        include("appointment_booking.api.v1.public.urls"),
+    ),
+]
+
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/", include(v1_client_urls)),
     path("api/v1/admin/", include(v1_admin_urls)),
+    path("api/v1/", include(v1_public_urls)),
 ]
 
 
