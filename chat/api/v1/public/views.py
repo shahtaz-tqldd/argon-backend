@@ -7,17 +7,20 @@ from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny
 
+from app.utils.pagination import CustomPagination
 from app.utils.response import APIResponse
 from chat.api.v1.public.serializers import (
     PublicVisitorSessionSerializer,
-    VisitorConversationCreateSerializer,
+    VisitorSessionCreateSerializer,
+    VisitorConversationQuerySerializer,
     VisitorMessageCreateSerializer,
     VisitorMessageSerializer,
 )
 from chat.models import ChatMessage
 from chat.services.events import publish_session_event
 from chat.services.chat_public import (
-    create_or_resume_conversation,
+    create_public_visitor_session,
+    get_visitor_conversation,
     get_public_visitor_sessions,
     get_visitor_chat_session,
     send_visitor_message,
@@ -62,30 +65,17 @@ class PublicVisitorSessionListView(GenericAPIView):
     authentication_classes = []
     serializer_class = PublicVisitorSessionSerializer
 
-    def get(self, request, public_key, visitor_id, *args, **kwargs):
-        chatbot = get_public_chatbot(public_key)
-        require_allowed_widget_origin(
-            chatbot,
-            request.headers.get("Origin", ""),
-        )
-        sessions = get_public_visitor_sessions(chatbot, visitor_id)
-        return APIResponse.success(
-            data=self.get_serializer(sessions, many=True).data,
-            message="Visitor sessions fetched successfully.",
-        )
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return VisitorSessionCreateSerializer
+        return super().get_serializer_class()
 
-
-class VisitorConversationView(GenericAPIView):
-    permission_classes = [AllowAny]
-    authentication_classes = []
-    serializer_class = VisitorConversationCreateSerializer
-
-    def post(self, request, public_key, *args, **kwargs):
+    def post(self, request, public_key, visitor_id, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
             return validation_error_response(
                 serializer.errors,
-                "Conversation could not be started.",
+                "Visitor session could not be created.",
             )
         chatbot = get_public_chatbot(public_key)
         require_allowed_widget_origin(
@@ -93,31 +83,22 @@ class VisitorConversationView(GenericAPIView):
             request.headers.get("Origin", ""),
         )
         try:
-            chat_session, resumed = create_or_resume_conversation(
+            chat_session = create_public_visitor_session(
                 chatbot,
+                visitor_id,
                 **serializer.validated_data,
             )
-        except InvalidConversationToken as exc:
-            return APIResponse.error(
-                errors={"conversation_token": [str(exc)]},
-                message=str(exc),
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
         except DjangoValidationError as exc:
-            errors = getattr(exc, "message_dict", {"lead_data": exc.messages})
+            errors = getattr(
+                exc,
+                "message_dict",
+                {"non_field_errors": exc.messages},
+            )
             return validation_error_response(
                 errors,
-                "Conversation could not be started.",
+                "Visitor session could not be created.",
             )
 
-        messages = list(
-            ChatMessage.objects.filter(chat_session=chat_session)
-            .exclude(metadata__contains={"visibility": "internal"})
-            .select_related("sender__user__profile")
-            .prefetch_related("attachments")
-            .order_by("-created_at")[:50]
-        )
-        messages.reverse()
         token = issue_conversation_token(chat_session)
         scheme = "wss" if request.is_secure() else "ws"
         websocket_base_url = settings.WIDGET_WEBSOCKET_BASE_URL.rstrip("/")
@@ -143,18 +124,77 @@ class VisitorConversationView(GenericAPIView):
                     f"{websocket_base_url}{websocket_path}"
                     f"?{urlencode({'token': token})}"
                 ),
-                "resumed": resumed,
-                "messages": VisitorMessageSerializer(
-                    messages,
-                    many=True,
-                ).data,
             },
-            message=(
-                "Conversation resumed successfully."
-                if resumed
-                else "Conversation created successfully."
-            ),
-            status=(status.HTTP_200_OK if resumed else status.HTTP_201_CREATED),
+            message="Visitor session created successfully.",
+            status=status.HTTP_201_CREATED,
+        )
+
+    def get(self, request, public_key, visitor_id, *args, **kwargs):
+        chatbot = get_public_chatbot(public_key)
+        require_allowed_widget_origin(
+            chatbot,
+            request.headers.get("Origin", ""),
+        )
+        sessions = get_public_visitor_sessions(chatbot, visitor_id)
+        return APIResponse.success(
+            data=self.get_serializer(sessions, many=True).data,
+            message="Visitor sessions fetched successfully.",
+        )
+
+
+class VisitorConversationView(GenericAPIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    serializer_class = VisitorConversationQuerySerializer
+    pagination_class = CustomPagination
+
+    def get(self, request, public_key, *args, **kwargs):
+        serializer = self.get_serializer(data=request.query_params)
+        if not serializer.is_valid():
+            return validation_error_response(
+                serializer.errors,
+                "Conversation messages could not be fetched.",
+            )
+        chatbot = get_public_chatbot(public_key)
+        require_allowed_widget_origin(
+            chatbot,
+            request.headers.get("Origin", ""),
+        )
+        try:
+            chat_session = get_visitor_conversation(
+                chatbot,
+                serializer.validated_data["conversation_token"],
+            )
+        except InvalidConversationToken as exc:
+            return APIResponse.error(
+                errors={"conversation_token": [str(exc)]},
+                message=str(exc),
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        message_queryset = (
+            ChatMessage.objects.filter(chat_session=chat_session)
+            .exclude(metadata__contains={"visibility": "internal"})
+            .select_related("sender__user__profile")
+            .prefetch_related("attachments")
+            .order_by("-created_at", "-id")
+        )
+        paginator = self.pagination_class()
+        messages = list(
+            paginator.paginate_queryset(message_queryset, request, view=self)
+        )
+        messages.reverse()
+        return APIResponse.success(
+            data=VisitorMessageSerializer(messages, many=True).data,
+            meta={
+                "count": paginator.page.paginator.count,
+                "page": paginator.page.number,
+                "page_size": paginator.get_page_size(request),
+                "num_pages": paginator.page.paginator.num_pages,
+                "next": paginator.get_next_link(),
+                "previous": paginator.get_previous_link(),
+            },
+            message="Conversation messages fetched successfully.",
         )
 
 

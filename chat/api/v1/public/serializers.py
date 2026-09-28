@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from chat.models import ChatMessage, ChatMessageAttachment, ChatSession
+from chat.services.visitor_tokens import issue_conversation_token
 from chat.utils.choices import ChatMessageSenderType
 
 
@@ -58,6 +59,7 @@ class ChatMessageSerializer(serializers.ModelSerializer):
 
 
 class PublicVisitorSessionSerializer(serializers.ModelSerializer):
+    conversation_token = serializers.SerializerMethodField()
     message_count = serializers.IntegerField(read_only=True)
     last_message = serializers.SerializerMethodField()
 
@@ -68,10 +70,14 @@ class PublicVisitorSessionSerializer(serializers.ModelSerializer):
             "status",
             "created_at",
             "last_activity_at",
+            "conversation_token",
             "message_count",
             "last_message",
         )
         read_only_fields = fields
+
+    def get_conversation_token(self, obj):
+        return issue_conversation_token(obj)
 
     def get_last_message(self, obj):
         sender_type = getattr(obj, "last_message_sender_type", None)
@@ -95,23 +101,9 @@ class PublicVisitorSessionSerializer(serializers.ModelSerializer):
         }
 
 
-class VisitorConversationCreateSerializer(serializers.Serializer):
-    conversation_token = serializers.CharField(
-        required=False,
-        allow_blank=True,
-        max_length=2048,
-    )
+class VisitorSessionCreateSerializer(serializers.Serializer):
     user_metadata = serializers.JSONField(required=False)
     metadata = serializers.JSONField(required=False)
-    lead_id = serializers.UUIDField(required=False)
-    lead_data = serializers.JSONField(required=False)
-
-    def validate(self, attrs):
-        if "lead_id" in attrs and "lead_data" in attrs:
-            raise serializers.ValidationError(
-                "Provide either lead_id or lead_data, not both."
-            )
-        return attrs
 
     def validate_user_metadata(self, value):
         if not isinstance(value, dict):
@@ -123,10 +115,9 @@ class VisitorConversationCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError("Must be a JSON object.")
         return value
 
-    def validate_lead_data(self, value):
-        if not isinstance(value, dict):
-            raise serializers.ValidationError("Must be a JSON object.")
-        return value
+
+class VisitorConversationQuerySerializer(serializers.Serializer):
+    conversation_token = serializers.CharField(max_length=2048)
 
 
 class VisitorMessageCreateSerializer(serializers.Serializer):

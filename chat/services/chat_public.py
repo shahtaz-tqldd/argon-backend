@@ -1,5 +1,3 @@
-from uuid import uuid4
-
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Count, OuterRef, Q, Subquery
@@ -16,7 +14,6 @@ from chat.utils.choices import (
     ChatSessionChannel,
     ChatSessionStatus,
 )
-from lead_capture.models import Lead, LeadCaptureConfig
 
 
 RESUMABLE_SESSION_STATUSES = (
@@ -90,118 +87,82 @@ def get_public_visitor_sessions(chatbot, visitor_id):
     )
 
 
-def _resolve_conversation_lead(chatbot, *, lead_id=None, lead_data=None):
-    if lead_id is not None:
-        try:
-            return Lead.objects.get(pk=lead_id, chatbot=chatbot)
-        except Lead.DoesNotExist as exc:
-            raise ValidationError(
-                {"lead_id": "The lead does not belong to this chatbot."}
-            ) from exc
-
-    if lead_data is None:
-        return None
-    try:
-        config = chatbot.lead_capture_config
-    except LeadCaptureConfig.DoesNotExist as exc:
-        raise ValidationError(
-            {"lead_data": "Lead collection is not enabled."}
-        ) from exc
-    if not config.is_enabled:
-        raise ValidationError({"lead_data": "Lead collection is not enabled."})
-
-    lead = Lead(
-        chatbot=chatbot,
-        collected_fields=lead_data,
-        source="web_widget",
-    )
-    try:
-        lead.full_clean()
-    except ValidationError as exc:
-        messages = getattr(exc, "message_dict", {}).get(
-            "collected_fields",
-            exc.messages,
-        )
-        raise ValidationError({"lead_data": messages}) from exc
-    lead.save()
-    return lead
-
-
 @transaction.atomic
-def create_or_resume_conversation(
+def create_public_visitor_session(
     chatbot,
+    visitor_id,
     *,
-    conversation_token="",
     user_metadata=None,
     metadata=None,
-    lead_id=None,
-    lead_data=None,
 ):
-    session = None
-    resumed = False
-    visitor_id = uuid4().hex
-    if conversation_token:
-        payload = decode_conversation_token(conversation_token)
-        if payload["chatbot_id"] != str(chatbot.id):
-            raise InvalidConversationToken(
-                "The conversation token does not belong to this chatbot."
-            )
-        visitor_id = payload["visitor_id"]
-        session = ChatSession.objects.filter(
+    if ChatbotBlockedVisitor.objects.filter(
+        chatbot=chatbot,
+        visitor_id=visitor_id,
+    ).exists():
+        raise ValidationError("This visitor has been blocked.")
+
+    existing_sessions = ChatSession.objects.filter(
+        chatbot=chatbot,
+        visitor_id=visitor_id,
+        channel=ChatSessionChannel.WEB_WIDGET,
+        is_test=False,
+    )
+    anchor = existing_sessions.select_related("lead").first()
+    lead_session = (
+        existing_sessions.filter(lead__isnull=False)
+        .select_related("lead")
+        .first()
+    )
+    lead = lead_session.lead if lead_session is not None else None
+    inherited_user_metadata = (
+        anchor.user_metadata if anchor is not None else {}
+    )
+    session = ChatSession(
+        chatbot=chatbot,
+        channel=ChatSessionChannel.WEB_WIDGET,
+        visitor_id=visitor_id,
+        lead=lead,
+        ai_enabled=chatbot.ai_enabled,
+        user_metadata=(
+            user_metadata
+            if user_metadata is not None
+            else inherited_user_metadata
+        ),
+        metadata=metadata or {},
+    )
+    session.full_clean()
+    session.save()
+    transaction.on_commit(
+        lambda: publish_session_event(
+            session.id,
+            chatbot.id,
+            "session.created",
+            {
+                "chatbot_id": str(chatbot.id),
+                "channel": session.channel,
+                "status": session.status,
+            },
+        )
+    )
+    return session
+
+
+def get_visitor_conversation(chatbot, conversation_token):
+    payload = decode_conversation_token(conversation_token)
+    if payload["chatbot_id"] != str(chatbot.id):
+        raise InvalidConversationToken(
+            "The conversation token does not belong to this chatbot."
+        )
+    try:
+        return ChatSession.objects.get(
             pk=payload["session_id"],
             chatbot=chatbot,
             visitor_id=payload["visitor_id"],
             channel=ChatSessionChannel.WEB_WIDGET,
             is_test=False,
-            status__in=RESUMABLE_SESSION_STATUSES,
-        ).first()
-        resumed = session is not None
-
-    lead = _resolve_conversation_lead(
-        chatbot,
-        lead_id=lead_id,
-        lead_data=lead_data,
-    )
-    if session is None:
-        session = ChatSession.objects.create(
-            chatbot=chatbot,
-            channel=ChatSessionChannel.WEB_WIDGET,
-            visitor_id=visitor_id,
-            lead=lead,
-            ai_enabled=chatbot.ai_enabled,
-            user_metadata=user_metadata or {},
-            metadata=metadata or {},
         )
-        transaction.on_commit(
-            lambda: publish_session_event(
-                session.id,
-                chatbot.id,
-                "session.created",
-                {
-                    "chatbot_id": str(chatbot.id),
-                    "channel": session.channel,
-                    "status": session.status,
-                },
-            )
-        )
-    elif (
-        user_metadata is not None
-        or metadata is not None
-        or lead is not None
-    ):
-        update_fields = ["updated_at"]
-        if user_metadata is not None:
-            session.user_metadata = user_metadata
-            update_fields.append("user_metadata")
-        if metadata is not None:
-            session.metadata = metadata
-            update_fields.append("metadata")
-        if lead is not None:
-            session.lead = lead
-            update_fields.append("lead")
-        session.full_clean()
-        session.save(update_fields=update_fields)
-    return session, resumed
+    except ChatSession.DoesNotExist as exc:
+        raise Http404("Conversation not found.") from exc
 
 
 def get_visitor_chat_session(chatbot, session_id, conversation_token):

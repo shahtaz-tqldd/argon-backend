@@ -1047,8 +1047,9 @@ class ChatSessionClientAPITests(APITestCase):
             ChatMessage.objects.filter(
                 chat_session=session,
                 sender_type=ChatMessageSenderType.SYSTEM,
-            ).order_by("created_at", "id")
-                metadata__contains={"visibility": "internal"},
+            )
+            .filter(metadata__contains={"visibility": "internal"})
+            .order_by("created_at", "id")
         )
         self.assertEqual(
             [message.metadata["event_type"] for message in timeline],
