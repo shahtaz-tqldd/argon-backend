@@ -1,7 +1,7 @@
 from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
 
-from appointment_booking.models import AppointmentBookingConfig
+from appointment.models import AppointmentBookingConfig
 from chatbot.models import Chatbot, ChatbotWidgetSettings
 from lead_capture.models import LeadCaptureConfig
 
@@ -50,6 +50,25 @@ class PublicAppointmentBookingConfigSerializer(serializers.ModelSerializer):
             "confirmation_message",
         )
         read_only_fields = fields
+
+
+class PublicVisitorQuerySerializer(serializers.Serializer):
+    visitor_id = serializers.CharField(max_length=255)
+
+
+class PublicVisitorCreateSerializer(serializers.Serializer):
+    lead_data = serializers.JSONField(required=False)
+    user_metadata = serializers.JSONField(required=False)
+    metadata = serializers.JSONField(required=False)
+
+    def validate(self, attrs):
+        for field_name in ("lead_data", "user_metadata", "metadata"):
+            value = attrs.get(field_name)
+            if value is not None and not isinstance(value, dict):
+                raise serializers.ValidationError(
+                    {field_name: "Must be a JSON object."}
+                )
+        return attrs
 
 
 class PublicVisitorSerializer(serializers.Serializer):

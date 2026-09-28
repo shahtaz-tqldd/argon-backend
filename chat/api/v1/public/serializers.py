@@ -116,7 +116,15 @@ class VisitorSessionCreateSerializer(serializers.Serializer):
         return value
 
 
-class VisitorConversationQuerySerializer(serializers.Serializer):
+class VisitorQuerySerializer(serializers.Serializer):
+    visitor_id = serializers.CharField(max_length=255)
+
+
+class VisitorSessionQuerySerializer(VisitorQuerySerializer):
+    session_id = serializers.UUIDField()
+
+
+class VisitorMessageListQuerySerializer(VisitorSessionQuerySerializer):
     conversation_token = serializers.CharField(max_length=2048)
 
 

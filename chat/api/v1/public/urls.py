@@ -1,21 +1,18 @@
-from django.urls import path
+from django.urls import path, include
 
 from chat.api.v1.public import views
 
+chat_session = [
+    path("list/", views.PublicVisitorSessionListAPIView.as_view(), name="public-visitor-session-list"),
+    path("create/", views.PublicVisitorSessionCreateAPIView.as_view(), name="public-visitor-session-create"),
+]
+
+chat_message = [
+    path("list/", views.PublicVisitorMessageListAPIView.as_view(), name="public-visitor-message-list"),
+    path("create/", views.PublicVisitorMessageCreateAPIView.as_view(), name="public-visitor-message-create"),
+]
+
 urlpatterns = [
-    path(
-        "visitors/<str:visitor_id>/sessions/",
-        views.PublicVisitorSessionListView.as_view(),
-        name="public-visitor-sessions",
-    ),
-    path(
-        "conversations/",
-        views.VisitorConversationView.as_view(),
-        name="visitor-conversation",
-    ),
-    path(
-        "conversations/<uuid:session_id>/messages/",
-        views.VisitorMessageCreateView.as_view(),
-        name="visitor-message-create",
-    ),
+    path("sessions/", include(chat_session)),
+    path("messages/", include(chat_message)),
 ]

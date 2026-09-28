@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 
-from appointment_booking.models import (
+from appointment.models import (
     Appointment,
     AppointmentBookingClosedDate,
     AppointmentBookingConfig,

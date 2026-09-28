@@ -7,79 +7,63 @@ chatbot UUID, slug, or visitor ID as authentication.
 ## 1. Load public chatbot configuration
 
 ```http
-GET /api/v1/chatbots/{public_key}/
+GET /api/v1/chatbots/{public_key}/config/
 ```
 
 This request is public. It returns the public chatbot identity and renderable
 widget settings. A missing, deleted, disabled, or widget-disabled chatbot
 returns `404`.
 
-## 2. Create or resume a conversation
+## 2. Create a visitor and start a session
 
 ```http
-POST /api/v1/chatbots/{public_key}/conversations/
+POST /api/v1/chatbots/{public_key}/visitor/create/?visitor_id={visitor_id}
 Content-Type: application/json
 Origin: https://customer.example
 ```
 
-Create a new conversation:
+For an anonymous visitor, the body may be empty or may contain widget context:
 
 ```json
 {
-  "user_metadata": {
-    "locale": "en-US",
-    "timezone": "Asia/Dhaka"
+  "user_metadata": {"locale": "en-US"},
+  "metadata": {"page_url": "https://customer.example/pricing"}
+}
+```
+
+If an open session already exists for the anonymous visitor, the endpoint returns
+that session with HTTP `200`. Otherwise it creates a visitor session and returns
+HTTP `201`.
+
+When the visitor submits the configured lead form, include `lead_data`. The lead
+fields are validated against the enabled lead-capture configuration and a new
+session is initiated:
+
+```json
+{
+  "lead_data": {
+    "name": "Ada Lovelace",
+    "email": "ada@example.com"
   },
-  "metadata": {
-    "page_url": "https://customer.example/pricing",
-    "page_title": "Pricing"
-  }
+  "user_metadata": {"locale": "en-US"}
 }
 ```
 
-Resume an existing conversation by sending the token returned by the previous
-bootstrap response:
+The response contains `visitor`, `session`, `conversation_token`,
+`websocket_url`, `visitor_created`, and `session_created`. Store the conversation
+token for authenticated message and appointment requests.
 
-```json
-{
-  "conversation_token": "signed-token-from-the-previous-response",
-  "metadata": {
-    "page_url": "https://customer.example/contact"
-  }
-}
+### Get visitor details
+
+```http
+GET /api/v1/chatbots/{public_key}/visitor/details/?visitor_id={visitor_id}
+Origin: https://customer.example
 ```
 
-Successful creation returns `201`; a successful resume returns `200`:
+The response contains `visitor_id`, `lead_id`, `lead_data`, and `user_metadata`.
 
-```json
-{
-  "status": 201,
-  "success": true,
-  "message": "Conversation created successfully.",
-  "data": {
-    "session": {
-      "id": "51a3d974-a8ae-4ca4-956b-8d493ad97fe8",
-      "visitor_id": "server-generated-random-id",
-      "status": "open",
-      "ai_enabled": true
-    },
-    "conversation_token": "signed-token",
-    "websocket_url": "wss://api.example.com/ws/widget/chatbots/public-key/conversations/51a3d974-a8ae-4ca4-956b-8d493ad97fe8/?token=signed-token",
-    "resumed": false,
-    "messages": []
-  }
-}
-```
-
-The response includes the latest 50 messages in chronological order. Store the
-conversation token in browser storage appropriate to the widget's privacy
-requirements. It expires after 30 days by default. A valid token for a resolved
-or closed conversation creates a new conversation instead of reopening it.
-
-If the chatbot has any allowed-origin records, both the HTTP bootstrap and the
-WebSocket handshake require an exact match against an active record. If no
-origin records are configured, all origins are accepted. Disabling every
-configured origin therefore blocks the widget everywhere.
+If the chatbot has allowed-origin records, visitor create/details requests and
+the WebSocket handshake require an exact active origin match.
 
 ## 3. Connect the visitor WebSocket
 
@@ -122,7 +106,7 @@ Handshake close codes:
 The canonical send API is:
 
 ```http
-POST /api/v1/chatbots/{public_key}/conversations/{session_id}/messages/
+POST /api/v1/chatbots/{public_key}/messages/create/?visitor_id={visitor_id}&session_id={session_id}
 Authorization: Bearer {conversation_token}
 Content-Type: application/json
 Origin: https://customer.example

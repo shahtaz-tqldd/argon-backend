@@ -9,29 +9,14 @@ conversation logic live in `chat` and `chatbot`.
 ## Bootstrap before connecting
 
 ```http
-POST /api/v1/chatbots/{public_key}/conversations/
+POST /api/v1/chatbots/{public_key}/visitor/create/?visitor_id={visitor_id}
 Content-Type: application/json
 Origin: https://customer.example
 ```
 
-For a new conversation, send available visitor/page context:
+Send available visitor/page context in the request body. The same `visitor_id` reuses an existing open anonymous session; include `lead_data` when the configured visitor form is submitted.
 
-```json
-{
-  "user_metadata": {"locale": "en-US"},
-  "metadata": {"page_url": "https://customer.example/pricing"}
-}
-```
-
-To resume, send the previously stored token:
-
-```json
-{"conversation_token": "signed-token"}
-```
-
-The response contains `data.session`, the latest 50 messages in chronological
-order, a refreshed `data.conversation_token`, and `data.websocket_url`.
-Always use the returned WebSocket URL instead of constructing it.
+The response contains `data.visitor`, `data.session`, `data.conversation_token`, and `data.websocket_url`. Always use the returned WebSocket URL instead of constructing it.
 
 ```json
 {

@@ -1,6 +1,6 @@
 from django.core.exceptions import ValidationError
 
-from appointment_booking.utils.choices import (
+from appointment.utils.choices import (
     AppointmentFieldMode,
     AppointmentFieldType,
 )

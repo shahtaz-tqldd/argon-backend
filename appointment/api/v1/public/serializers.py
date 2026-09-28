@@ -2,7 +2,11 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rest_framework import serializers
 
-from appointment_booking.models import Appointment
+from appointment.models import Appointment
+
+
+class VisitorAppointmentQuerySerializer(serializers.Serializer):
+    session_id = serializers.UUIDField()
 
 
 class VisitorAppointmentCreateSerializer(serializers.Serializer):

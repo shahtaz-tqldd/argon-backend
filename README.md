@@ -42,13 +42,13 @@ chat/                 Sessions, messages, takeover, and transfer workflows
 knowledge/            Source ingestion and asynchronous training
 vector_store/         pgvector-backed embeddings and similarity search
 lead_capture/         Configurable lead collection
-appointment_booking/  Availability and booking management
+appointment/          Availability and booking management
 subscription/         Plans, entitlements, Stripe, and webhooks
 analytics/            AI usage and cost records
 notification/         Scoped application notifications
 base/socket/          Channels consumers, presence, and event broadcasting
-agent/                 Google ADK agents and conversation tools
-app/                   Project settings, shared services, and entry points
+agent/                Google ADK agents and conversation tools
+app/                  Project settings, shared services, and entry points
 ```
 
 REST endpoints are mounted under `/api/v1/`, administrative REST endpoints under `/api/v1/admin/`, and Django admin under `/admin/`. WebSocket routes are served by the ASGI process under `/ws/`.

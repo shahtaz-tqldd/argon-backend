@@ -2,7 +2,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from rest_framework import serializers
 
-from appointment_booking.models import (
+from appointment.models import (
     Appointment,
     AppointmentBookingClosedDate,
     AppointmentBookingConfig,

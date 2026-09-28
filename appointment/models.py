@@ -5,12 +5,12 @@ from django.db.models import F, Q
 from django.utils.dateparse import parse_date
 
 from app.core.models import BaseModel
-from appointment_booking.utils.choices import (
+from appointment.utils.choices import (
     AppointmentFieldMode,
     AppointmentStatus,
     Weekday,
 )
-from appointment_booking.utils.validators import (
+from appointment.utils.validators import (
     default_collectable_fields,
     validate_appointment_metadata,
     validate_collectable_fields,

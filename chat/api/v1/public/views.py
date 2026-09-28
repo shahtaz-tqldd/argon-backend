@@ -1,4 +1,3 @@
-from app.utils.logger import logger
 from urllib.parse import urlencode
 
 from django.conf import settings
@@ -7,22 +6,24 @@ from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny
 
+from app.utils.logger import logger
 from app.utils.pagination import CustomPagination
 from app.utils.response import APIResponse
 from chat.api.v1.public.serializers import (
     PublicVisitorSessionSerializer,
     VisitorSessionCreateSerializer,
-    VisitorConversationQuerySerializer,
+    VisitorMessageListQuerySerializer,
     VisitorMessageCreateSerializer,
     VisitorMessageSerializer,
+    VisitorQuerySerializer,
+    VisitorSessionQuerySerializer,
 )
 from chat.models import ChatMessage
 from chat.services.events import publish_session_event
 from chat.services.chat_public import (
     create_public_visitor_session,
-    get_visitor_conversation,
+    get_public_visitor_session,
     get_public_visitor_sessions,
-    get_visitor_chat_session,
     send_visitor_message,
 )
 from chatbot.services.chatbot_public import (
@@ -60,17 +61,18 @@ def validation_error_response(errors, fallback):
     )
 
 
-class PublicVisitorSessionListView(GenericAPIView):
+class PublicVisitorSessionCreateAPIView(GenericAPIView):
     permission_classes = [AllowAny]
     authentication_classes = []
-    serializer_class = PublicVisitorSessionSerializer
+    serializer_class = VisitorSessionCreateSerializer
 
-    def get_serializer_class(self):
-        if self.request.method == "POST":
-            return VisitorSessionCreateSerializer
-        return super().get_serializer_class()
-
-    def post(self, request, public_key, visitor_id, *args, **kwargs):
+    def post(self, request, public_key, *args, **kwargs):
+        query_serializer = VisitorQuerySerializer(data=request.query_params)
+        if not query_serializer.is_valid():
+            return validation_error_response(
+                query_serializer.errors,
+                "Visitor session could not be created.",
+            )
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
             return validation_error_response(
@@ -85,7 +87,7 @@ class PublicVisitorSessionListView(GenericAPIView):
         try:
             chat_session = create_public_visitor_session(
                 chatbot,
-                visitor_id,
+                query_serializer.validated_data["visitor_id"],
                 **serializer.validated_data,
             )
         except DjangoValidationError as exc:
@@ -129,23 +131,38 @@ class PublicVisitorSessionListView(GenericAPIView):
             status=status.HTTP_201_CREATED,
         )
 
-    def get(self, request, public_key, visitor_id, *args, **kwargs):
+
+class PublicVisitorSessionListAPIView(GenericAPIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    serializer_class = PublicVisitorSessionSerializer
+
+    def get(self, request, public_key, *args, **kwargs):
+        query_serializer = VisitorQuerySerializer(data=request.query_params)
+        if not query_serializer.is_valid():
+            return validation_error_response(
+                query_serializer.errors,
+                "Visitor sessions could not be fetched.",
+            )
         chatbot = get_public_chatbot(public_key)
         require_allowed_widget_origin(
             chatbot,
             request.headers.get("Origin", ""),
         )
-        sessions = get_public_visitor_sessions(chatbot, visitor_id)
+        sessions = get_public_visitor_sessions(
+            chatbot,
+            query_serializer.validated_data["visitor_id"],
+        )
         return APIResponse.success(
             data=self.get_serializer(sessions, many=True).data,
             message="Visitor sessions fetched successfully.",
         )
 
 
-class VisitorConversationView(GenericAPIView):
+class PublicVisitorMessageListAPIView(GenericAPIView):
     permission_classes = [AllowAny]
     authentication_classes = []
-    serializer_class = VisitorConversationQuerySerializer
+    serializer_class = VisitorMessageListQuerySerializer
     pagination_class = CustomPagination
 
     def get(self, request, public_key, *args, **kwargs):
@@ -161,8 +178,10 @@ class VisitorConversationView(GenericAPIView):
             request.headers.get("Origin", ""),
         )
         try:
-            chat_session = get_visitor_conversation(
+            chat_session = get_public_visitor_session(
                 chatbot,
+                serializer.validated_data["visitor_id"],
+                serializer.validated_data["session_id"],
                 serializer.validated_data["conversation_token"],
             )
         except InvalidConversationToken as exc:
@@ -198,7 +217,7 @@ class VisitorConversationView(GenericAPIView):
         )
 
 
-class VisitorMessageCreateView(GenericAPIView):
+class PublicVisitorMessageCreateAPIView(GenericAPIView):
     permission_classes = [AllowAny]
     authentication_classes = []
     serializer_class = VisitorMessageCreateSerializer
@@ -210,7 +229,15 @@ class VisitorMessageCreateView(GenericAPIView):
             return authorization.split(" ", 1)[1].strip()
         return ""
 
-    def post(self, request, public_key, session_id, *args, **kwargs):
+    def post(self, request, public_key, *args, **kwargs):
+        query_serializer = VisitorSessionQuerySerializer(
+            data=request.query_params
+        )
+        if not query_serializer.is_valid():
+            return validation_error_response(
+                query_serializer.errors,
+                "Message could not be sent.",
+            )
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
             return validation_error_response(
@@ -229,10 +256,12 @@ class VisitorMessageCreateView(GenericAPIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         try:
-            chat_session = get_visitor_chat_session(
+            chat_session = get_public_visitor_session(
                 chatbot,
-                session_id,
+                query_serializer.validated_data["visitor_id"],
+                query_serializer.validated_data["session_id"],
                 token,
+                resumable_only=True,
             )
         except InvalidConversationToken as exc:
             return APIResponse.error(

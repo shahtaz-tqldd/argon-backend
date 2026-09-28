@@ -9,11 +9,12 @@ from analytics.choices import AIUsageType
 from analytics.services.ai_usage import record_ai_usage
 from app.utils.logger import logger
 from app.utils.response import APIResponse
-from appointment_booking.api.v1.public.serializers import (
+from appointment.api.v1.public.serializers import (
     VisitorAppointmentCreateSerializer,
+    VisitorAppointmentQuerySerializer,
     VisitorAppointmentSerializer,
 )
-from appointment_booking.services import book_visitor_appointment
+from appointment.services import book_visitor_appointment
 from chat.services.chat_public import get_visitor_chat_session
 from chat.services.visitor_tokens import InvalidConversationToken
 from chatbot.services.chatbot_public import (
@@ -38,7 +39,7 @@ def first_error_message(errors, fallback="Request failed."):
     return str(errors) if errors else fallback
 
 
-class VisitorAppointmentCreateView(GenericAPIView):
+class VisitorAppointmentCreateAPIView(GenericAPIView):
     permission_classes = [AllowAny]
     authentication_classes = []
     serializer_class = VisitorAppointmentCreateSerializer
@@ -50,7 +51,20 @@ class VisitorAppointmentCreateView(GenericAPIView):
             return authorization.split(" ", 1)[1].strip()
         return ""
 
-    def post(self, request, public_key, session_id, *args, **kwargs):
+    def post(self, request, public_key, *args, **kwargs):
+        query_serializer = VisitorAppointmentQuerySerializer(
+            data=request.query_params
+        )
+        if not query_serializer.is_valid():
+            return APIResponse.error(
+                errors=query_serializer.errors,
+                message=first_error_message(
+                    query_serializer.errors,
+                    fallback="Appointment could not be booked.",
+                ),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
             return APIResponse.error(
@@ -76,7 +90,7 @@ class VisitorAppointmentCreateView(GenericAPIView):
         try:
             chat_session = get_visitor_chat_session(
                 chatbot,
-                session_id,
+                query_serializer.validated_data["session_id"],
                 token,
             )
         except InvalidConversationToken as exc:

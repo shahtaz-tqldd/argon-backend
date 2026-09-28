@@ -1492,7 +1492,7 @@
                 "method": "GET",
                 "description": "Bootstrap data for the widget. **Public.**\n\n**200** → `data`: `{chatbot_name, logo, language, welcome_message, widget_settings {colors, launcher, header, theme, ...}, lead_config|null {is_enabled, collectable_fields, auto_collect, require_consent, consent_message}, appointment_config|null {collectable_fields, confirmation_message}}`.",
                 "url": {
-                  "raw": "{{base_url}}/api/v1/chatbots/{{public_key}}/",
+                  "raw": "{{base_url}}/api/v1/chatbots/{{public_key}}/config/",
                   "host": [
                     "{{base_url}}"
                   ],
@@ -1501,6 +1501,7 @@
                     "v1",
                     "chatbots",
                     "{{public_key}}",
+                    "config",
                     ""
                   ]
                 },
@@ -1511,12 +1512,12 @@
               "response": []
             },
             {
-              "name": "Create / Resume Conversation",
+              "name": "Create Visitor",
               "request": {
                 "method": "POST",
-                "description": "Start a new conversation or resume one via `conversation_token`. Saves `conversation_token`, `session_id`, and `visitor_id` automatically. **Public** (Origin check).\n\n**Body**: `conversation_token` (optional — resume), `user_metadata` (JSON), `metadata` (JSON), `lead_id` (uuid) XOR `lead_data` (JSON).\n\n**201** (new) / **200** (resumed) → `data: {session {id, visitor_id, status, ai_enabled}, conversation_token, websocket_url, resumed, messages [...]}`.",
+                "description": "Create a visitor and start a chat session. Anonymous retries reuse an existing open session. Submitting `lead_data` validates the form, creates or updates the lead, and starts a new session. **Public** (Origin check).\n\n**Query**: `visitor_id` (required).\n\n**Body**: `lead_data` (JSON, optional), `user_metadata` (JSON, optional), `metadata` (JSON, optional).\n\n**201** (session created) / **200** (existing anonymous session) → `data: {visitor, session, conversation_token, websocket_url, visitor_created, session_created}`.",
                 "url": {
-                  "raw": "{{base_url}}/api/v1/chatbots/{{public_key}}/conversations/",
+                  "raw": "{{base_url}}/api/v1/chatbots/{{public_key}}/visitor/create/?visitor_id={{visitor_id}}",
                   "host": [
                     "{{base_url}}"
                   ],
@@ -1525,13 +1526,20 @@
                     "v1",
                     "chatbots",
                     "{{public_key}}",
-                    "conversations",
+                    "visitor",
+                    "create",
                     ""
+                  ],
+                  "query": [
+                    {
+                      "key": "visitor_id",
+                      "value": "{{visitor_id}}"
+                    }
                   ]
                 },
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"user_metadata\": {\n    \"name\": \"Jane\"\n  }\n}",
+                  "raw": "{\n  \"lead_data\": {\n    \"name\": \"Jane\",\n    \"email\": \"jane@example.com\"\n  },\n  \"user_metadata\": {\n    \"locale\": \"en-US\"\n  }\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -1565,7 +1573,7 @@
                 "method": "POST",
                 "description": "Send a visitor message. AI reply is generated asynchronously (WebSocket / polling). **Auth: `Bearer {{conversation_token}}`** (not the account JWT) + Origin check.\n\n**Body**: `content` (≤10000, required, non-blank), `client_message_id` (idempotency key, optional), `metadata` (JSON).\n\n**201** → `data: {message, duplicate, ai_queued}`. **409** on idempotency conflict.",
                 "url": {
-                  "raw": "{{base_url}}/api/v1/chatbots/{{public_key}}/conversations/{{session_id}}/messages/",
+                  "raw": "{{base_url}}/api/v1/chatbots/{{public_key}}/messages/create/?visitor_id={{visitor_id}}&session_id={{session_id}}",
                   "host": [
                     "{{base_url}}"
                   ],
@@ -1574,10 +1582,19 @@
                     "v1",
                     "chatbots",
                     "{{public_key}}",
-                    "conversations",
-                    "{{session_id}}",
                     "messages",
+                    "create",
                     ""
+                  ],
+                  "query": [
+                    {
+                      "key": "visitor_id",
+                      "value": "{{visitor_id}}"
+                    },
+                    {
+                      "key": "session_id",
+                      "value": "{{session_id}}"
+                    }
                   ]
                 },
                 "header": [
@@ -1606,9 +1623,9 @@
               "name": "Book Appointment (Visitor)",
               "request": {
                 "method": "POST",
-                "description": "Book an appointment from the widget. **Auth: `Bearer {{conversation_token}}`** + Origin check.\n\n**Body**: `starts_at` (ISO-8601 **with explicit UTC offset**, required), `collected_fields` (JSON, optional).\n\n**201** → `data: {appointment {id, collected_fields, starts_at, ends_at, status, created_at}, duplicate, agent_acknowledged, agent_reply}`. **409** on booking validation failure.",
+                "description": "Book an appointment from the widget. **Auth: `Bearer {{conversation_token}}`** + Origin check.\n\n**Query**: `session_id` (UUID, required).\n\n**Body**: `starts_at` (ISO-8601 **with explicit UTC offset**, required), `collected_fields` (JSON, optional).\n\n**201** → `data: {appointment {id, collected_fields, starts_at, ends_at, status, created_at}, duplicate, agent_acknowledged, agent_reply}`. **409** on booking validation failure.",
                 "url": {
-                  "raw": "{{base_url}}/api/v1/chatbots/{{public_key}}/conversations/{{session_id}}/appointments/",
+                  "raw": "{{base_url}}/api/v1/chatbots/{{public_key}}/book-appointment/?session_id={{session_id}}",
                   "host": [
                     "{{base_url}}"
                   ],
@@ -1617,10 +1634,14 @@
                     "v1",
                     "chatbots",
                     "{{public_key}}",
-                    "conversations",
-                    "{{session_id}}",
-                    "appointments",
+                    "book-appointment",
                     ""
+                  ],
+                  "query": [
+                    {
+                      "key": "session_id",
+                      "value": "{{session_id}}"
+                    }
                   ]
                 },
                 "header": [
@@ -1649,9 +1670,9 @@
               "name": "Visitor Details",
               "request": {
                 "method": "GET",
-                "description": "Public visitor profile. **Public** (Origin check).\n\n**200** → `data: {visitor_id, lead_id|null, lead_data, user_metadata}`.",
+                "description": "Public visitor profile. **Public** (Origin check).\n\n**Query**: `visitor_id` (required).\n\n**200** → `data: {visitor_id, lead_id|null, lead_data, user_metadata}`.",
                 "url": {
-                  "raw": "{{base_url}}/api/v1/chatbots/{{public_key}}/visitors/{{visitor_id}}/",
+                  "raw": "{{base_url}}/api/v1/chatbots/{{public_key}}/visitor/details/?visitor_id={{visitor_id}}",
                   "host": [
                     "{{base_url}}"
                   ],
@@ -1660,9 +1681,15 @@
                     "v1",
                     "chatbots",
                     "{{public_key}}",
-                    "visitors",
-                    "{{visitor_id}}",
+                    "visitor",
+                    "details",
                     ""
+                  ],
+                  "query": [
+                    {
+                      "key": "visitor_id",
+                      "value": "{{visitor_id}}"
+                    }
                   ]
                 },
                 "auth": {
@@ -1677,7 +1704,7 @@
                 "method": "GET",
                 "description": "Conversation history for a visitor. **Public** (Origin check).\n\n**200** → `data`: list of `{id, status, last_activity_at, last_message {content, sender}|null}`.",
                 "url": {
-                  "raw": "{{base_url}}/api/v1/chatbots/{{public_key}}/visitors/{{visitor_id}}/sessions/",
+                  "raw": "{{base_url}}/api/v1/chatbots/{{public_key}}/sessions/list/?visitor_id={{visitor_id}}",
                   "host": [
                     "{{base_url}}"
                   ],
@@ -1686,10 +1713,15 @@
                     "v1",
                     "chatbots",
                     "{{public_key}}",
-                    "visitors",
-                    "{{visitor_id}}",
                     "sessions",
+                    "list",
                     ""
+                  ],
+                  "query": [
+                    {
+                      "key": "visitor_id",
+                      "value": "{{visitor_id}}"
+                    }
                   ]
                 },
                 "auth": {

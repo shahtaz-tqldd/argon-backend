@@ -5,7 +5,7 @@ from rest_framework.generics import GenericAPIView
 from app.utils.pagination import CustomPagination
 from app.utils.permission import IsChatbotUser
 from app.utils.response import APIResponse
-from appointment_booking.api.v1.client.serializers import (
+from appointment.api.v1.client.serializers import (
     AppointmentBookingAvailabilitySerializer,
     AppointmentBookingConfigSerializer,
     AppointmentChatbotQuerySerializer,
@@ -13,7 +13,7 @@ from appointment_booking.api.v1.client.serializers import (
     AppointmentSerializer,
     AppointmentUpdateSerializer,
 )
-from appointment_booking.models import Appointment, AppointmentBookingConfig
+from appointment.models import Appointment, AppointmentBookingConfig
 from chatbot.models import Chatbot, ChatbotCapacity
 from chatbot.services.capacity import get_chatbot_capacity
 from chatbot.utils.choices import ChatbotPermissionTypes
@@ -109,7 +109,7 @@ class AppointmentObjectMixin(AppointmentBookingChatbotMixin):
         return self._appointment
 
 
-class AppointmentBookingConfigView(
+class AppointmentBookingConfigAPIView(
     AppointmentBookingChatbotMixin,
     GenericAPIView,
 ):
@@ -124,7 +124,7 @@ class AppointmentBookingConfigView(
         )
 
 
-class AppointmentBookingConfigUpdateView(
+class AppointmentBookingConfigUpdateAPIView(
     AppointmentBookingChatbotMixin,
     GenericAPIView,
 ):
@@ -152,7 +152,7 @@ class AppointmentBookingConfigUpdateView(
         return self._update(request, partial=True)
 
 
-class AppointmentBookingScheduleView(
+class AppointmentBookingScheduleAPIView(
     AppointmentBookingChatbotMixin,
     GenericAPIView,
 ):
@@ -177,7 +177,7 @@ class AppointmentBookingScheduleView(
         )
 
 
-class AppointmentBookingScheduleUpdateView(
+class AppointmentBookingScheduleUpdateAPIView(
     AppointmentBookingChatbotMixin,
     GenericAPIView,
 ):
@@ -205,7 +205,7 @@ class AppointmentBookingScheduleUpdateView(
         return self._update(request, partial=True)
 
 
-class AppointmentListView(
+class AppointmentListAPIView(
     AppointmentBookingChatbotMixin,
     PaginatedAppointmentMixin,
     GenericAPIView,
@@ -224,7 +224,7 @@ class AppointmentListView(
         )
 
 
-class AppointmentUpdateView(AppointmentObjectMixin, GenericAPIView):
+class AppointmentUpdateAPIView(AppointmentObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     required_chatbot_permission = ChatbotPermissionTypes.APPOINTMENT_MANAGEMENT
     serializer_class = AppointmentUpdateSerializer
@@ -249,7 +249,7 @@ class AppointmentUpdateView(AppointmentObjectMixin, GenericAPIView):
         return self._update(request, partial=True)
 
 
-class AppointmentDeleteView(AppointmentObjectMixin, GenericAPIView):
+class AppointmentDeleteAPIView(AppointmentObjectMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     required_chatbot_permission = ChatbotPermissionTypes.APPOINTMENT_MANAGEMENT
     serializer_class = AppointmentSerializer

@@ -7,7 +7,7 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 from google.adk.tools import FunctionTool, ToolContext
 
-from appointment_booking.models import Appointment, AppointmentBookingConfig
+from appointment.models import Appointment, AppointmentBookingConfig
 
 
 OPEN_STATUSES = ("pending", "confirmed")

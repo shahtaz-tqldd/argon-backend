@@ -18,7 +18,7 @@ from chatbot.models import (
     ChatbotInvitation,
     ChatbotUser,
 )
-from appointment_booking.models import Appointment, AppointmentBookingConfig
+from appointment.models import Appointment, AppointmentBookingConfig
 from chatbot.services import create_chatbot
 from chatbot.services.invitations import (
     _deliver_chatbot_invitation,
@@ -180,7 +180,7 @@ class ChatbotClientAPITests(APITestCase):
 
         response = self.client.get(
             reverse(
-                "public-chatbot",
+                "public-chatbot-config",
                 kwargs={"public_key": widget_settings.public_key},
             )
         )
@@ -210,7 +210,7 @@ class ChatbotClientAPITests(APITestCase):
 
         response = self.client.get(
             reverse(
-                "public-chatbot",
+                "public-chatbot-config",
                 kwargs={"public_key": self.chatbot.widget_settings.public_key},
             )
         )
@@ -235,7 +235,7 @@ class ChatbotClientAPITests(APITestCase):
 
         response = self.client.get(
             reverse(
-                "public-chatbot",
+                "public-chatbot-config",
                 kwargs={
                     "public_key": self.chatbot.widget_settings.public_key,
                 },
@@ -263,7 +263,7 @@ class ChatbotClientAPITests(APITestCase):
 
         response = self.client.get(
             reverse(
-                "public-chatbot",
+                "public-chatbot-config",
                 kwargs={
                     "public_key": self.chatbot.widget_settings.public_key,
                 },
@@ -277,7 +277,7 @@ class ChatbotClientAPITests(APITestCase):
         self.client.force_authenticate(user=None)
 
         response = self.client.get(
-            reverse("public-chatbot", kwargs={"public_key": "unknown-key"})
+            reverse("public-chatbot-config", kwargs={"public_key": "unknown-key"})
         )
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
@@ -290,7 +290,7 @@ class ChatbotClientAPITests(APITestCase):
 
         response = self.client.get(
             reverse(
-                "public-chatbot",
+                "public-chatbot-config",
                 kwargs={"public_key": widget_settings.public_key},
             )
         )
@@ -304,7 +304,7 @@ class ChatbotClientAPITests(APITestCase):
 
         response = self.client.get(
             reverse(
-                "public-chatbot",
+                "public-chatbot-config",
                 kwargs={
                     "public_key": self.chatbot.widget_settings.public_key,
                 },
@@ -313,7 +313,89 @@ class ChatbotClientAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_visitor_conversation_returns_paginated_messages(self):
+    def test_public_visitor_create_starts_anonymous_session_once(self):
+        self.client.force_authenticate(user=None)
+        url = reverse(
+            "public-visitor-create",
+            kwargs={
+                "public_key": self.chatbot.widget_settings.public_key,
+            },
+        )
+        query = {"visitor_id": "new-anonymous-visitor"}
+
+        created_response = self.client.post(
+            url,
+            {"user_metadata": {"locale": "en-US"}},
+            format="json",
+            query_params=query,
+        )
+        existing_response = self.client.post(
+            url,
+            {},
+            format="json",
+            query_params=query,
+        )
+
+        self.assertEqual(created_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(existing_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(created_response.data["data"]["visitor_created"])
+        self.assertTrue(created_response.data["data"]["session_created"])
+        self.assertFalse(existing_response.data["data"]["visitor_created"])
+        self.assertFalse(existing_response.data["data"]["session_created"])
+        self.assertEqual(
+            created_response.data["data"]["session"]["id"],
+            existing_response.data["data"]["session"]["id"],
+        )
+        self.assertEqual(
+            ChatSession.objects.filter(
+                chatbot=self.chatbot,
+                visitor_id="new-anonymous-visitor",
+            ).count(),
+            1,
+        )
+
+    def test_public_visitor_create_with_form_starts_linked_session(self):
+        LeadCaptureConfig.objects.create(
+            chatbot=self.chatbot,
+            is_enabled=True,
+        )
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(
+            reverse(
+                "public-visitor-create",
+                kwargs={
+                    "public_key": self.chatbot.widget_settings.public_key,
+                },
+            ),
+            {
+                "lead_data": {
+                    "name": "Ada Lovelace",
+                    "email": "ADA@example.com",
+                },
+                "metadata": {"page_url": "https://example.com/pricing"},
+            },
+            format="json",
+            query_params={"visitor_id": "form-visitor"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        session = ChatSession.objects.get(
+            pk=response.data["data"]["session"]["id"]
+        )
+        self.assertIsNotNone(session.lead_id)
+        self.assertEqual(session.lead.collected_fields["name"], "Ada Lovelace")
+        self.assertEqual(
+            session.lead.collected_fields["email"],
+            "ada@example.com",
+        )
+        self.assertEqual(session.metadata["page_url"], "https://example.com/pricing")
+        self.assertEqual(
+            response.data["data"]["visitor"]["lead_id"],
+            str(session.lead_id),
+        )
+
+    def test_public_visitor_message_list_returns_paginated_messages(self):
         session = ChatSession.objects.create(
             chatbot=self.chatbot,
             visitor_id="conversation-history-visitor",
@@ -349,10 +431,12 @@ class ChatbotClientAPITests(APITestCase):
 
         response = self.client.get(
             reverse(
-                "visitor-conversation",
+                "public-visitor-message-list",
                 kwargs={"public_key": self.chatbot.widget_settings.public_key},
             ),
             {
+                "visitor_id": session.visitor_id,
+                "session_id": session.id,
                 "conversation_token": issue_conversation_token(session),
                 "page": 1,
                 "page_size": 2,
@@ -375,26 +459,30 @@ class ChatbotClientAPITests(APITestCase):
         )
         self.assertNotIn("is_forced", response.data["data"][0]["metadata"])
 
-    def test_visitor_conversation_rejects_invalid_token(self):
+    def test_public_visitor_message_list_rejects_invalid_token(self):
         self.client.force_authenticate(user=None)
 
         response = self.client.get(
             reverse(
-                "visitor-conversation",
+                "public-visitor-message-list",
                 kwargs={"public_key": self.chatbot.widget_settings.public_key},
             ),
-            {"conversation_token": "not-a-valid-token"},
+            {
+                "visitor_id": "invalid-token-visitor",
+                "session_id": "00000000-0000-0000-0000-000000000000",
+                "conversation_token": "not-a-valid-token",
+            },
         )
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertIn("conversation_token", response.data["errors"])
 
-    def test_visitor_conversation_rejects_post(self):
+    def test_public_visitor_message_list_rejects_post(self):
         self.client.force_authenticate(user=None)
 
         response = self.client.post(
             reverse(
-                "visitor-conversation",
+                "public-visitor-message-list",
                 kwargs={"public_key": self.chatbot.widget_settings.public_key},
             ),
             {},
@@ -409,10 +497,9 @@ class ChatbotClientAPITests(APITestCase):
 
         response = self.client.post(
             reverse(
-                "public-visitor-sessions",
+                "public-visitor-session-create",
                 kwargs={
                     "public_key": self.chatbot.widget_settings.public_key,
-                    "visitor_id": visitor_id,
                 },
             ),
             {
@@ -420,6 +507,7 @@ class ChatbotClientAPITests(APITestCase):
                 "metadata": {"page_url": "https://example.com/pricing"},
             },
             format="json",
+            query_params={"visitor_id": visitor_id},
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -505,10 +593,18 @@ class ChatbotClientAPITests(APITestCase):
         }
 
         detail_response = self.client.get(
-            reverse("public-visitor-detail", kwargs=url_kwargs)
+            reverse(
+                "public-visitor-details",
+                kwargs={"public_key": url_kwargs["public_key"]},
+            ),
+            {"visitor_id": visitor_id},
         )
         sessions_response = self.client.get(
-            reverse("public-visitor-sessions", kwargs=url_kwargs)
+            reverse(
+                "public-visitor-session-list",
+                kwargs={"public_key": url_kwargs["public_key"]},
+            ),
+            {"visitor_id": visitor_id},
         )
 
         self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
@@ -591,7 +687,7 @@ class ChatbotClientAPITests(APITestCase):
             },
         )
 
-    def test_visitor_conversation_enforces_configured_origin(self):
+    def test_public_visitor_message_list_enforces_configured_origin(self):
         ChatbotAllowedOrigin.objects.create(
             chatbot=self.chatbot,
             origin="https://allowed.example.com",
@@ -604,10 +700,14 @@ class ChatbotClientAPITests(APITestCase):
         )
         self.client.force_authenticate(user=None)
         url = reverse(
-            "visitor-conversation",
+            "public-visitor-message-list",
             kwargs={"public_key": self.chatbot.widget_settings.public_key},
         )
-        query = {"conversation_token": issue_conversation_token(session)}
+        query = {
+            "visitor_id": session.visitor_id,
+            "session_id": session.id,
+            "conversation_token": issue_conversation_token(session),
+        }
 
         rejected_response = self.client.get(url, query)
         accepted_response = self.client.get(
@@ -631,11 +731,15 @@ class ChatbotClientAPITests(APITestCase):
 
         response = self.client.post(
             reverse(
-                "visitor-message-create",
-                kwargs={"public_key": public_key, "session_id": session_id},
+                "public-visitor-message-create",
+                kwargs={"public_key": public_key},
             ),
             {"content": "Hello"},
             format="json",
+            query_params={
+                "visitor_id": session.visitor_id,
+                "session_id": session_id,
+            },
         )
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
@@ -655,14 +759,17 @@ class ChatbotClientAPITests(APITestCase):
 
         response = self.client.post(
             reverse(
-                "visitor-message-create",
+                "public-visitor-message-create",
                 kwargs={
                     "public_key": self.chatbot.widget_settings.public_key,
-                    "session_id": session.id,
                 },
             ),
             {"content": "This should be rejected."},
             format="json",
+            query_params={
+                "visitor_id": session.visitor_id,
+                "session_id": session.id,
+            },
             HTTP_AUTHORIZATION=f"Bearer {token}",
         )
 
@@ -673,9 +780,9 @@ class ChatbotClientAPITests(APITestCase):
         )
         self.assertFalse(ChatMessage.objects.filter(chat_session=session).exists())
 
-    @patch("appointment_booking.api.v1.public.views.record_ai_usage")
-    @patch("appointment_booking.api.v1.public.views.AgentClient")
-    @patch("appointment_booking.services.available_slots")
+    @patch("appointment.api.v1.public.views.record_ai_usage")
+    @patch("appointment.api.v1.public.views.AgentClient")
+    @patch("appointment.services.available_slots")
     def test_visitor_can_book_available_slot_and_notify_agent(
         self,
         available_slots,
@@ -707,10 +814,9 @@ class ChatbotClientAPITests(APITestCase):
 
         response = self.client.post(
             reverse(
-                "visitor-appointment-create",
+                "book-appointment",
                 kwargs={
                     "public_key": self.chatbot.widget_settings.public_key,
-                    "session_id": session.id,
                 },
             ),
             {
@@ -721,6 +827,7 @@ class ChatbotClientAPITests(APITestCase):
                 },
             },
             format="json",
+            query_params={"session_id": session.id},
             HTTP_AUTHORIZATION=f"Bearer {token}",
         )
 

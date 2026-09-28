@@ -5,7 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from agent.sub_agents.appointment.tools import OPEN_STATUSES, available_slots
-from appointment_booking.models import Appointment, AppointmentBookingConfig
+from appointment.models import Appointment, AppointmentBookingConfig
 from chat.models import ChatSession
 from chat.utils.choices import ChatSessionStatus
 

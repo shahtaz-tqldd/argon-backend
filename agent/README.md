@@ -141,7 +141,7 @@ async for item in client.chat_stream(message, user_id=visitor_id):
    Searches stop at the configured booking horizon; disabled/invalid
    requests have distinct statuses.
 5. POST the selected `starts_at` and customer `collected_fields` to
-   `/api/v1/chatbots/{public_key}/conversations/{session_id}/appointments/`
+   `/api/v1/chatbots/{public_key}/book-appointment/?session_id={session_id}`
    using the conversation bearer token. The endpoint rechecks availability
    while locking the booking configuration, derives `ends_at`, and stores
    the trusted chat-session association itself.

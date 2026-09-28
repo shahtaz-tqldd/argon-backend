@@ -27,7 +27,7 @@ MODULER_APPS = [
     "chat.apps.ChatConfig",
     "analytics.apps.AnalyticsConfig",
     "lead_capture.apps.LeadCaptureConfig",
-    "appointment_booking.apps.AppointmentBookingAppConfig",
+    "appointment.apps.AppointmentAppConfig",
     "subscription.apps.SubscriptionConfig",
     "coupon.apps.CouponConfig",
     "notification.apps.NotificationConfig",

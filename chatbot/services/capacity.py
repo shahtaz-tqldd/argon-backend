@@ -2,7 +2,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from appointment_booking.models import AppointmentBookingConfig
+from appointment.models import AppointmentBookingConfig
 from chatbot.models import ChatbotCapacity
 from chatbot.services.resolution import resolve_chatbot_reference
 from chatbot.services.subscription import get_chatbot_subscription_entitlements

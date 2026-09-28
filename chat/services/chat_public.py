@@ -5,15 +5,13 @@ from django.http import Http404
 
 from chat.models import ChatbotBlockedVisitor, ChatMessage, ChatSession
 from chat.services.events import publish_session_event
-from chat.services.visitor_tokens import (
-    InvalidConversationToken,
-    decode_conversation_token,
-)
+from chat.services.visitor_tokens import decode_conversation_token
 from chat.utils.choices import (
     ChatMessageSenderType,
     ChatSessionChannel,
     ChatSessionStatus,
 )
+from lead_capture.models import Lead, LeadCaptureConfig
 
 
 RESUMABLE_SESSION_STATUSES = (
@@ -94,6 +92,7 @@ def create_public_visitor_session(
     *,
     user_metadata=None,
     metadata=None,
+    lead=None,
 ):
     if ChatbotBlockedVisitor.objects.filter(
         chatbot=chatbot,
@@ -113,7 +112,9 @@ def create_public_visitor_session(
         .select_related("lead")
         .first()
     )
-    lead = lead_session.lead if lead_session is not None else None
+    inherited_lead = (
+        lead_session.lead if lead_session is not None else None
+    )
     inherited_user_metadata = (
         anchor.user_metadata if anchor is not None else {}
     )
@@ -121,7 +122,7 @@ def create_public_visitor_session(
         chatbot=chatbot,
         channel=ChatSessionChannel.WEB_WIDGET,
         visitor_id=visitor_id,
-        lead=lead,
+        lead=lead if lead is not None else inherited_lead,
         ai_enabled=chatbot.ai_enabled,
         user_metadata=(
             user_metadata
@@ -147,44 +148,116 @@ def create_public_visitor_session(
     return session
 
 
-def get_visitor_conversation(chatbot, conversation_token):
-    payload = decode_conversation_token(conversation_token)
-    if payload["chatbot_id"] != str(chatbot.id):
-        raise InvalidConversationToken(
-            "The conversation token does not belong to this chatbot."
+@transaction.atomic
+def create_public_visitor(
+    chatbot,
+    visitor_id,
+    *,
+    lead_data=None,
+    user_metadata=None,
+    metadata=None,
+):
+    if ChatbotBlockedVisitor.objects.filter(
+        chatbot=chatbot,
+        visitor_id=visitor_id,
+    ).exists():
+        raise ValidationError("This visitor has been blocked.")
+
+    existing_sessions = ChatSession.objects.filter(
+        chatbot=chatbot,
+        visitor_id=visitor_id,
+        channel=ChatSessionChannel.WEB_WIDGET,
+        is_test=False,
+    )
+    visitor_created = not existing_sessions.exists()
+    if lead_data is None:
+        active_session = (
+            existing_sessions.filter(status__in=RESUMABLE_SESSION_STATUSES)
+            .select_related("lead")
+            .order_by("-last_activity_at", "-created_at")
+            .first()
         )
+        if active_session is not None:
+            return active_session, visitor_created, False
+        lead = None
+    else:
+        if not LeadCaptureConfig.objects.filter(
+            chatbot=chatbot,
+            is_enabled=True,
+        ).exists():
+            raise ValidationError(
+                {"lead_data": "Lead capture is not enabled."}
+            )
+        lead_session = (
+            existing_sessions.filter(lead__isnull=False)
+            .select_related("lead")
+            .first()
+        )
+        if lead_session is None:
+            lead = Lead(
+                chatbot=chatbot,
+                collected_fields=lead_data,
+                source="web_widget",
+            )
+        else:
+            lead = lead_session.lead
+            lead.collected_fields = lead_data
+        lead.full_clean()
+        lead.save()
+
+    session = create_public_visitor_session(
+        chatbot,
+        visitor_id,
+        user_metadata=user_metadata,
+        metadata=metadata,
+        lead=lead,
+    )
+    return session, visitor_created, True
+
+
+def get_public_visitor_session(
+    chatbot,
+    visitor_id,
+    session_id,
+    conversation_token,
+    *,
+    resumable_only=False,
+):
+    payload = decode_conversation_token(conversation_token)
+    if (
+        payload["session_id"] != str(session_id)
+        or payload["chatbot_id"] != str(chatbot.id)
+        or payload["visitor_id"] != visitor_id
+    ):
+        raise PermissionDenied(
+            "The conversation token does not belong to this visitor session."
+        )
+    filters = {}
+    if resumable_only:
+        filters["status__in"] = RESUMABLE_SESSION_STATUSES
     try:
         return ChatSession.objects.get(
-            pk=payload["session_id"],
+            pk=session_id,
             chatbot=chatbot,
-            visitor_id=payload["visitor_id"],
+            visitor_id=visitor_id,
             channel=ChatSessionChannel.WEB_WIDGET,
             is_test=False,
+            **filters,
         )
     except ChatSession.DoesNotExist as exc:
         raise Http404("Conversation not found.") from exc
 
 
 def get_visitor_chat_session(chatbot, session_id, conversation_token):
+    """Return an open token-authenticated session for public integrations."""
     payload = decode_conversation_token(conversation_token)
-    if (
-        payload["session_id"] != str(session_id)
-        or payload["chatbot_id"] != str(chatbot.id)
-    ):
-        raise PermissionDenied(
-            "The conversation token does not belong to this conversation."
-        )
-    try:
-        return ChatSession.objects.get(
-            pk=session_id,
-            chatbot=chatbot,
-            visitor_id=payload["visitor_id"],
-            channel=ChatSessionChannel.WEB_WIDGET,
-            is_test=False,
-            status__in=RESUMABLE_SESSION_STATUSES,
-        )
-    except ChatSession.DoesNotExist as exc:
-        raise Http404("Conversation not found.") from exc
+    return get_public_visitor_session(
+        chatbot,
+        payload["visitor_id"],
+        session_id,
+        conversation_token,
+        resumable_only=True,
+    )
 
 
 @transaction.atomic
