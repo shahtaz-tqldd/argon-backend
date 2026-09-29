@@ -58,6 +58,10 @@ class AgentClient:
         self.session = session
         self.chat_agent = root_agent(chatbot, session)
         self.specialist_names = {agent.name for agent in self.chat_agent.sub_agents}
+        # GlobalInstructionPlugin executes its callback from ADK's async model
+        # pipeline. Build the instruction here, while still on Django's sync
+        # request path, because feature checks may load related ORM objects.
+        rendered_global_instruction = global_instruction(chatbot)
         self.app = App(
             name=self.app_name,
             root_agent=self.chat_agent,
@@ -72,7 +76,7 @@ class AgentClient:
             ),
             plugins=[
                 GlobalInstructionPlugin(
-                    global_instruction=lambda _ctx: global_instruction(chatbot)
+                    global_instruction=lambda _ctx: rendered_global_instruction
                 )
             ]
         )
