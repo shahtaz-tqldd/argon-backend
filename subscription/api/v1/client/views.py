@@ -13,6 +13,7 @@ from app.utils.pagination import CustomPagination
 from app.utils.permission import IsChatbotUser
 from app.utils.response import APIResponse
 from chatbot.models import Chatbot
+from coupon.services import CouponNotEligibleError, CouponNotFoundError
 from subscription.api.v1.client.serializers import (
     ChatbotSubscriptionClientSerializer,
     FreeSubscriptionSerializer,
@@ -127,11 +128,23 @@ class StripeCheckoutAPIView(SubscriptionChatbotMixin, GenericAPIView):
                 chatbot=chatbot,
                 plan_price=serializer.validated_data["plan_price"],
                 user=request.user,
+                coupon_code=serializer.validated_data.get("coupon_code")
+                or None,
             )
         except SubscriptionConflictError as exc:
             return APIResponse.error(
                 message=str(exc),
                 status=status.HTTP_409_CONFLICT,
+            )
+        except CouponNotFoundError as exc:
+            return APIResponse.error(
+                message=str(exc),
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except CouponNotEligibleError as exc:
+            return APIResponse.error(
+                message=str(exc),
+                status=status.HTTP_400_BAD_REQUEST,
             )
         except StripeConfigurationError as exc:
             return APIResponse.error(
@@ -149,6 +162,9 @@ class StripeCheckoutAPIView(SubscriptionChatbotMixin, GenericAPIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
+        applied_coupon = (
+            checkout_result.subscription.provider_metadata or {}
+        ).get("pending_coupon") or None
         return APIResponse.success(
             data={
                 "subscription_id": str(checkout_result.subscription.id),
@@ -157,6 +173,7 @@ class StripeCheckoutAPIView(SubscriptionChatbotMixin, GenericAPIView):
                 "requires_checkout": bool(checkout_result.client_secret),
                 "reused": checkout_result.reused,
                 "action": checkout_result.action,
+                "coupon": applied_coupon,
             },
             message={
                 "checkout": "Stripe checkout is ready.",

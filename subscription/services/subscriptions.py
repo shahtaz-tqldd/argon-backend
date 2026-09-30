@@ -13,6 +13,10 @@ from subscription.choices import (
 )
 from subscription.models import ChatbotSubscription, Payment, PlanPrice
 from subscription.services.stripe import StripeBillingService
+from coupon.services import (
+    bind_pending_coupon_by_code,
+    get_pending_coupon,
+)
 
 
 OPEN_SUBSCRIPTION_STATUSES = (
@@ -140,8 +144,13 @@ def _merge_provider_metadata(subscription, values, *, updated_by=None):
     return locked
 
 
-def _create_incomplete_subscription(*, chatbot, plan_price, user):
+def _create_incomplete_subscription(
+    *, chatbot, plan_price, user, pending_coupon=None
+):
     idempotency_key = f"checkout-{uuid4()}"
+    provider_metadata = {"checkout_idempotency_key": idempotency_key}
+    if pending_coupon:
+        provider_metadata["pending_coupon"] = pending_coupon
     try:
         return ChatbotSubscription.objects.create(
             chatbot=chatbot,
@@ -150,7 +159,7 @@ def _create_incomplete_subscription(*, chatbot, plan_price, user):
             provider=PaymentProvider.STRIPE,
             renewal_mode=RenewalMode.PROVIDER_MANAGED,
             status=SubscriptionStatus.INCOMPLETE,
-            provider_metadata={"checkout_idempotency_key": idempotency_key},
+            provider_metadata=provider_metadata,
             created_by=user,
             updated_by=user,
         )
@@ -173,6 +182,7 @@ def _replace_incomplete_subscription(*, subscription, plan_price, user):
             "The subscription changed while checkout was being replaced. Try again."
         )
 
+    pending_coupon = (locked.provider_metadata or {}).get("pending_coupon")
     if locked.status == SubscriptionStatus.INCOMPLETE:
         now = timezone.now()
         locked.status = SubscriptionStatus.CANCELED
@@ -197,6 +207,7 @@ def _replace_incomplete_subscription(*, subscription, plan_price, user):
         chatbot=locked.chatbot,
         plan_price=plan_price,
         user=user,
+        pending_coupon=pending_coupon,
     )
 
 
@@ -467,7 +478,14 @@ def _change_active_stripe_plan(
     )
 
 
-def start_stripe_checkout(*, chatbot, plan_price, user, stripe_service=None):
+def start_stripe_checkout(
+    *,
+    chatbot,
+    plan_price,
+    user,
+    stripe_service=None,
+    coupon_code=None,
+):
     stripe_service = stripe_service or StripeBillingService()
 
     with transaction.atomic():
@@ -520,6 +538,17 @@ def start_stripe_checkout(*, chatbot, plan_price, user, stripe_service=None):
                 user=user,
             )
 
+        if subscription is not None and coupon_code:
+            # Validates the coupon for this plan and chatbot; rolls back the
+            # whole checkout start (including a fresh subscription) on failure.
+            subscription = bind_pending_coupon_by_code(
+                subscription,
+                code=coupon_code,
+                user=user,
+                chatbot=chatbot,
+                plan_price=plan_price,
+            )
+
     if active_plan_change is not None:
         return _change_active_stripe_plan(
             subscription=active_plan_change,
@@ -532,6 +561,15 @@ def start_stripe_checkout(*, chatbot, plan_price, user, stripe_service=None):
     checkout_client_secret = metadata.get("checkout_client_secret")
     checkout_session_id = metadata.get("checkout_session_id")
     same_plan = subscription.plan_price_id == plan_price.id
+    pending_coupon = get_pending_coupon(subscription)
+    pending_coupon_id = (
+        str(pending_coupon.id) if pending_coupon is not None else ""
+    )
+    # A session created for a different coupon (or without one) must not be
+    # reused; it is expired below and rebuilt with the current coupon.
+    same_coupon = (
+        metadata.get("checkout_coupon_id") or ""
+    ) == pending_coupon_id
 
     if checkout_session_id:
         existing_checkout = stripe_service.retrieve_checkout_session(
@@ -539,7 +577,12 @@ def start_stripe_checkout(*, chatbot, plan_price, user, stripe_service=None):
         )
         checkout_status = existing_checkout.get("status")
 
-        if checkout_status == "open" and same_plan and checkout_client_secret:
+        if (
+            checkout_status == "open"
+            and same_plan
+            and checkout_client_secret
+            and same_coupon
+        ):
             return StripeCheckoutResult(
                 subscription=subscription,
                 client_secret=checkout_client_secret,
@@ -688,12 +731,27 @@ def start_stripe_checkout(*, chatbot, plan_price, user, stripe_service=None):
     if not idempotency_key:
         idempotency_key = f"checkout-{uuid4()}"
 
+    # The pending coupon may have changed (or been removed) since the last
+    # Session; refresh it from the final subscription state before building
+    # the replacement Session's discount.
+    pending_coupon = get_pending_coupon(subscription)
+    pending_coupon_id = (
+        str(pending_coupon.id) if pending_coupon is not None else ""
+    )
+    promotion_code_id = ""
+    if pending_coupon is not None:
+        promotion_code_id = stripe_service.get_or_create_promotion_code(
+            coupon=pending_coupon,
+            billing_interval=subscription.get_billing_interval(),
+        )
+
     try:
         checkout = stripe_service.create_checkout_session(
             subscription=subscription,
             user=user,
             idempotency_key=idempotency_key,
             customer_id=_customer_id_for_chatbot(chatbot),
+            promotion_code_id=promotion_code_id,
         )
     except Exception as exc:
         _merge_provider_metadata(
@@ -720,6 +778,7 @@ def start_stripe_checkout(*, chatbot, plan_price, user, stripe_service=None):
             "checkout_url": "",
             "checkout_status": checkout.get("status", "open"),
             "checkout_error": "",
+            "checkout_coupon_id": pending_coupon_id,
         },
         updated_by=user,
     )

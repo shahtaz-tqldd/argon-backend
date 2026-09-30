@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from coupon.api.v1.client.serializers import CouponRedemptionClientSerializer
+from coupon.models import Coupon
 from subscription.choices import BillingInterval, PaymentProvider
 from subscription.models import ChatbotSubscription, Payment, PlanPrice, SubscriptionPlan
 
@@ -68,6 +70,12 @@ class StripeCheckoutSerializer(serializers.Serializer):
             plan__is_public=True,
         ).select_related("plan"),
     )
+    coupon_code = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        trim_whitespace=True,
+        max_length=50,
+    )
 
     def validate_plan_price_id(self, plan_price):
         if plan_price.plan.is_free or plan_price.amount == 0:
@@ -86,6 +94,14 @@ class StripeCheckoutSerializer(serializers.Serializer):
                 "Stripe checkout supports monthly or annual prices only."
             )
         return plan_price
+
+    def validate_coupon_code(self, value):
+        code = value.strip().upper()
+        if not code:
+            return ""
+        if not Coupon.objects.filter(code__iexact=code).exists():
+            raise serializers.ValidationError("No coupon exists for this code.")
+        return code
 
 
 class FreeSubscriptionSerializer(serializers.Serializer):
@@ -110,6 +126,8 @@ class ChatbotSubscriptionClientSerializer(serializers.ModelSerializer):
     chatbot_id = serializers.UUIDField(read_only=True)
     plan_price_id = serializers.UUIDField(read_only=True)
     selected_by_id = serializers.UUIDField(read_only=True, allow_null=True)
+    pending_coupon = serializers.SerializerMethodField()
+    coupon_redemption = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatbotSubscription
@@ -128,10 +146,26 @@ class ChatbotSubscriptionClientSerializer(serializers.ModelSerializer):
             "cancel_at_period_end",
             "canceled_at",
             "ended_at",
+            "pending_coupon",
+            "coupon_redemption",
             "created_at",
             "updated_at",
         )
         read_only_fields = fields
+
+    def get_pending_coupon(self, obj):
+        return (obj.provider_metadata or {}).get("pending_coupon") or None
+
+    def get_coupon_redemption(self, obj):
+        redemption = (
+            obj.coupon_redemptions.select_related("coupon", "coupon__discount")
+            .filter(is_active=True)
+            .order_by("-redeemed_at")
+            .first()
+        )
+        if redemption is None:
+            return None
+        return CouponRedemptionClientSerializer(redemption).data
 
 
 class PaymentClientSerializer(serializers.ModelSerializer):

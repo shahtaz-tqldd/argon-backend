@@ -12,6 +12,7 @@ v1_client_urls = [
     path("knowledge/", include("knowledge.api.v1.client.urls")),
     path("lead-captures/", include("lead_capture.api.v1.client.urls")),
     path("appointments/", include("appointment.api.v1.client.urls")),
+    path("subscriptions/coupons/", include("coupon.api.v1.client.urls")),
     path("subscriptions/", include("subscription.api.v1.client.urls")),
     path("notifications/", include("notification.api.v1.client.urls")),
 ]
@@ -23,6 +24,7 @@ v1_admin_urls = [
     path("chatbots/", include("chatbot.api.v1.admin.urls")),
     path("workspaces/", include("workspace.api.v1.admin.urls")),
     path("subscriptions/", include("subscription.api.v1.admin.urls")),
+    path("coupons/", include("coupon.api.v1.admin.urls")),
     # path("vector-store/", include("vector_store.api.v1.admin.urls")),
 ]
 

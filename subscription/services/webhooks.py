@@ -6,6 +6,7 @@ from uuid import UUID
 from django.db import transaction
 from django.utils import timezone
 
+from coupon.services import record_coupon_redemption_for_payment
 from subscription.choices import (
     PaymentProvider,
     PaymentStatus,
@@ -531,6 +532,15 @@ class StripeWebhookProcessor:
                 "paid_at": paid_at,
             },
         )
+
+        if payment_status == PaymentStatus.SUCCEEDED:
+            try:
+                record_coupon_redemption_for_payment(subscription, payment)
+            except Exception:
+                logger.exception(
+                    "Coupon redemption could not be recorded for invoice %s",
+                    invoice.get("id", ""),
+                )
         return payment
 
     def _sync_refund(self, charge):

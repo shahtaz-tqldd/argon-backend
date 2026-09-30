@@ -1,54 +1,19 @@
 from django.urls import path
 
-from subscription.api.v1.client.views import (
-    CurrentSubscriptionAPIView,
-    FreeSubscriptionAPIView,
-    StripeBillingPortalAPIView,
-    StripeCheckoutAPIView,
-    StripeWebhookAPIView,
-    SubscriptionCancellationAPIView,
-    SubscriptionPaymentListAPIView,
-    SubscriptionPlanDetailAPIView,
-    SubscriptionPlanListAPIView,
-)
+from subscription.api.v1.client import views
 
 
 urlpatterns = [
-    path("plans/", SubscriptionPlanListAPIView.as_view(), name="subscription-plan-list"),
-    path(
-        "plans/details/",
-        SubscriptionPlanDetailAPIView.as_view(),
-        name="subscription-plan-details",
-    ),
-    path("checkout/", StripeCheckoutAPIView.as_view(), name="subscription-checkout"),
-    path(
-        "activate-free/",
-        FreeSubscriptionAPIView.as_view(),
-        name="subscription-activate-free",
-    ),
-    path(
-        "current/",
-        CurrentSubscriptionAPIView.as_view(),
-        name="current-subscription",
-    ),
-    path(
-        "payments/",
-        SubscriptionPaymentListAPIView.as_view(),
-        name="subscription-payment-list",
-    ),
-    path(
-        "billing-portal/",
-        StripeBillingPortalAPIView.as_view(),
-        name="stripe-billing-portal",
-    ),
-    path(
-        "cancellation/",
-        SubscriptionCancellationAPIView.as_view(),
-        name="subscription-cancellation",
-    ),
-    path(
-        "stripe/webhook/",
-        StripeWebhookAPIView.as_view(),
-        name="stripe-webhook",
-    ),
+    path("plans/", views.SubscriptionPlanListAPIView.as_view(), name="subscription-plan-list"),
+    path("plans/details/", views.SubscriptionPlanDetailAPIView.as_view(), name="subscription-plan-details"),
+    
+    path("current/", views.CurrentSubscriptionAPIView.as_view(), name="current-subscription"),
+    path("activate-free/", views.FreeSubscriptionAPIView.as_view(), name="subscription-activate-free"),
+    path("cancellation/", views.SubscriptionCancellationAPIView.as_view(), name="subscription-cancellation"),
+    
+    path("billing-portal/", views.StripeBillingPortalAPIView.as_view(), name="stripe-billing-portal"),
+    path("checkout/", views.StripeCheckoutAPIView.as_view(), name="subscription-checkout"),
+    path("stripe/webhook/", views.StripeWebhookAPIView.as_view(), name="stripe-webhook"),
+    
+    path("payments/", views.SubscriptionPaymentListAPIView.as_view(), name="subscription-payment-list"),
 ]

@@ -1,3 +1,5 @@
+from decimal import Decimal, InvalidOperation
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -320,16 +322,52 @@ class CouponRedemption(BaseModel):
                 "A percentage discount cannot have a currency."
             )
 
-        if self.discount_amount > self.original_amount:
+        original_amount = self._to_decimal(self.original_amount)
+        discount_amount = self._to_decimal(self.discount_amount)
+        final_amount = self._to_decimal(self.final_amount)
+        if (
+            original_amount is not None
+            and discount_amount is not None
+            and discount_amount > original_amount
+        ):
             errors["discount_amount"] = (
                 "The discount cannot exceed the original amount."
             )
-        if self.final_amount != self.original_amount - self.discount_amount:
+        if (
+            original_amount is not None
+            and discount_amount is not None
+            and final_amount is not None
+            and final_amount != original_amount - discount_amount
+        ):
             errors["final_amount"] = (
                 "Final amount must equal original minus discount."
             )
         if errors:
             raise ValidationError(errors)
+
+    @staticmethod
+    def _to_decimal(value):
+        if isinstance(value, Decimal):
+            return value
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _snapshot_values_equal(current, stored):
+        """Compare a snapshot value with its database-loaded counterpart.
+
+        Decimal fields accept uncleaned input (``"10.00"``) before the first
+        save but come back from the database as ``Decimal``, so a plain
+        equality check would flag an untouched field as changed.
+        """
+        if current == stored:
+            return True
+        try:
+            return Decimal(str(current)) == Decimal(str(stored))
+        except (InvalidOperation, ValueError, TypeError):
+            return False
 
     def validate_snapshot_immutability(self):
         if self._state.adding or not self.pk:
@@ -348,7 +386,12 @@ class CouponRedemption(BaseModel):
         original = type(self).objects.filter(pk=self.pk).values(*snapshot_fields).first()
         if original is None:
             return
-        if any(getattr(self, field) != original[field] for field in snapshot_fields):
+        if any(
+            not self._snapshot_values_equal(
+                getattr(self, field), original[field]
+            )
+            for field in snapshot_fields
+        ):
             raise ValidationError(
                 {
                     "coupon": (

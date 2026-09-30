@@ -1,9 +1,12 @@
 from app.utils.logger import logger
 from decimal import Decimal
+from hashlib import sha256
+from time import time
 
 import stripe
 from django.conf import settings
 
+from coupon.choices import DiscountDuration, DiscountType
 from subscription.choices import BillingInterval
 
 
@@ -104,6 +107,7 @@ class StripeBillingService:
         user,
         idempotency_key,
         customer_id="",
+        promotion_code_id="",
     ):
         plan = subscription.snapshot["plan"]
         pricing = subscription.snapshot["pricing"]
@@ -149,6 +153,8 @@ class StripeBillingService:
             "metadata": metadata,
             "subscription_data": {"metadata": metadata},
         }
+        if promotion_code_id:
+            params["discounts"] = [{"promotion_code": promotion_code_id}]
         if customer_id:
             params["customer"] = customer_id
         else:
@@ -165,6 +171,134 @@ class StripeBillingService:
                 "Stripe checkout is temporarily unavailable."
             ) from exc
         return stripe_object_to_dict(session)
+
+    def _promotion_fingerprint(self, coupon, billing_interval):
+        discount = coupon.discount
+        material = "|".join(
+            str(value)
+            for value in (
+                discount.discount_type,
+                discount.value,
+                (discount.currency or "").upper(),
+                discount.duration,
+                discount.duration_in_billing_cycles or 0,
+                billing_interval,
+            )
+        )
+        return sha256(material.encode()).hexdigest()[:16]
+
+    def get_or_create_promotion_code(self, *, coupon, billing_interval):
+        """Return a Stripe promotion-code id for a local coupon.
+
+        The local coupon's ``metadata`` caches the created Stripe objects so
+        repeated checkouts do not create duplicates. Stripe promotion codes
+        are immutable once created, so a discount that changed afterwards is
+        rejected instead of silently charging the wrong amount.
+        """
+        discount = coupon.discount
+        code = coupon.code.strip().upper()
+        cached = (coupon.metadata or {}).get("stripe_promotion_code") or {}
+        fingerprint = self._promotion_fingerprint(coupon, billing_interval)
+
+        if cached.get("promotion_code_id"):
+            if cached.get("fingerprint") != fingerprint:
+                raise StripeConfigurationError(
+                    "The coupon's discount changed after its Stripe promotion "
+                    "code was created. Create a new coupon code instead."
+                )
+            if cached.get("code") == code:
+                try:
+                    promo = self._client().v1.promotion_codes.retrieve(
+                        cached["promotion_code_id"]
+                    )
+                    if promo.get("active") and (
+                        (promo.get("code") or "").upper() == code
+                    ):
+                        return cached["promotion_code_id"]
+                except stripe.StripeError:
+                    logger.warning(
+                        "Cached Stripe promotion code %s could not be "
+                        "retrieved; recreating it.",
+                        cached["promotion_code_id"],
+                    )
+
+        coupon_params = {
+            "name": f"{discount.name} ({code})"[:40],
+            "duration": {
+                DiscountDuration.ONCE: "once",
+                DiscountDuration.REPEATING: "repeating",
+                DiscountDuration.FOREVER: "forever",
+            }[discount.duration],
+            "metadata": {
+                "argon_coupon_id": str(coupon.id),
+                "argon_code": code,
+            },
+        }
+        if discount.discount_type == DiscountType.PERCENTAGE:
+            coupon_params["percent_off"] = float(discount.value)
+        else:
+            coupon_params["amount_off"] = stripe_minor_unit_amount(
+                discount.value,
+                discount.currency,
+            )
+            coupon_params["currency"] = discount.currency.strip().lower()
+        if discount.duration == DiscountDuration.REPEATING:
+            coupon_params["duration_in_months"] = (
+                discount.duration_in_billing_cycles
+                * (12 if billing_interval == BillingInterval.ANNUAL else 1)
+            )
+        if coupon.max_redemptions is not None:
+            coupon_params["max_redemptions"] = coupon.max_redemptions
+        if coupon.valid_until is not None:
+            redeem_by = int(coupon.valid_until.timestamp())
+            if redeem_by > int(time()):
+                coupon_params["redeem_by"] = redeem_by
+
+        promotion_params = {"code": code, "active": True}
+        if coupon.minimum_purchase_amount is not None:
+            promotion_params["restrictions"] = {
+                "minimum_amount": stripe_minor_unit_amount(
+                    coupon.minimum_purchase_amount,
+                    coupon.minimum_purchase_currency,
+                ),
+                "minimum_amount_currency": (
+                    coupon.minimum_purchase_currency.strip().lower()
+                ),
+            }
+
+        client = self._client()
+        try:
+            stripe_coupon = client.v1.coupons.create(
+                coupon_params,
+                options={"idempotency_key": f"coupon-{coupon.id}-{fingerprint}"},
+            )
+            promotion_params["coupon"] = stripe_object_to_dict(stripe_coupon)[
+                "id"
+            ]
+            promotion = client.v1.promotion_codes.create(
+                promotion_params,
+                options={
+                    "idempotency_key": f"promo-{coupon.id}-{fingerprint}"
+                },
+            )
+        except stripe.StripeError as exc:
+            logger.exception("Stripe promotion code creation failed")
+            raise StripeServiceError(
+                "Stripe could not prepare this coupon."
+            ) from exc
+
+        promotion_dict = stripe_object_to_dict(promotion)
+        coupon.metadata = {
+            **(coupon.metadata or {}),
+            "stripe_promotion_code": {
+                "code": code,
+                "coupon_id": promotion_dict.get("coupon", "") or "",
+                "promotion_code_id": promotion_dict.get("id", ""),
+                "fingerprint": fingerprint,
+            },
+        }
+        coupon.save(update_fields=["metadata", "updated_at"])
+        return promotion_dict["id"]
 
     def retrieve_checkout_session(self, *, session_id):
         try:
