@@ -15,7 +15,7 @@ from chatbot.models import (
     Chatbot,
     ChatbotActivityLog,
     ChatbotAllowedOrigin,
-    ChatbotCapacity,
+    ChatbotConfig,
     ChatbotInvitation,
     ChatbotUser,
     ChatbotWidgetSettings,
@@ -28,7 +28,7 @@ from chatbot.services.invitations import (
     issue_chatbot_invitation,
 )
 from chatbot.services.membership import create_chatbot
-from chatbot.utils.choices import ChatbotPermissionTypes
+from chatbot.utils.choices import ChatbotActivityModuleTypes, ChatbotPermissionTypes
 from chatbot.utils.permissions import (
     default_chatbot_user_permissions,
     normalize_chatbot_permission_codes,
@@ -61,6 +61,9 @@ class ChatbotMemberQuerySerializer(ChatbotQuerySerializer):
 
 
 class ChatbotActivityLogQuerySerializer(ChatbotQuerySerializer):
+    module = serializers.ChoiceField(
+        choices=ChatbotActivityModuleTypes.choices, required=False,
+    )
     member_email = serializers.EmailField(max_length=254, required=False)
 
     def validate_member_email(self, value):
@@ -89,6 +92,7 @@ class ChatbotActivityLogSerializer(serializers.ModelSerializer):
             "id",
             "user",
             "action",
+            "module",
             "description",
             "metadata",
             "created_at",
@@ -442,11 +446,11 @@ class ChatbotBaseWorkspaceSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class ChatbotCapacitySerializer(serializers.ModelSerializer):
+class ChatbotConfigSerializer(serializers.ModelSerializer):
     """Serialize the cached limits, usage, and entitlements for a chatbot."""
 
     class Meta:
-        model = ChatbotCapacity
+        model = ChatbotConfig
         fields = (
             "ai_message_limit",
             "current_ai_message_count",
@@ -462,18 +466,15 @@ class ChatbotCapacitySerializer(serializers.ModelSerializer):
 
 
 class ChatbotCurrentSubscriptionPlanSerializer(serializers.Serializer):
-    """Serialize the plan and billing state for the current subscription."""
+    """Serialize the subscription summary supplied by ChatbotConfig."""
 
-    name = serializers.CharField(source="get_plan_name", read_only=True)
-    is_free = serializers.BooleanField(source="is_free_plan", read_only=True)
-    billing_interval = serializers.CharField(
-        source="get_billing_interval",
-        read_only=True,
+    plan_name = serializers.CharField(read_only=True)
+    billing_cycle = serializers.CharField(read_only=True, allow_null=True)
+    price = serializers.DecimalField(
+        max_digits=12, decimal_places=2, read_only=True, allow_null=True,
     )
-    status = serializers.CharField(read_only=True)
-    current_period_start = serializers.DateTimeField(read_only=True)
-    current_period_end = serializers.DateTimeField(read_only=True)
-    cancel_at_period_end = serializers.BooleanField(read_only=True)
+    currency = serializers.CharField(read_only=True, allow_null=True)
+    next_billing_at = serializers.DateTimeField(read_only=True, allow_null=True)
 
 
 class ChatbotAllowedURLSerializer(serializers.ModelSerializer):
@@ -495,7 +496,7 @@ class ChatbotBaseResponseSerializer(serializers.ModelSerializer):
     """Serialize chatbot identity and subscription-backed capabilities."""
 
     workspace = ChatbotBaseWorkspaceSerializer(read_only=True)
-    capacity = ChatbotCapacitySerializer(read_only=True)
+    capacity = ChatbotConfigSerializer(read_only=True)
     features = serializers.SerializerMethodField()
     current_subscription_plan = serializers.SerializerMethodField()
     allowed_urls = ChatbotAllowedURLSerializer(
@@ -520,13 +521,10 @@ class ChatbotBaseResponseSerializer(serializers.ModelSerializer):
         }
 
     def get_current_subscription_plan(self, obj):
-        subscriptions = getattr(obj, "open_subscriptions", None)
-        if subscriptions is None:
-            subscription = obj.subscriptions.filter(
-                status__in=OPEN_SUBSCRIPTION_STATUSES,
-            ).first()
-        else:
-            subscription = subscriptions[0] if subscriptions else None
+        config = getattr(obj, "capacity", None)
+        if config is None:
+            return None
+        subscription = config.current_subscription()
         if subscription is None:
             return None
         return ChatbotCurrentSubscriptionPlanSerializer(subscription).data

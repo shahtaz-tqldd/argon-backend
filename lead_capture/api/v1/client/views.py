@@ -11,8 +11,10 @@ from rest_framework.generics import GenericAPIView
 from app.utils.pagination import CustomPagination
 from app.utils.permission import IsChatbotUser
 from app.utils.response import APIResponse
-from chatbot.models import Chatbot, ChatbotCapacity, ChatbotUser
+from chatbot.models import Chatbot, ChatbotConfig, ChatbotUser
 from chatbot.services.capacity import get_chatbot_capacity
+from chatbot.services import record_chatbot_activity
+from chatbot.services.activity_logs import activity_serializer_snapshot, activity_update_metadata
 from chatbot.utils.choices import ChatbotPermissionTypes
 from lead_capture.api.v1.client.serializers import (
     LeadCaptureConfigSerializer,
@@ -75,7 +77,7 @@ class LeadCaptureChatbotMixin:
             self.check_object_permissions(self.request, self._chatbot)
             try:
                 capacity = get_chatbot_capacity(self._chatbot)
-            except ChatbotCapacity.DoesNotExist as exc:
+            except ChatbotConfig.DoesNotExist as exc:
                 raise PermissionDenied(
                     "Chatbot capacity has not been initialized."
                 ) from exc
@@ -161,6 +163,17 @@ class LeadCaptureConfigCreateAPIView(LeadCaptureChatbotMixin, GenericAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         config = serializer.save()
+        record_chatbot_activity(
+            chatbot=chatbot,
+            user=request.user,
+            module="leads",
+            action="leads.config.created",
+            description="Created lead capture configuration.",
+            metadata={
+                "config_id": str(config.id),
+                "configuration": activity_serializer_snapshot(serializer, config),
+            },
+        )
         return APIResponse.success(
             data=self.get_serializer(config).data,
             message="Lead capture configuration created successfully.",
@@ -184,7 +197,22 @@ class LeadCaptureConfigUpdateAPIView(LeadCaptureChatbotMixin, GenericAPIView):
             partial=partial,
         )
         serializer.is_valid(raise_exception=True)
+        fields = tuple(serializer.validated_data)
+        previous = activity_serializer_snapshot(serializer, config, fields)
         config = serializer.save()
+        record_chatbot_activity(
+            chatbot=config.chatbot,
+            user=request.user,
+            module="leads",
+            action="leads.config.updated",
+            description="Updated lead capture configuration.",
+            metadata={
+                "config_id": str(config.id),
+                **activity_update_metadata(
+                    previous, activity_serializer_snapshot(serializer, config, fields),
+                ),
+            },
+        )
         return APIResponse.success(
             data=self.get_serializer(config).data,
             message="Lead capture configuration updated successfully.",
@@ -352,6 +380,21 @@ class ExportLeadAPIView(LeadCaptureChatbotMixin, GenericAPIView):
         )
         response["X-Lead-Export-Limit"] = str(self.export_limit)
         response["X-Lead-Export-Count"] = str(len(exported_leads))
+        record_chatbot_activity(
+            chatbot=chatbot,
+            user=request.user,
+            module="leads",
+            action="leads.exported",
+            description="Exported leads.",
+            metadata={
+                "file_format": file_format,
+                "filename": filename,
+                "count": len(exported_leads),
+                "lead_ids": [str(lead.id) for lead in exported_leads],
+                "start_date": start_date.isoformat() if start_date else None,
+                "end_date": end_date.isoformat() if end_date else None,
+            },
+        )
         return response
 
 
@@ -373,13 +416,29 @@ class LeadUpdateView(LeadObjectMixin, GenericAPIView):
     serializer_class = LeadUpdateSerializer
 
     def _update(self, request, *, partial):
+        lead = self.get_lead()
         serializer = self.get_serializer(
-            self.get_lead(),
+            lead,
             data=request.data,
             partial=partial,
         )
         serializer.is_valid(raise_exception=True)
+        fields = tuple(serializer.validated_data)
+        previous = activity_serializer_snapshot(serializer, lead, fields)
         lead = serializer.save()
+        record_chatbot_activity(
+            chatbot=lead.chatbot,
+            user=request.user,
+            module="leads",
+            action="leads.updated",
+            description="Updated lead.",
+            metadata={
+                "lead_id": str(lead.id),
+                **activity_update_metadata(
+                    previous, activity_serializer_snapshot(serializer, lead, fields),
+                ),
+            },
+        )
         return APIResponse.success(
             data=LeadSerializer(lead).data,
             message="Lead updated successfully.",
@@ -454,13 +513,29 @@ class LeadNoteUpdateView(LeadNoteObjectMixin, GenericAPIView):
     serializer_class = LeadNoteSerializer
 
     def _update(self, request, *, partial):
+        note = self.get_lead_note()
         serializer = self.get_serializer(
-            self.get_lead_note(),
+            note,
             data=request.data,
             partial=partial,
         )
         serializer.is_valid(raise_exception=True)
+        fields = tuple(serializer.validated_data)
+        previous = activity_serializer_snapshot(serializer, note, fields)
         note = serializer.save()
+        record_chatbot_activity(
+            chatbot=note.lead.chatbot,
+            user=request.user,
+            module="leads",
+            action="leads.note.updated",
+            description="Updated lead note.",
+            metadata={
+                "lead_id": str(note.lead_id), "note_id": str(note.id),
+                **activity_update_metadata(
+                    previous, activity_serializer_snapshot(serializer, note, fields),
+                ),
+            },
+        )
         return APIResponse.success(
             data=self.get_serializer(note).data,
             message="Lead note updated successfully.",
@@ -481,7 +556,17 @@ class LeadNoteDeleteView(LeadNoteObjectMixin, GenericAPIView):
     def delete(self, request, *args, **kwargs):
         note = self.get_lead_note()
         note_id = str(note.id)
+        chatbot = note.lead.chatbot
+        metadata = {"lead_id": str(note.lead_id), "note_id": note_id, "content": note.content}
         note.delete()
+        record_chatbot_activity(
+            chatbot=chatbot,
+            user=request.user,
+            module="leads",
+            action="leads.note.deleted",
+            description="Deleted lead note.",
+            metadata=metadata,
+        )
         return APIResponse.success(
             data={"id": note_id},
             message="Lead note deleted successfully.",

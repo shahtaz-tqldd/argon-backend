@@ -7,7 +7,7 @@ from chatbot.models import (
     DEFAULT_CHATBOT_FALLBACK_MESSAGE,
     DEFAULT_CHATBOT_NEVER_ANSWER,
     Chatbot,
-    ChatbotCapacity,
+    ChatbotConfig,
     ChatbotUser,
     ChatbotWidgetSettings,
 )
@@ -112,7 +112,7 @@ class ChatbotMembershipTests(TestCase):
             status=SubscriptionStatus.ACTIVE,
         )
         self.assertTrue(subscription.is_free_plan())
-        capacity = ChatbotCapacity.objects.get(chatbot=chatbot)
+        capacity = ChatbotConfig.objects.get(chatbot=chatbot)
         self.assertEqual(capacity.ai_message_limit, 100)
         self.assertEqual(capacity.file_size_limit_bytes, 10 * 1024 * 1024)
         self.assertEqual(capacity.knowledge_chunk_limit, 30)

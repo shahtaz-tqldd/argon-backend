@@ -6,7 +6,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from analytics.models import AIUsage
-from chatbot.models import Chatbot, ChatbotCapacity, ChatbotUser
+from chatbot.models import Chatbot, ChatbotConfig, ChatbotUser
 from chatbot.utils.choices import ChatbotRoleTypes
 from chat.models import ChatMessage, ChatSession
 from chat.utils.choices import ChatMessageSenderType
@@ -44,7 +44,7 @@ class TestChatSessionAPITests(APITestCase):
             user=self.owner,
             role=ChatbotRoleTypes.ADMIN,
         )
-        self.capacity = ChatbotCapacity.objects.create(
+        self.capacity = ChatbotConfig.objects.create(
             chatbot=self.chatbot,
             ai_message_limit=10,
         )

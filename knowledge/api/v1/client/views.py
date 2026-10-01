@@ -8,6 +8,8 @@ from app.utils.pagination import CustomPagination
 from app.utils.permission import IsChatbotUser
 from app.utils.response import APIResponse
 from chatbot.models import Chatbot
+from chatbot.services import record_chatbot_activity
+from chatbot.services.activity_logs import activity_update_metadata
 from chatbot.utils.choices import ChatbotPermissionTypes
 from knowledge.api.v1.client.serializers import (
     KNOWLEDGE_API_TYPE_TO_SOURCE_TYPE,
@@ -48,6 +50,16 @@ ACTIVE_TRAINING_STAGES = {
     KnowledgeTrainingStageTypes.EMBEDDING,
     KnowledgeTrainingStageTypes.INDEXING,
 }
+
+
+def knowledge_activity_identity(knowledge_base):
+    return {
+        "knowledge_base_id": str(knowledge_base.id),
+        "title": knowledge_base.title,
+        "source_type": knowledge_base.source_type,
+        "url": knowledge_base.url,
+        "original_filename": knowledge_base.original_filename,
+    }
 
 
 def has_active_training(knowledge_base):
@@ -165,6 +177,14 @@ class KnowledgeUploadAPIView(KnowledgeChatbotMixin, GenericAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         knowledge_base = serializer.save()
+        record_chatbot_activity(
+            chatbot=knowledge_base.chatbot,
+            user=request.user,
+            module="knowledge",
+            action="knowledge.uploaded",
+            description=f"Uploaded knowledge source {knowledge_base.name}.",
+            metadata=knowledge_activity_identity(knowledge_base),
+        )
         training_log = queue_knowledge_training(knowledge_base)
         return APIResponse.success(
             data={
@@ -309,6 +329,14 @@ class KnowledgeUpdateAPIView(KnowledgeObjectMixin, GenericAPIView):
                 status=status.HTTP_409_CONFLICT,
             )
         training = queue_knowledge_training(knowledge_base, force=True)
+        record_chatbot_activity(
+            chatbot=knowledge_base.chatbot,
+            user=self.request.user,
+            module="knowledge",
+            action="knowledge.retraining.queued",
+            description=f"Queued retraining for knowledge source {knowledge_base.name}.",
+            metadata=knowledge_activity_identity(knowledge_base),
+        )
         existing_logs = getattr(knowledge_base, "all_training_logs", [])
         knowledge_base.all_training_logs = [training, *existing_logs]
         return APIResponse.success(
@@ -346,7 +374,29 @@ class KnowledgeUpdateAPIView(KnowledgeObjectMixin, GenericAPIView):
                     status=status.HTTP_409_CONFLICT,
                 )
 
+            fields = {
+                field: "text_content" if field == "content" else field
+                for field in serializer.validated_data
+            }
+            previous = {
+                field: getattr(knowledge_base, attribute)
+                for field, attribute in fields.items()
+            }
             knowledge_base = serializer.save()
+            record_chatbot_activity(
+                chatbot=knowledge_base.chatbot,
+                user=request.user,
+                module="knowledge",
+                action="knowledge.updated",
+                description=f"Updated knowledge source {knowledge_base.name}.",
+                metadata={
+                    **knowledge_activity_identity(knowledge_base),
+                    **activity_update_metadata(previous, {
+                        field: getattr(knowledge_base, attribute)
+                        for field, attribute in fields.items()
+                    }),
+                },
+            )
             if content_changed:
                 return self._queue_retraining(
                     knowledge_base,
@@ -428,7 +478,18 @@ class KnowledgeDeleteAPIView(KnowledgeObjectMixin, GenericAPIView):
                 status=status.HTTP_409_CONFLICT,
             )
         source_id = str(knowledge_base.id)
+        chatbot = knowledge_base.chatbot
+        metadata = knowledge_activity_identity(knowledge_base)
+        source_name = knowledge_base.name
         knowledge_base.delete()
+        record_chatbot_activity(
+            chatbot=chatbot,
+            user=request.user,
+            module="knowledge",
+            action="knowledge.deleted",
+            description=f"Deleted knowledge source {source_name}.",
+            metadata=metadata,
+        )
         return APIResponse.success(
             data={"id": source_id},
             message="Knowledge source and vectors deleted successfully.",

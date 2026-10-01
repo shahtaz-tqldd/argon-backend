@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.urls import reverse
+from django.test import SimpleTestCase
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -169,3 +170,56 @@ class ChatbotActivityLogTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class ActivityUpdateMetadataTests(SimpleTestCase):
+    def test_snapshots_include_only_modified_values(self):
+        from chatbot.api.v1.client.views import activity_update_metadata
+
+        metadata = activity_update_metadata(
+            {"name": "Old", "enabled": True, "permissions": ["read"]},
+            {"name": "New", "enabled": True, "permissions": []},
+        )
+        self.assertEqual(metadata, {
+            "updated_fields": ["name", "permissions"],
+            "changes": {
+                "name": {"previous_value": "Old", "updated_value": "New"},
+                "permissions": {"previous_value": ["read"], "updated_value": []},
+            },
+        })
+
+    def test_unchanged_values_have_no_snapshots(self):
+        from chatbot.api.v1.client.views import activity_update_metadata
+
+        self.assertEqual(
+            activity_update_metadata({"enabled": False}, {"enabled": False}),
+            {"updated_fields": [], "changes": {}},
+        )
+
+
+class ActivityModuleTests(SimpleTestCase):
+    def test_module_choices_validate_filter(self):
+        from chatbot.api.v1.client.serializers import ChatbotActivityLogQuerySerializer
+
+        for module in ("chatbot", "knowledge", "leads", "appointment", "other"):
+            serializer = ChatbotActivityLogQuerySerializer(
+                data={"chatbot": "support", "module": module},
+            )
+            self.assertTrue(serializer.is_valid(), serializer.errors)
+        serializer = ChatbotActivityLogQuerySerializer(
+            data={"chatbot": "support", "module": "invalid"},
+        )
+        self.assertFalse(serializer.is_valid())
+
+    def test_activity_list_filters_module(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from chatbot.api.v1.client.views import ChatbotActivityLogListView
+
+        view = ChatbotActivityLogListView()
+        view.request = SimpleNamespace(query_params={"chatbot": "support", "module": "knowledge"})
+        view.get_chatbot = Mock()
+        with patch("chatbot.api.v1.client.views.ChatbotActivityLog.objects") as manager:
+            queryset = manager.filter.return_value.select_related.return_value
+            self.assertEqual(view.get_queryset(), queryset.filter.return_value)
+            queryset.filter.assert_called_once_with(module="knowledge")

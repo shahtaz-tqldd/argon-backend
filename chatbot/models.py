@@ -9,6 +9,7 @@ from app.core.models import BaseModel, BaseMinModel
 from app.utils.validators import validate_timezone_name
 
 from chatbot.utils.choices import (
+    ChatbotActivityModuleTypes,
     ChatbotPermissionTypes,
     ChatbotRoleTypes,
     ChatbotStatusTypes,
@@ -177,15 +178,68 @@ class Chatbot(BaseModel):
         return candidate
 
     def save(self, *args, **kwargs):
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            update_fields = set(update_fields)
+            if not update_fields:
+                return
+            kwargs["update_fields"] = update_fields
+
+        previous = None
+        database = kwargs.get("using") or self._state.db
+        if not self._state.adding and (
+            update_fields is None
+            or {"chatbot_name", "business_name"} & update_fields
+        ):
+            previous = type(self).objects.using(database).filter(pk=self.pk).values(
+                "chatbot_name", "business_name", "welcome_message",
+            ).first()
+
         if not self.slug:
             self.slug = self.generate_unique_slug()
-        if self.welcome_message == DEFAULT_CHATBOT_WELCOME_MESSAGE_TEMPLATE:
-            self.welcome_message = build_default_chatbot_welcome_message(
-                self.chatbot_name,
-                self.business_name,
+        default_welcome = self.welcome_message == DEFAULT_CHATBOT_WELCOME_MESSAGE_TEMPLATE
+        name_changed = False
+        chatbot_name = self.chatbot_name
+        business_name = self.business_name
+        if previous is not None:
+            if update_fields is not None:
+                if "chatbot_name" not in update_fields:
+                    chatbot_name = previous["chatbot_name"]
+                if "business_name" not in update_fields:
+                    business_name = previous["business_name"]
+            name_changed = chatbot_name != previous["chatbot_name"]
+            identity_changed = name_changed or business_name != previous["business_name"]
+            default_welcome = default_welcome or (
+                identity_changed
+                and self.welcome_message == previous["welcome_message"]
+                and previous["welcome_message"] == build_default_chatbot_welcome_message(
+                    previous["chatbot_name"], previous["business_name"],
+                )
             )
+        if default_welcome:
+            self.welcome_message = build_default_chatbot_welcome_message(
+                chatbot_name, business_name,
+            )
+            if update_fields is not None:
+                update_fields.add("welcome_message")
 
-        super().save(*args, **kwargs)
+        with transaction.atomic(using=database):
+            super().save(*args, **kwargs)
+            if name_changed:
+                ChatbotWidgetSettings.objects.using(database).filter(
+                    chatbot_id=self.pk,
+                    header_title__in=[
+                        previous["chatbot_name"][:60],
+                        DEFAULT_WIDGET_HEADER_TITLE_TEMPLATE,
+                    ],
+                ).update(
+                    header_title=DEFAULT_WIDGET_HEADER_TITLE_TEMPLATE.format(
+                        chatbot_name=chatbot_name,
+                    )[:60],
+                    updated_at=timezone.now(),
+                    updated_by_id=self.updated_by_id,
+                )
+                self._state.fields_cache.pop("widget_settings", None)
 
     @property
     def is_active(self):
@@ -204,9 +258,8 @@ class Chatbot(BaseModel):
         return bool(config and config.is_enabled)
 
 
-class ChatbotCapacity(BaseMinModel):
+class ChatbotConfig(BaseMinModel):
     """Pre-calculated subscription limits and usage for one chatbot."""
-
     chatbot = models.OneToOneField(
         Chatbot,
         related_name="capacity",
@@ -252,8 +305,8 @@ class ChatbotCapacity(BaseMinModel):
     )
 
     class Meta:
-        verbose_name = "Chatbot capacity"
-        verbose_name_plural = "Chatbot capacities"
+        verbose_name = "Chatbot config"
+        verbose_name_plural = "Chatbot configs"
 
     def clean(self):
         super().clean()
@@ -267,8 +320,42 @@ class ChatbotCapacity(BaseMinModel):
         feature = getattr(feature, "value", feature)
         return feature in (self.active_features or [])
 
+    def current_subscription(self):
+        """Return snapshot pricing and the live next billing date, or None.
+
+        The contract already snapshots plan details on ChatbotSubscription.
+        Billing dates remain live so renewals and cancellations are reflected.
+        """
+        from subscription.choices import RenewalMode
+        from subscription.models import ChatbotSubscription
+        from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
+
+        subscription = ChatbotSubscription.objects.filter(
+            chatbot_id=self.chatbot_id,
+            status__in=OPEN_SUBSCRIPTION_STATUSES,
+        ).first()
+        if subscription is None:
+            return None
+
+        next_billing_at = None
+        if not subscription.is_free_plan() and not subscription.cancel_at_period_end:
+            next_billing_at = subscription.next_billing_at
+            if (
+                next_billing_at is None
+                and subscription.renewal_mode == RenewalMode.PROVIDER_MANAGED
+            ):
+                next_billing_at = subscription.current_period_end
+
+        return {
+            "plan_name": subscription.get_plan_name(),
+            "billing_cycle": subscription.get_billing_interval(),
+            "price": subscription.get_price_amount(),
+            "currency": subscription.get_currency(),
+            "next_billing_at": next_billing_at,
+        }
+
     def __str__(self):
-        return f"Capacity: {self.chatbot}"
+        return f"Config: {self.chatbot}"
 
 
 class ChatbotWidgetSettings(BaseModel):
@@ -535,6 +622,8 @@ class ChatbotInvitation(BaseModel):
         return f"Invitation for {self.email} to {self.chatbot}"
 
 
+# CHATBOT ACTIVITY
+
 class ChatbotActivityLog(BaseMinModel):
     """A record of an action performed inside a chatbot."""
 
@@ -550,6 +639,12 @@ class ChatbotActivityLog(BaseMinModel):
         on_delete=models.SET_NULL,
         related_name="chatbot_activity_logs",
         help_text="The user who performed the action; null denotes the system.",
+    )
+    module = models.CharField(
+        max_length=20,
+        choices=ChatbotActivityModuleTypes.choices,
+        default=ChatbotActivityModuleTypes.OTHER,
+        db_index=True,
     )
     action = models.CharField(max_length=100, db_index=True)
     description = models.TextField(blank=True)

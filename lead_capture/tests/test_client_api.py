@@ -9,7 +9,7 @@ from openpyxl import load_workbook
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from chatbot.models import Chatbot, ChatbotCapacity, ChatbotUser
+from chatbot.models import Chatbot, ChatbotConfig, ChatbotUser
 from chatbot.utils.choices import ChatbotRoleTypes
 from lead_capture.models import Lead, LeadCaptureConfig, LeadNote
 from subscription.choices import PlanFeature
@@ -45,7 +45,7 @@ class LeadCaptureClientAPITests(APITestCase):
             user=self.user,
             role=ChatbotRoleTypes.ADMIN,
         )
-        self.capacity = ChatbotCapacity.objects.create(
+        self.capacity = ChatbotConfig.objects.create(
             chatbot=self.chatbot,
             active_features=[PlanFeature.LEAD_CAPTURE],
         )

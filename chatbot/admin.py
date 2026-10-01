@@ -4,7 +4,7 @@ from chatbot.models import (
     Chatbot,
     ChatbotActivityLog,
     ChatbotAllowedOrigin,
-    ChatbotCapacity,
+    ChatbotConfig,
     ChatbotInvitation,
     ChatbotUser,
     ChatbotWidgetSettings,
@@ -63,8 +63,8 @@ class ChatbotUserAdmin(admin.ModelAdmin):
 
 @admin.register(ChatbotActivityLog)
 class ChatbotActivityLogAdmin(admin.ModelAdmin):
-    list_display = ("action", "chatbot", "user", "created_at")
-    list_filter = ("action", "created_at")
+    list_display = ("action", "module", "chatbot", "user", "created_at")
+    list_filter = ("module", "action", "created_at")
     search_fields = (
         "action",
         "description",
@@ -78,6 +78,7 @@ class ChatbotActivityLogAdmin(admin.ModelAdmin):
         "chatbot",
         "user",
         "action",
+        "module",
         "description",
         "metadata",
         "created_at",
@@ -98,8 +99,8 @@ class ChatbotInvitationAdmin(admin.ModelAdmin):
     readonly_fields = ("id", "token_hash", "created_at", "updated_at")
 
 
-@admin.register(ChatbotCapacity)
-class ChatbotCapacityAdmin(admin.ModelAdmin):
+@admin.register(ChatbotConfig)
+class ChatbotConfigAdmin(admin.ModelAdmin):
     list_display = (
         "chatbot__chatbot_name",
         "current_test_ai_message_count",

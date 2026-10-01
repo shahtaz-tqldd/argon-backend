@@ -7,7 +7,7 @@ from django.db import transaction
 from agent.client import AgentClient
 from analytics.choices import AIUsageType
 from analytics.services.ai_usage import record_ai_usage
-from chatbot.models import ChatbotCapacity
+from chatbot.models import ChatbotConfig
 from chat.models import ChatMessage, ChatSession
 from chat.services.events import publish_session_event
 from chat.utils.choices import ChatMessageSenderType, ChatSessionStatus
@@ -58,7 +58,7 @@ def dispatch_ai_reply(visitor_message_id):
 
 def _reserve_ai_message(chatbot_id):
     with transaction.atomic():
-        capacity, _ = ChatbotCapacity.objects.select_for_update().get_or_create(
+        capacity, _ = ChatbotConfig.objects.select_for_update().get_or_create(
             chatbot_id=chatbot_id
         )
         if (
@@ -73,7 +73,7 @@ def _reserve_ai_message(chatbot_id):
 
 def _release_ai_message(chatbot_id):
     with transaction.atomic():
-        capacity = ChatbotCapacity.objects.select_for_update().get(
+        capacity = ChatbotConfig.objects.select_for_update().get(
             chatbot_id=chatbot_id
         )
         if capacity.current_ai_message_count:

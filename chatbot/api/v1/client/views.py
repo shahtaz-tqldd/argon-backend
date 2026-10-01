@@ -1,5 +1,6 @@
 from app.utils.logger import logger
 from types import SimpleNamespace
+from copy import deepcopy
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
@@ -43,6 +44,7 @@ from chatbot.models import (
     ChatbotUser,
 )
 from chatbot.services import record_chatbot_activity
+from chatbot.services.activity_logs import activity_update_metadata
 from chatbot.utils.choices import (
     ChatbotPermissionTypes,
     ChatbotRoleTypes,
@@ -52,6 +54,19 @@ from chatbot.utils.permissions import available_chatbot_permissions
 from subscription.models import ChatbotSubscription
 from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
 User = get_user_model()
+
+
+def widget_activity_snapshot(chatbot):
+    data = ChatbotWidgetDetailSerializer(chatbot).data
+    snapshot = {
+        f"widget_settings.{field}": deepcopy(data["widget_settings"][field])
+        for field in ChatbotWidgetUpdateSerializer().fields["widget_settings"].fields
+    }
+    snapshot["allowed_urls"] = sorted(
+        (dict(item) for item in data["allowed_urls"]),
+        key=lambda item: item["id"],
+    )
+    return snapshot
 
 
 def first_error_message(errors, fallback="Request failed."):
@@ -247,6 +262,9 @@ class ChatbotActivityLogListView(
         member_email = query_serializer.validated_data.get("member_email")
         if member_email:
             queryset = queryset.filter(user__email__iexact=member_email)
+        module = query_serializer.validated_data.get("module")
+        if module:
+            queryset = queryset.filter(module=module)
         return queryset
 
     def get(self, request, *args, **kwargs):
@@ -307,16 +325,7 @@ class ChatbotBaseAPIView(ChatbotObjectMixin, GenericAPIView):
             query_serializer.is_valid(raise_exception=True)
             self._chatbot = get_object_or_404(
                 Chatbot.objects.select_related("workspace", "capacity")
-                .prefetch_related(
-                    "allowed_origins",
-                    Prefetch(
-                        "subscriptions",
-                        queryset=ChatbotSubscription.objects.filter(
-                            status__in=OPEN_SUBSCRIPTION_STATUSES,
-                        ),
-                        to_attr="open_subscriptions",
-                    )
-                )
+                .prefetch_related("allowed_origins")
                 .filter(
                     is_deleted=False,
                     workspace__is_active=True,
@@ -361,7 +370,7 @@ class ChatbotWidgetUpdateView(ChatbotObjectMixin, GenericAPIView):
                 serializer.errors,
                 "Chatbot widget update failed.",
             )
-        updated_fields = sorted(serializer.validated_data)
+        previous = widget_activity_snapshot(chatbot)
         try:
             chatbot = serializer.save()
         except drf_serializers.ValidationError as exc:
@@ -369,14 +378,14 @@ class ChatbotWidgetUpdateView(ChatbotObjectMixin, GenericAPIView):
                 exc.detail,
                 "Chatbot widget update failed.",
             )
+        chatbot.refresh_from_db()
         record_chatbot_activity(
             chatbot=chatbot,
             user=request.user,
+            module="chatbot",
             action="chatbot.widget.updated",
             description="Updated chatbot widget configuration.",
-            metadata={
-                "updated_fields": updated_fields,
-            },
+            metadata=activity_update_metadata(previous, widget_activity_snapshot(chatbot)),
         )
         return APIResponse.success(
             data=ChatbotWidgetDetailSerializer(
@@ -410,16 +419,28 @@ class ChatbotUpdateView(ChatbotObjectMixin, GenericAPIView):
                 serializer.errors,
                 "Chatbot update failed.",
             )
-        updated_fields = sorted(serializer.validated_data)
+        fields = set(serializer.validated_data) - {"clear_logo"}
+        if {"chatbot_name", "business_name"} & fields:
+            fields.add("welcome_message")
+        if serializer.validated_data.get("clear_logo"):
+            fields.add("logo")
+        previous = {field: deepcopy(getattr(chatbot, field)) for field in fields}
+        widget_settings = None
+        if "chatbot_name" in fields:
+            widget_settings = getattr(chatbot, "widget_settings", None)
+            if widget_settings is not None:
+                previous["widget_settings.header_title"] = widget_settings.header_title
         chatbot = serializer.save()
+        updated = {field: getattr(chatbot, field) for field in fields}
+        if widget_settings is not None:
+            updated["widget_settings.header_title"] = chatbot.widget_settings.header_title
         record_chatbot_activity(
             chatbot=chatbot,
             user=request.user,
+            module="chatbot",
             action="chatbot.updated",
             description="Updated chatbot configuration.",
-            metadata={
-                "updated_fields": updated_fields,
-            },
+            metadata=activity_update_metadata(previous, updated),
         )
         return APIResponse.success(
             data=self.get_serializer(chatbot).data,
@@ -583,7 +604,20 @@ class ChatbotMemberPermissionView(ChatbotMemberObjectMixin, GenericAPIView):
                 serializer.errors,
                 "Chatbot member permission update failed.",
             )
+        previous = {"permissions": deepcopy(membership.permissions)}
         membership = serializer.save()
+        record_chatbot_activity(
+            chatbot=membership.chatbot,
+            user=request.user,
+            module="chatbot",
+            action="chatbot.member.permissions.updated",
+            description=f"Updated permissions for {membership.user.email}.",
+            metadata={
+                "member_id": str(membership.user_id),
+                "member_email": membership.user.email,
+                **activity_update_metadata(previous, {"permissions": membership.permissions}),
+            },
+        )
         return APIResponse.success(
             data=self.permission_data(membership),
             message="Chatbot member permissions updated successfully.",
@@ -605,6 +639,7 @@ class RemoveChatbotMemberView(ChatbotMemberObjectMixin, GenericAPIView):
         record_chatbot_activity(
             chatbot=chatbot,
             user=request.user,
+            module="chatbot",
             action="chatbot.member.removed",
             description=f"Removed {member_email} from the chatbot.",
             metadata={

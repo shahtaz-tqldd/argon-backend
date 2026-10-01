@@ -6,7 +6,7 @@ from uuid import uuid4
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase
 
-from chatbot.models import Chatbot, ChatbotCapacity
+from chatbot.models import Chatbot, ChatbotConfig
 from chatbot.services.capacity import (
     BYTES_PER_MEGABYTE,
     _message_limit_after_paid_plan,
@@ -25,7 +25,7 @@ class ChatbotCapacityServiceTests(SimpleTestCase):
             slug="capacity-bot",
             is_deleted=False,
         )
-        self.capacity = ChatbotCapacity(
+        self.capacity = ChatbotConfig(
             chatbot=self.chatbot,
             ai_message_limit=100,
             current_ai_message_count=10,
@@ -43,7 +43,7 @@ class ChatbotCapacityServiceTests(SimpleTestCase):
                 return_value=self.chatbot,
             ),
             patch.object(
-                ChatbotCapacity.objects,
+                ChatbotConfig.objects,
                 "get",
                 return_value=self.capacity,
             ) as get_capacity,
@@ -80,7 +80,7 @@ class ChatbotCapacityServiceTests(SimpleTestCase):
                 return_value=nullcontext(),
             ),
             patch.object(
-                ChatbotCapacity.objects,
+                ChatbotConfig.objects,
                 "get_or_create",
                 return_value=(self.capacity, True),
             ),
@@ -122,7 +122,7 @@ class ChatbotCapacityServiceTests(SimpleTestCase):
                 return_value=nullcontext(),
             ),
             patch.object(
-                ChatbotCapacity.objects,
+                ChatbotConfig.objects,
                 "get_or_create",
                 return_value=(self.capacity, True),
             ),

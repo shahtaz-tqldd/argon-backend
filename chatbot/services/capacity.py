@@ -3,7 +3,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from appointment.models import AppointmentBookingConfig
-from chatbot.models import ChatbotCapacity
+from chatbot.models import ChatbotConfig
 from chatbot.services.resolution import resolve_chatbot_reference
 from chatbot.services.subscription import get_chatbot_subscription_entitlements
 from lead_capture.models import LeadCaptureConfig
@@ -27,7 +27,7 @@ def get_chatbot_capacity(
         chatbot_slug=chatbot_slug,
         chatbot_id=chatbot_id,
     )
-    return ChatbotCapacity.objects.get(chatbot_id=chatbot.id)
+    return ChatbotConfig.objects.get(chatbot_id=chatbot.id)
 
 
 def chatbot_has_feature(chatbot, feature):
@@ -37,7 +37,7 @@ def chatbot_has_feature(chatbot, feature):
     try:
         capacity = chatbot.capacity
 
-    except (AttributeError, ChatbotCapacity.DoesNotExist):
+    except (AttributeError, ChatbotConfig.DoesNotExist):
         return False
     
     return capacity.has_feature(feature)
@@ -96,9 +96,9 @@ def update_chatbot_capacity(
         chatbot_id=chatbot_id,
     )
     with transaction.atomic():
-        capacity, created = ChatbotCapacity.objects.get_or_create(chatbot=chatbot)
+        capacity, created = ChatbotConfig.objects.get_or_create(chatbot=chatbot)
         if not created:
-            capacity = ChatbotCapacity.objects.select_for_update().get(
+            capacity = ChatbotConfig.objects.select_for_update().get(
                 pk=capacity.pk
             )
 
@@ -203,13 +203,13 @@ def apply_active_subscription_to_chatbot_capacity(subscription):
 
     metadata = subscription.provider_metadata or {}
     if metadata.get(CAPACITY_APPLIED_METADATA_KEY):
-        return ChatbotCapacity.objects.get(chatbot_id=subscription.chatbot_id)
+        return ChatbotConfig.objects.get(chatbot_id=subscription.chatbot_id)
 
-    capacity, created = ChatbotCapacity.objects.get_or_create(
+    capacity, created = ChatbotConfig.objects.get_or_create(
         chatbot_id=subscription.chatbot_id
     )
     if not created:
-        capacity = ChatbotCapacity.objects.select_for_update().get(
+        capacity = ChatbotConfig.objects.select_for_update().get(
             pk=capacity.pk
         )
 

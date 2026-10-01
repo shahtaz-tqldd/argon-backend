@@ -8,7 +8,7 @@ from chatbot.utils.choices import ChatbotPermissionTypes, ChatbotRoleTypes
 # modules expose these feature flags on the chatbot.
 CHATBOT_PERMISSION_FEATURE_FLAGS = {
     ChatbotPermissionTypes.CHAT_SESSION_MANAGEMENT: None,
-    # Subscription availability is enforced from ChatbotCapacity by the lead
+    # Subscription availability is enforced from ChatbotConfig by the lead
     # capture API. Keeping this permission grantable allows it to become usable
     # immediately after a plan upgrade.
     ChatbotPermissionTypes.LEAD_MANAGEMENT: None,

@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from agent.client import AgentClient
-from chatbot.models import ChatbotCapacity
+from chatbot.models import ChatbotConfig
 from chat.models import ChatMessage, ChatSession
 from chat.utils.choices import ChatMessageSenderType, ChatSessionStatus
 
@@ -22,7 +22,7 @@ class TestChatReply:
     visitor_message: ChatMessage
     ai_message: ChatMessage
     usage_source: str
-    capacity: ChatbotCapacity
+    capacity: ChatbotConfig
 
 
 @transaction.atomic
@@ -39,11 +39,11 @@ def create_test_session(chatbot):
 
 @transaction.atomic
 def _reserve_test_ai_message(chatbot_id):
-    capacity, created = ChatbotCapacity.objects.get_or_create(
+    capacity, created = ChatbotConfig.objects.get_or_create(
         chatbot_id=chatbot_id,
     )
     if not created:
-        capacity = ChatbotCapacity.objects.select_for_update().get(
+        capacity = ChatbotConfig.objects.select_for_update().get(
             pk=capacity.pk,
         )
 
@@ -67,7 +67,7 @@ def _reserve_test_ai_message(chatbot_id):
 
 @transaction.atomic
 def _release_test_ai_message(chatbot_id, usage_source):
-    capacity = ChatbotCapacity.objects.select_for_update().get(
+    capacity = ChatbotConfig.objects.select_for_update().get(
         chatbot_id=chatbot_id,
     )
     if usage_source == TEST_ALLOWANCE:
@@ -150,7 +150,7 @@ def send_test_message(chat_session, *, content):
         _release_test_ai_message(chat_session.chatbot_id, usage_source)
         raise
 
-    capacity = ChatbotCapacity.objects.get(chatbot_id=chat_session.chatbot_id)
+    capacity = ChatbotConfig.objects.get(chatbot_id=chat_session.chatbot_id)
     return TestChatReply(
         visitor_message=visitor_message,
         ai_message=ai_message,

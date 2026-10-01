@@ -15,7 +15,7 @@ from chatbot.models import (
     Chatbot,
     ChatbotActivityLog,
     ChatbotAllowedOrigin,
-    ChatbotCapacity,
+    ChatbotConfig,
     ChatbotInvitation,
     ChatbotUser,
 )
@@ -75,7 +75,7 @@ class ChatbotClientAPITests(APITestCase):
         self.client.force_authenticate(self.owner)
 
     def test_chatbot_base_returns_subscription_backed_capabilities(self):
-        capacity = ChatbotCapacity.objects.get(chatbot=self.chatbot)
+        capacity = ChatbotConfig.objects.get(chatbot=self.chatbot)
         capacity.active_features = [
             PlanFeature.KNOWLEDGE_BASE,
             PlanFeature.HUMAN_HANDOFF,
@@ -132,13 +132,11 @@ class ChatbotClientAPITests(APITestCase):
                     "active_features": capacity.active_features,
                 },
                 "current_subscription_plan": {
-                    "name": subscription.get_plan_name(),
-                    "is_free": subscription.is_free_plan(),
-                    "billing_interval": subscription.get_billing_interval(),
-                    "status": subscription.status,
-                    "current_period_start": subscription.current_period_start,
-                    "current_period_end": subscription.current_period_end,
-                    "cancel_at_period_end": subscription.cancel_at_period_end,
+                    "plan_name": subscription.get_plan_name(),
+                    "billing_cycle": subscription.get_billing_interval(),
+                    "price": str(subscription.get_price_amount()),
+                    "currency": subscription.get_currency(),
+                    "next_billing_at": None,
                 },
                 "ai_enabled": self.chatbot.ai_enabled,
                 "logo": self.chatbot.logo,

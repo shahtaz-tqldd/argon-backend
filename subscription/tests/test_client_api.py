@@ -6,7 +6,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from chatbot.models import Chatbot, ChatbotCapacity, ChatbotUser
+from chatbot.models import Chatbot, ChatbotConfig, ChatbotUser
 from chatbot.utils.choices import ChatbotRoleTypes
 from lead_capture.models import LeadCaptureConfig
 from subscription.choices import (
@@ -267,7 +267,7 @@ class SubscriptionClientAPITests(APITestCase):
             "latest_invoice": "in_upgrade",
             "items": {"data": []},
         }
-        capacity = ChatbotCapacity.objects.create(
+        capacity = ChatbotConfig.objects.create(
             chatbot=self.chatbot,
             ai_message_limit=1000,
             current_ai_message_count=658,
@@ -414,7 +414,7 @@ class SubscriptionClientAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["data"]["status"], "active")
-        capacity = ChatbotCapacity.objects.get(chatbot=self.chatbot)
+        capacity = ChatbotConfig.objects.get(chatbot=self.chatbot)
         self.assertEqual(capacity.ai_message_limit, 100)
         self.assertEqual(capacity.current_ai_message_count, 0)
 
@@ -432,7 +432,7 @@ class SubscriptionClientAPITests(APITestCase):
             provider_customer_id="cus_123",
             provider_subscription_id="sub_123",
         )
-        capacity = ChatbotCapacity.objects.create(
+        capacity = ChatbotConfig.objects.create(
             chatbot=self.chatbot,
             ai_message_limit=1000,
             current_ai_message_count=658,

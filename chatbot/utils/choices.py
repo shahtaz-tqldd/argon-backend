@@ -32,3 +32,11 @@ class ChatbotWidgetThemeTypes(models.TextChoices):
     LIGHT = "light", "Light"
     DARK = "dark", "Dark"
     SYSTEM = "system", "System"
+
+
+class ChatbotActivityModuleTypes(models.TextChoices):
+    CHATBOT = "chatbot", "Chatbot"
+    KNOWLEDGE = "knowledge", "Knowledge"
+    LEADS = "leads", "Leads"
+    APPOINTMENT = "appointment", "Appointment"
+    OTHER = "other", "Other"

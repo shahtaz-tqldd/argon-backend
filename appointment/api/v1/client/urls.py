@@ -14,6 +14,7 @@ appointment_schedules = [
 ]
 
 booked_appointments = [
+    path("stats/", views.AppointmentStatsAPIView.as_view(), name="appointment-stats"),
     path("list/", views.AppointmentListAPIView.as_view(), name="appointment-list"),
     path("update/", views.AppointmentUpdateAPIView.as_view(), name="appointment-update"),
     path("delete/", views.AppointmentDeleteAPIView.as_view(), name="appointment-delete"),
