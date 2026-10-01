@@ -42,6 +42,7 @@ from chatbot.models import (
     ChatbotInvitation,
     ChatbotUser,
 )
+from chatbot.services import record_chatbot_activity
 from chatbot.utils.choices import (
     ChatbotPermissionTypes,
     ChatbotRoleTypes,
@@ -360,6 +361,7 @@ class ChatbotWidgetUpdateView(ChatbotObjectMixin, GenericAPIView):
                 serializer.errors,
                 "Chatbot widget update failed.",
             )
+        updated_fields = sorted(serializer.validated_data)
         try:
             chatbot = serializer.save()
         except drf_serializers.ValidationError as exc:
@@ -367,6 +369,15 @@ class ChatbotWidgetUpdateView(ChatbotObjectMixin, GenericAPIView):
                 exc.detail,
                 "Chatbot widget update failed.",
             )
+        record_chatbot_activity(
+            chatbot=chatbot,
+            user=request.user,
+            action="chatbot.widget.updated",
+            description="Updated chatbot widget configuration.",
+            metadata={
+                "updated_fields": updated_fields,
+            },
+        )
         return APIResponse.success(
             data=ChatbotWidgetDetailSerializer(
                 chatbot,
@@ -399,7 +410,17 @@ class ChatbotUpdateView(ChatbotObjectMixin, GenericAPIView):
                 serializer.errors,
                 "Chatbot update failed.",
             )
+        updated_fields = sorted(serializer.validated_data)
         chatbot = serializer.save()
+        record_chatbot_activity(
+            chatbot=chatbot,
+            user=request.user,
+            action="chatbot.updated",
+            description="Updated chatbot configuration.",
+            metadata={
+                "updated_fields": updated_fields,
+            },
+        )
         return APIResponse.success(
             data=self.get_serializer(chatbot).data,
             message="Chatbot updated successfully.",
@@ -577,7 +598,20 @@ class RemoveChatbotMemberView(ChatbotMemberObjectMixin, GenericAPIView):
     def delete(self, request, *args, **kwargs):
         membership = self.get_chatbot_member()
         member = membership.user
+        chatbot = membership.chatbot
+        member_id = str(member.id)
+        member_email = member.email
         membership.delete()
+        record_chatbot_activity(
+            chatbot=chatbot,
+            user=request.user,
+            action="chatbot.member.removed",
+            description=f"Removed {member_email} from the chatbot.",
+            metadata={
+                "member_id": member_id,
+                "member_email": member_email,
+            },
+        )
         return APIResponse.success(
             data={"member_email": member.email},
             message="Chatbot member removed successfully.",

@@ -19,8 +19,8 @@ chatbot_widget = [
 ]
 
 # activity logs
-activity_logs = [
-    path("", views.ChatbotActivityLogListView.as_view(), name="chatbot-activity-logs"),
+chatbot_activity = [
+    path("list/", views.ChatbotActivityLogListView.as_view(), name="chatbot-activity-logs"),
 ]
 
 # chatbot team
@@ -37,5 +37,5 @@ urlpatterns = [
     path("", include(chatbot)),
     path("", include(chatbot_widget)),
     path("team/", include(chatbot_team)),
-    path("activity-logs/", include(activity_logs)),
+    path("activity/", include(chatbot_activity)),
 ]

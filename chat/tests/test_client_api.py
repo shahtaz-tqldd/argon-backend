@@ -985,6 +985,38 @@ class ChatSessionClientAPITests(APITestCase):
         )
         return session
 
+    def test_message_list_returns_takeover_event_once(self):
+        session = ChatSession.objects.create(chatbot=self.chatbot)
+
+        response = self.client.post(
+            reverse("session-take-over"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        response = self.client.get(
+            reverse("chat-message-list"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        takeover_messages = [
+            message
+            for message in response.data["data"]
+            if message["metadata"].get("event_type") == "session.taken_over"
+        ]
+        self.assertEqual(len(takeover_messages), 1)
+        self.assertEqual(
+            takeover_messages[0]["metadata"]["visibility"],
+            "internal",
+        )
+
     def test_management_events_are_recorded_in_one_session_timeline(self):
         recipient_user, recipient = self._create_agent(
             "timeline-recipient@example.com"

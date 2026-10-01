@@ -13,6 +13,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from chatbot.models import (
     Chatbot,
+    ChatbotActivityLog,
     ChatbotAllowedOrigin,
     ChatbotCapacity,
     ChatbotInvitation,
@@ -997,6 +998,20 @@ class ChatbotClientAPITests(APITestCase):
                 "https://unchanged.example.com": True,
             },
         )
+        activity = ChatbotActivityLog.objects.get(
+            chatbot=self.chatbot,
+            action="chatbot.widget.updated",
+        )
+        self.assertEqual(activity.user, self.owner)
+        self.assertEqual(
+            activity.metadata,
+            {
+                "updated_fields": [
+                    "allowed_urls",
+                    "widget_settings",
+                ]
+            },
+        )
 
     def test_chatbot_widget_update_requires_setup_permission(self):
         self.client.force_authenticate(self.member)
@@ -1924,6 +1939,40 @@ class ChatbotClientAPITests(APITestCase):
             ).exists()
         )
         self.assertTrue(User.objects.filter(pk=self.member.pk).exists())
+        activity = ChatbotActivityLog.objects.get(
+            chatbot=self.chatbot,
+            action="chatbot.member.removed",
+        )
+        self.assertEqual(activity.user, self.owner)
+        self.assertEqual(
+            activity.metadata,
+            {
+                "member_id": str(self.member.id),
+                "member_email": self.member.email,
+            },
+        )
+
+    def test_chatbot_update_records_activity(self):
+        response = self.client.patch(
+            reverse("chatbot-update"),
+            {
+                "description": "Updated chatbot description",
+                "ai_enabled": False,
+            },
+            format="json",
+            QUERY_STRING=urlencode({"chatbot": self.chatbot.slug}),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        activity = ChatbotActivityLog.objects.get(
+            chatbot=self.chatbot,
+            action="chatbot.updated",
+        )
+        self.assertEqual(activity.user, self.owner)
+        self.assertEqual(
+            activity.metadata,
+            {"updated_fields": ["ai_enabled", "description"]},
+        )
 
     def test_member_detail_requires_both_query_parameters(self):
         response = self.client.get(

@@ -37,34 +37,14 @@ chat_analytics = [
 ]
 
 test_chat_sessions = [
-    path(
-        "create/",
-        views.TestChatSessionCreateView.as_view(),
-        name="test-chat-session-create",
-    ),
-    path(
-        "list/",
-        views.TestChatSessionListView.as_view(),
-        name="test-chat-session-list",
-    ),
-    path(
-        "details/",
-        views.TestChatSessionDetailView.as_view(),
-        name="test-chat-session-detail",
-    ),
+    path("create/", views.TestChatSessionCreateView.as_view(), name="test-chat-session-create"),
+    path("list/", views.TestChatSessionListView.as_view(), name="test-chat-session-list"),
+    path("details/", views.TestChatSessionDetailView.as_view(), name="test-chat-session-detail"),
 ]
 
 test_chat_messages = [
-    path(
-        "list/",
-        views.TestChatMessageListView.as_view(),
-        name="test-chat-message-list",
-    ),
-    path(
-        "send/",
-        views.TestChatMessageCreateView.as_view(),
-        name="test-chat-message-send",
-    ),
+    path("list/", views.TestChatMessageListView.as_view(), name="test-chat-message-list"),
+    path("send/", views.TestChatMessageCreateView.as_view(), name="test-chat-message-send"),
 ]
 
 urlpatterns = [

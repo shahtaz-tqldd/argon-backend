@@ -728,6 +728,7 @@ class ChatMessageListView(
     def get(self, request, *args, **kwargs):
         queryset = (
             ChatMessage.objects.filter(chat_session=self.get_chat_session())
+            .exclude(metadata__contains={"visibility": "public"})
             .select_related("sender__user__profile")
             .prefetch_related("attachments")
         )
