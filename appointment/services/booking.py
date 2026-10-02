@@ -9,8 +9,38 @@ from appointment.services.appointment_slot import (
     OPEN_APPOINTMENT_STATUSES,
     get_available_appointment_slots,
 )
-from chat.models import ChatSession
-from chat.utils.choices import ChatSessionStatus
+from chat.models import ChatMessage, ChatSession
+from chat.utils.choices import ChatMessageSenderType, ChatSessionStatus
+
+
+def _ensure_visitor_booking_message(chat_session, appointment):
+    """Append one metadata-only visitor event for a submitted booking."""
+    external_id = f"appointment-submission:{appointment.id}"
+    existing = ChatMessage.objects.filter(
+        chat_session=chat_session,
+        external_id=external_id,
+        sender_type=ChatMessageSenderType.VISITOR,
+    ).first()
+    if existing is not None:
+        return existing, False
+
+    message = ChatMessage(
+        chat_session=chat_session,
+        sender_type=ChatMessageSenderType.VISITOR,
+        content="",
+        external_id=external_id,
+        metadata={
+            "event_type": "appointment.submitted",
+            "appointment_id": str(appointment.id),
+            "starts_at": appointment.starts_at.isoformat(),
+            "ends_at": appointment.ends_at.isoformat(),
+            "status": appointment.status,
+            "collected_fields": dict(appointment.collected_fields),
+        },
+    )
+    message.full_clean()
+    message.save()
+    return message, True
 
 
 @transaction.atomic
@@ -45,6 +75,7 @@ def book_visitor_appointment(chat_session, *, starts_at, collected_fields):
         status__in=OPEN_APPOINTMENT_STATUSES,
     ).first()
     if existing is not None:
+        _ensure_visitor_booking_message(chat_session, existing)
         return existing, False
 
     local_day = starts_at.astimezone(ZoneInfo(config.chatbot.timezone)).date()
@@ -73,5 +104,5 @@ def book_visitor_appointment(chat_session, *, starts_at, collected_fields):
     )
     appointment.full_clean()
     appointment.save()
+    _ensure_visitor_booking_message(chat_session, appointment)
     return appointment, True
-

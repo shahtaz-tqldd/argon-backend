@@ -1,6 +1,25 @@
 from datetime import date as Date
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
+
+
+def _validate_iso_date(value: str) -> str:
+    """Keep agent handoff dates JSON-safe while rejecting invalid dates."""
+    try:
+        parsed = Date.fromisoformat(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Date must use YYYY-MM-DD format.") from exc
+    if parsed.isoformat() != value:
+        raise ValueError("Date must use YYYY-MM-DD format.")
+    return value
+
+
+IsoDate = Annotated[
+    str,
+    Field(pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    AfterValidator(_validate_iso_date),
+]
 
 
 class TokenUsageSchema(BaseModel):
@@ -22,7 +41,9 @@ class AppointmentAgentResponseSchema(BaseModel):
     """The appointment specialist selects a date; code attaches its slots."""
 
     content: str = Field(min_length=1)
-    agreed_date: Date | None = None
+    # ADK places this model's Python dump into a function response. Keep the
+    # value as a validated string so the next coordinator request is JSON-safe.
+    agreed_date: IsoDate | None = None
 
 
 class KnowledgeBaseAgentOutputSchema(SpecialistResponseSchema):
@@ -41,7 +62,7 @@ class EscalationSchema(BaseModel):
 
 
 class AgentResultSchema(SpecialistResponseSchema):
-    agreed_date: Date | None = None
+    agreed_date: IsoDate | None = None
     lead_score: LeadScoreSchema | None = None
     escalation: EscalationSchema | None = None
 

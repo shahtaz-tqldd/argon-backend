@@ -392,24 +392,40 @@ class ChatMessage(BaseMinModel):
     def clean(self):
         super().clean()
         has_content = bool(self.content and self.content.strip())
+        event_type = (
+            self.metadata.get("event_type")
+            if isinstance(self.metadata, dict)
+            else None
+        )
+        has_event_metadata = (
+            isinstance(event_type, str) and bool(event_type.strip())
+        )
 
         # Attachments are separate rows FK'd to this message, so they can
         # only exist once this row has a pk. On update, we can genuinely
         # check for at least one attachment. On creation, there's nothing
-        # to check yet — the caller (serializer/service) is responsible for
-        # ensuring content or attachments are supplied within the same
-        # transaction before commit.
-        if self.pk:
+        # to check yet. Structured timeline events may instead carry an
+        # event_type and their complete visitor-facing payload in metadata.
+        if not self._state.adding:
             has_attachments = self.attachments.exists()
-            if not has_content and not has_attachments:
+            if (
+                not has_content
+                and not has_attachments
+                and not has_event_metadata
+            ):
                 raise ValidationError(
-                    {"content": "Message must have content or at least one attachment."}
+                    {
+                        "content": (
+                            "Message must have content, an attachment, or event "
+                            "metadata."
+                        )
+                    }
                 )
-        elif not has_content:
+        elif not has_content and not has_event_metadata:
             raise ValidationError(
                 {"content": (
-                    "Message must have content, or have attachments created "
-                    "in the same transaction as this message."
+                    "Message must have content, event metadata, or have attachments "
+                    "created in the same transaction as this message."
                 )}
             )
 

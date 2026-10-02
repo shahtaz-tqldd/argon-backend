@@ -35,7 +35,12 @@ composed specialists, currently `knowledge_agent` and `appointment_agent`.
 Specialists use ADK's collaborative `single_turn` delegation: the coordinator
 sends a self-contained request, the specialist returns its structured answer,
 and the coordinator relays it faithfully (dates, slot offers, booking
-statuses, citations) to the visitor.
+statuses, citations) to the visitor. If the coordinator emits no usable final
+text after a successful delegation, `AgentClient` returns the validated
+specialist outcome instead of replacing it with the generic chatbot fallback.
+When several specialists handled independent intents, their latest outcomes
+are preserved in delegation order for that fallback path. A coordinator reply,
+when present, remains authoritative for multi-intent synthesis.
 
 The runner is created from an ADK `App`, with event compaction every three
 events, one event of overlap, and context caching for contexts of at least
@@ -99,8 +104,9 @@ zero; this estimate is not a billing receipt.
    returns up to three later available dates within the booking horizon.
 3. The specialist returns only a visitor-facing `content` message and nullable
    `agreed_date`. It never exposes slot counts or appointment times. A requested
-   available date is immediately agreed; an alternative remains unagreed until
-   the visitor clearly accepts it.
+   available date is immediately agreed; the trusted availability-tool result
+   also establishes that date in code if the model omits it. An alternative
+   remains unagreed until the visitor clearly accepts it.
 4. After `agreed_date` is returned, Python fetches that day's full choices and
    adds them directly to `metadata.appointments.available_slots` for the booking
    UI. The model does not generate, select, or describe slots.
@@ -116,7 +122,10 @@ retries only.
    `/api/v1/chatbots/{public_key}/book-appointment/?session_id={session_id}`
    using the conversation bearer token. The endpoint rechecks availability
    while locking the booking configuration, derives `ends_at`, and stores
-   the trusted chat-session association itself.
+   the trusted chat-session association itself. In the same transaction it
+   appends an idempotent visitor message with blank content and an
+   `appointment.submitted` metadata payload containing the selected slot and
+   collected fields, so the booking appears in the conversation timeline.
 6. After saving, the endpoint queues `generate_ai_reply_task` with the trusted
    appointment and session IDs. The task asks `AgentClient` to verify the saved
    booking, generate the acknowledgment, persist its usage, and save the next AI

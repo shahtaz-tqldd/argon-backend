@@ -176,6 +176,39 @@ class GenerateAIReplyTaskTests(TestCase):
         self.assertEqual(usage.chatbot_id_snapshot, self.chatbot.id)
         self.assertIsNone(usage.chat_session_id_snapshot)
 
+    def test_appointment_confirmation_usage_accepts_context_metadata(self):
+        ai_message = ChatMessage.objects.create(
+            chat_session=self.session,
+            sender_type=ChatMessageSenderType.AI,
+            content="Your appointment request is awaiting approval.",
+            external_id="appointment:6c3667b3-9fee-45a9-8976-60b8a9b20032",
+        )
+
+        usage = record_ai_usage(
+            chatbot=self.chatbot,
+            chat_session=self.session,
+            chat_message=ai_message,
+            usage_type=AIUsageType.CHAT,
+            cost="0.0002",
+            token_usage={
+                "input_tokens": 40,
+                "output_tokens": 10,
+                "total_tokens": 50,
+            },
+            metadata={
+                "event": "appointment_confirmation",
+                "appointment_id": "6c3667b3-9fee-45a9-8976-60b8a9b20032",
+            },
+        )
+
+        self.assertEqual(
+            usage.metadata,
+            {
+                "event": "appointment_confirmation",
+                "appointment_id": "6c3667b3-9fee-45a9-8976-60b8a9b20032",
+            },
+        )
+
     def test_agent_client_persists_public_metadata_and_usage(self):
         source = KnowledgeBase.objects.create(
             chatbot=self.chatbot,

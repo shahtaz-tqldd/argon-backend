@@ -907,6 +907,26 @@ class ChatbotClientAPITests(APITestCase):
         )
         self.assertEqual(appointment.starts_at, starts_at)
         self.assertEqual(appointment.ends_at, ends_at)
+        booking_message = ChatMessage.objects.get(
+            chat_session=session,
+            external_id=f"appointment-submission:{appointment.id}",
+        )
+        self.assertEqual(booking_message.sender_type, ChatMessageSenderType.VISITOR)
+        self.assertEqual(booking_message.content, "")
+        self.assertEqual(
+            booking_message.metadata,
+            {
+                "event_type": "appointment.submitted",
+                "appointment_id": str(appointment.id),
+                "starts_at": appointment.starts_at.isoformat(),
+                "ends_at": appointment.ends_at.isoformat(),
+                "status": appointment.status,
+                "collected_fields": {
+                    "name": "Ada Lovelace",
+                    "email": "ada@example.com",
+                },
+            },
+        )
         dispatch_appointment_reply.assert_called_once_with(
             session.id,
             appointment.id,

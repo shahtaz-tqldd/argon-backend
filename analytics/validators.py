@@ -13,6 +13,9 @@ AI_USAGE_METADATA_FIELDS = frozenset(
         "input_cost",
         "output_cost",
         "cached_cost",
+        # Application context for AI-generated appointment acknowledgements.
+        "event",
+        "appointment_id",
     }
 )
 

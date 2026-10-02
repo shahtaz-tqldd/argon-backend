@@ -65,23 +65,30 @@ def get_public_visitor_sessions(chatbot, visitor_id):
         .exclude(metadata__contains={"visibility": "internal"})
         .order_by("-created_at", "-id")
     )
-    return sessions.select_related("lead", "chatbot").annotate(
-        message_count=Count(
-            "messages",
-            filter=~Q(
-                messages__metadata__contains={"visibility": "internal"}
+    return (
+        sessions.select_related("lead", "chatbot")
+        .annotate(
+            message_count=Count(
+                "messages",
+                filter=~Q(
+                    messages__metadata__contains={"visibility": "internal"}
+                ),
             ),
-        ),
-        last_message_sender_type=Subquery(
-            last_message.values("sender_type")[:1]
-        ),
-        last_message_content=Subquery(last_message.values("content")[:1]),
-        last_message_created_at=Subquery(
-            last_message.values("created_at")[:1]
-        ),
-        last_message_agent_name=Subquery(
-            last_message.values("sender__user__name")[:1]
-        ),
+            last_message_sender_type=Subquery(
+                last_message.values("sender_type")[:1]
+            ),
+            last_message_content=Subquery(last_message.values("content")[:1]),
+            last_message_created_at=Subquery(
+                last_message.values("created_at")[:1]
+            ),
+            last_message_agent_name=Subquery(
+                last_message.values("sender__user__name")[:1]
+            ),
+        )
+        # Explicit ordering: the aggregate above adds a GROUP BY, which makes
+        # Django drop ChatSession.Meta.ordering — without this the list comes
+        # back in arbitrary DB order.
+        .order_by("-last_activity_at", "-created_at", "-id")
     )
 
 

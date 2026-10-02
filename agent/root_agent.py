@@ -37,7 +37,9 @@ def root_agent(chatbot, session):
                 - Relay specialist facts, dates, statuses, and limitations accurately.
                   For appointment results, relay the specialist's message without
                   adding slot counts or appointment times; code attaches slots after
-                  `agreed_date` is returned.
+                  `agreed_date` is returned. When an appointment result contains an
+                  `agreed_date`, do not ask the visitor to confirm that date again;
+                  invite them to choose from the displayed slots.
                 - Do not answer a specialist's domain from your own knowledge.
                 - Use the configured fallback when no specialist can handle an
                   in-scope request.

@@ -12,6 +12,7 @@ from google.genai import types
 from pydantic import Field
 
 from agent.client import AgentClient
+from agent.schema import AppointmentAgentResponseSchema
 from agent.sub_agents.appointment import tools as booking
 from subscription.choices import PlanFeature
 
@@ -159,6 +160,97 @@ class ClientTests(IsolatedAsyncioTestCase):
         self.assertEqual([tool.name for tool in root.sub_agents[1].tools],
                          ["find_appointment_availability", "record_lead_score",
                           "request_human_escalation"])
+
+    async def test_logs_when_appointment_intent_is_not_delegated(self):
+        self.script(say(self.bot.fallback_message))
+
+        with self.assertLogs("app", level="INFO") as captured:
+            result = await self.client._run_turn(
+                "Hi, I need to book an appointment.",
+                None,
+            )
+
+        self.assertEqual(result["result"]["content"], self.bot.fallback_message)
+        logs = "\n".join(captured.output)
+        self.assertIn("appointment_intent_hint=True", logs)
+        self.assertIn("available_specialists=['appointment_agent', 'knowledge_agent']", logs)
+        self.assertIn("Appointment intent was not delegated", logs)
+
+    async def test_uses_specialist_outcome_when_coordinator_returns_no_text(self):
+        self.script(
+            call("appointment_agent", request="Ask for the visitor's preferred date"),
+            answer("Which date would you prefer?"),
+            say(""),
+        )
+
+        with self.assertLogs("app", level="INFO") as captured:
+            result = await self.client._run_turn(
+                "Hi, I need to book an appointment.",
+                None,
+            )
+
+        self.assertEqual(result["result"]["content"], "Which date would you prefer?")
+        self.assertIn("response_source=specialist", "\n".join(captured.output))
+
+    async def test_available_tool_result_attaches_slots_when_model_omits_agreed_date(self):
+        availability = {
+            "requested_date": "2026-10-05",
+            "is_available_on_requested_date": True,
+            "timezone": "UTC+6.00",
+            "available_slots": 2,
+        }
+        slots = {
+            "status": "available",
+            "available": True,
+            "requested_date": "2026-10-05",
+            "date": "2026-10-05",
+            "timezone": "UTC+6.00",
+            "available_count": 1,
+            "slots": [{
+                "starts_at": "2026-10-05T09:00:00+06:00",
+                "ends_at": "2026-10-05T09:30:00+06:00",
+            }],
+        }
+        self.script(
+            call("appointment_agent", request="Check next Monday"),
+            call("find_appointment_availability", requested_date="2026-10-05"),
+            answer("Monday is available. Would you like to proceed?"),
+            say("Monday is available. Would you like to proceed?"),
+        )
+
+        with patch(
+            "agent.sub_agents.appointment.tools.find_appointment_slot_counts",
+            return_value=availability,
+        ), patch(
+            "agent.client.slots_for_agreed_date",
+            return_value=slots,
+        ) as attach, patch.object(self.client, "_source_metadata", return_value=[]):
+            result = await self.client._run_turn("Monday?", None)
+            public_reply = self.client._public_reply(result)
+
+        self.assertEqual(result["result"]["agreed_date"], "2026-10-05")
+        self.assertEqual(
+            public_reply["metadata"]["appointments"]["date"],
+            "2026-10-05",
+        )
+        attach.assert_called_once_with("bot-1", "2026-10-05")
+
+    def test_appointment_handoff_date_is_validated_and_json_serializable(self):
+        result = AppointmentAgentResponseSchema.model_validate({
+            "content": "Monday is available.",
+            "agreed_date": "2026-10-05",
+        })
+
+        self.assertEqual(result.agreed_date, "2026-10-05")
+        self.assertEqual(
+            json.loads(json.dumps(result.model_dump()))["agreed_date"],
+            "2026-10-05",
+        )
+        with self.assertRaisesRegex(ValueError, "YYYY-MM-DD"):
+            AppointmentAgentResponseSchema.model_validate({
+                "content": "That date is invalid.",
+                "agreed_date": "2026-02-30",
+            })
 
     def test_composition_follows_chatbot_features(self):
         self.bot.knowledge_base_enabled = False

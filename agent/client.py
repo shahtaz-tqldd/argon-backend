@@ -72,6 +72,15 @@ class AgentClient:
         self.session = session
         self.chat_agent = root_agent(chatbot, session)
         self.specialist_names = {agent.name for agent in self.chat_agent.sub_agents}
+        logger.info(
+            "Agent client initialized chatbot_id=%s session_id=%s "
+            "appointment_booking_enabled=%s specialists=%s root_tools=%s",
+            chatbot.id,
+            session.id,
+            getattr(chatbot, "appointment_booking_enabled", False),
+            sorted(self.specialist_names),
+            [tool.name for tool in self.chat_agent.tools],
+        )
         # GlobalInstructionPlugin executes its callback from ADK's async model
         # pipeline. Build the instruction here, while still on Django's sync
         # request path, because feature checks may load related ORM objects.
@@ -132,6 +141,15 @@ class AgentClient:
         scoped_user = self._scoped_user(user_id)
         session = await self._get_or_create_session(scoped_user)
 
+        normalized_message = message.casefold()
+        appointment_intent_hint = any(
+            term in normalized_message
+            for term in ("appointment", "booking", "book ", "schedule", "meeting")
+        )
+        selected_tools = []
+        invoked_specialists = []
+        specialist_outcomes: dict[str, str] = {}
+
         reply = ""
         usage = TokenUsageSchema()
         retrieved_ids = set()
@@ -159,6 +177,9 @@ class AgentClient:
                 async for event in events:
                     if event.error_code:
                         raise RuntimeError(f"Agent execution failed: {event.error_code}")
+                    for function_call in event.get_function_calls():
+                        if function_call.name not in selected_tools:
+                            selected_tools.append(function_call.name)
                     if (
                         event.usage_metadata
                         and not event.partial
@@ -179,12 +200,34 @@ class AgentClient:
                         payload = response.response or {}
                         if response.name == "search_knowledge" and payload.get("status") == "ok":
                             retrieved_ids.update(str(s["source_id"]) for s in payload.get("sources", []))
+                        if (
+                            response.name == "find_appointment_availability"
+                            and payload.get("is_available_on_requested_date") is True
+                            and payload.get("requested_date")
+                        ):
+                            # A successful availability lookup is trusted backend
+                            # evidence. The booking flow defines that requested date
+                            # as agreed immediately, so metadata must not depend on
+                            # the model also copying it into its structured output.
+                            agreed_date = str(payload["requested_date"])
                         if response.name in self.specialist_names:
+                            if response.name not in invoked_specialists:
+                                invoked_specialists.append(response.name)
                             cited_ids.extend(self._cited_source_ids(payload))
                         if response.name == "appointment_agent":
                             specialist_result = self._appointment_result(payload)
-                            if specialist_result and specialist_result.agreed_date:
-                                agreed_date = specialist_result.agreed_date
+                            if specialist_result:
+                                specialist_outcomes[response.name] = (
+                                    specialist_result.content
+                                )
+                                if specialist_result.agreed_date:
+                                    agreed_date = specialist_result.agreed_date
+                        elif response.name in self.specialist_names:
+                            specialist_result = self._specialist_result(payload)
+                            if specialist_result:
+                                specialist_outcomes[response.name] = (
+                                    specialist_result.content
+                                )
                         if response.name == "record_lead_score":
                             lead_score = LeadScoreSchema.model_validate(payload)
                         if response.name == "request_human_escalation":
@@ -218,15 +261,77 @@ class AgentClient:
         allowed_ids = retrieved_ids | set(session.state.get(RETRIEVED_SOURCE_IDS_KEY) or [])
         used_ids = list(dict.fromkeys(s for s in cited_ids if s in allowed_ids))
 
+        specialist_reply = "\n\n".join(specialist_outcomes.values()).strip()
+        response_source = (
+            "root_agent"
+            if reply
+            else "specialist"
+            if specialist_reply
+            else "configured_fallback"
+        )
         result = AgentResultSchema(
-            content=reply or self.chatbot.fallback_message,
+            content=reply or specialist_reply or self.chatbot.fallback_message,
             source_ids=used_ids,
             agreed_date=agreed_date,
             lead_score=lead_score,
             escalation=escalation,
         )
 
+        logger.info(
+            "Agent turn completed chatbot_id=%s session_id=%s "
+            "appointment_intent_hint=%s available_specialists=%s "
+            "selected_tools=%s invoked_specialists=%s response_source=%s "
+            "reply_matches_fallback=%s",
+            self.chatbot.id,
+            self.session.id,
+            appointment_intent_hint,
+            sorted(self.specialist_names),
+            selected_tools,
+            invoked_specialists,
+            response_source,
+            result.content == self.chatbot.fallback_message,
+        )
+        if (
+            appointment_intent_hint
+            and "appointment_agent" in self.specialist_names
+            and "appointment_agent" not in invoked_specialists
+        ):
+            logger.warning(
+                "Appointment intent was not delegated chatbot_id=%s session_id=%s "
+                "selected_tools=%s reply_matches_fallback=%s",
+                self.chatbot.id,
+                self.session.id,
+                selected_tools,
+                result.content == self.chatbot.fallback_message,
+            )
+
         return self._response(result, usage)
+
+    @staticmethod
+    def _specialist_result(payload):
+        """Parse a specialist's structured handoff from an ADK response."""
+        if isinstance(payload, types.Content):
+            payload = "".join(p.text or "" for p in payload.parts or [])
+        if isinstance(payload, list):
+            payload = "".join(getattr(p, "text", "") or "" for p in payload)
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (TypeError, ValueError):
+                return None
+        if isinstance(payload, dict) and "result" in payload and "content" not in payload:
+            payload = payload.get("result")
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except (TypeError, ValueError):
+                    return None
+        if not isinstance(payload, dict):
+            return None
+        try:
+            return SpecialistResponseSchema.model_validate(payload)
+        except ValidationError:
+            return None
 
     @staticmethod
     def _appointment_result(payload):
