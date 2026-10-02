@@ -1,5 +1,7 @@
 import json
 import textwrap
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from google.adk.agents import LlmAgent
 
@@ -20,6 +22,8 @@ def build(chatbot, session) -> LlmAgent | None:
 
         base_instruction = load_sub_agent_instruction("appointment")
         extra_instruction = textwrap.dedent(f"""\
+            Business timezone: {chatbot.timezone}.
+            Today's business date: {datetime.now(ZoneInfo(chatbot.timezone)).date().isoformat()}.
             Return the visitor-facing answer or clarification as content, with no source_ids.
 
             Backend-verified booking event for this turn: {json.dumps(confirmation)}.

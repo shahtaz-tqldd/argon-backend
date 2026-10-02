@@ -26,6 +26,9 @@ class KnowledgeBaseAgentOutputSchema(SpecialistResponseSchema):
 class AppointmentSlotSchema(BaseModel):
     starts_at: datetime
     ends_at: datetime
+    booked: bool = False
+    available: bool = True
+    reason: str | None = None
 
 
 class AppointmentSchema(BaseModel):
@@ -36,6 +39,9 @@ class AppointmentSchema(BaseModel):
     searched_through: Date | None = None
     next_search_date: Date | None = None
     timezone: str | None = None
+    requested_date_reason: str | None = None
+    available_count: int = 0
+    remaining_capacity: int | None = None
     appointment_id: str | None = None
     appointment_status: str | None = None
     starts_at: datetime | None = None

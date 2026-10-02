@@ -30,6 +30,10 @@ def root_agent(chatbot, session):
                   escalation actions.
                 - Delegate domain work to the matching specialist; delegate each
                   independent intent.
+                - Route booking intent, availability questions, requests to visit or
+                  schedule, and replies to earlier date/slot offers to appointment_agent
+                  when enabled. Include the visitor's preferred date and relevant
+                  conversation context. Route trusted booking events there too.
                 - Relay specialist facts, dates, statuses, and limitations accurately.
                 - Do not answer a specialist's domain from your own knowledge.
                 - Use the configured fallback when no specialist can handle an

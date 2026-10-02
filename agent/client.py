@@ -15,7 +15,8 @@ from google.genai import types
 from pydantic import ValidationError
 
 from agent.root_agent import root_agent
-from agent.sub_agents.appointment.tools import verified_booking
+from agent.helpers.model import vertex_client_scope
+from agent.sub_agents.appointment.tools import verified_booking, appointment_payload_scope
 from agent.sub_agents.knowledge.tools import RETRIEVED_SOURCE_IDS_KEY
 from agent.schema import (
     AgentResponseSchema,
@@ -155,86 +156,91 @@ class AgentClient:
             streaming_mode=StreamingMode.SSE if streaming else StreamingMode.NONE,
         )
 
-        async with aclosing(
-            self.runner.run_async(
-                user_id=self._scoped_user(user_id),
-                session_id=session.id,
-                new_message=types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text=message)],
-                ),
-                run_config=run_config,
-            )
-        ) as events:
-            async for event in events:
-                if event.error_code:
-                    raise RuntimeError(f"Agent execution failed: {event.error_code}")
-                if (
-                    event.usage_metadata
-                    and not event.partial
-                    and event.id not in seen_usage_events
-                ):
-                    seen_usage_events.add(event.id)
-                    metadata = event.usage_metadata
-                    prompt = metadata.prompt_token_count or 0
-                    output = metadata.candidates_token_count or 0
-                    thinking = metadata.thoughts_token_count or 0
-                    usage.input_tokens += prompt
-                    usage.output_tokens += output + thinking
-                    usage.thinking_tokens += thinking
-                    usage.cached_input_tokens += metadata.cached_content_token_count or 0
-                    usage.total_tokens += metadata.total_token_count or (prompt + output + thinking)
+        with appointment_payload_scope() as appointment_payloads:
+            async with vertex_client_scope(), aclosing(
+                self.runner.run_async(
+                    user_id=self._scoped_user(user_id),
+                    session_id=session.id,
+                    new_message=types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text=message)],
+                    ),
+                    run_config=run_config,
+                )
+            ) as events:
+                async for event in events:
+                    if event.error_code:
+                        raise RuntimeError(f"Agent execution failed: {event.error_code}")
+                    if (
+                        event.usage_metadata
+                        and not event.partial
+                        and event.id not in seen_usage_events
+                    ):
+                        seen_usage_events.add(event.id)
+                        metadata = event.usage_metadata
+                        prompt = metadata.prompt_token_count or 0
+                        output = metadata.candidates_token_count or 0
+                        thinking = metadata.thoughts_token_count or 0
+                        usage.input_tokens += prompt
+                        usage.output_tokens += output + thinking
+                        usage.thinking_tokens += thinking
+                        usage.cached_input_tokens += metadata.cached_content_token_count or 0
+                        usage.total_tokens += metadata.total_token_count or (prompt + output + thinking)
 
-                if (
-                    streaming
-                    and event.partial
-                    and event.author == self.chat_agent.name
-                    and event.content
-                ):
-                    delta = "".join(
-                        p.text
-                        for p in event.content.parts or []
-                        if p.text and not p.thought
-                    )
-                    if delta:
-                        yield {"type": "delta", "content": delta}
+                    if (
+                        streaming
+                        and event.partial
+                        and event.author == self.chat_agent.name
+                        and event.content
+                    ):
+                        delta = "".join(
+                            p.text
+                            for p in event.content.parts or []
+                            if p.text and not p.thought
+                        )
+                        if delta:
+                            yield {"type": "delta", "content": delta}
 
-                for response in event.get_function_responses():
-                    payload = response.response or {}
-                    if response.name == "search_knowledge" and payload.get("status") == "ok":
-                        retrieved_ids.update(str(s["source_id"]) for s in payload.get("sources", []))
-                    if response.name in self.specialist_names:
-                        cited_ids.extend(self._cited_source_ids(payload))
-                    if (response.name == "find_appointment_availability"
-                            and payload.get("status") != "search_in_progress"):
-                        appointment = AppointmentSchema.model_validate(payload)
-                    if response.name == "record_lead_score":
-                        lead_score = LeadScoreSchema.model_validate(payload)
-                    if response.name == "request_human_escalation":
-                        escalation = EscalationSchema.model_validate(payload)
+                    for response in event.get_function_responses():
+                        payload = response.response or {}
+                        if response.name == "search_knowledge" and payload.get("status") == "ok":
+                            retrieved_ids.update(str(s["source_id"]) for s in payload.get("sources", []))
+                        if response.name in self.specialist_names:
+                            cited_ids.extend(self._cited_source_ids(payload))
+                        if (response.name == "find_appointment_availability"
+                                and payload.get("status") != "search_in_progress"):
+                            if appointment is None:
+                                appointment = AppointmentSchema.model_validate(payload)
+                        if response.name == "record_lead_score":
+                            lead_score = LeadScoreSchema.model_validate(payload)
+                        if response.name == "request_human_escalation":
+                            escalation = EscalationSchema.model_validate(payload)
 
-                if (
-                    event.author in self.specialist_names
-                    and event.is_final_response()
-                    and event.content
-                    and not event.partial
-                ):
-                    text = "".join(p.text or "" for p in event.content.parts or [])
-                    cited_ids.extend(self._cited_source_ids(text))
+                    if (
+                        event.author in self.specialist_names
+                        and event.is_final_response()
+                        and event.content
+                        and not event.partial
+                    ):
+                        text = "".join(p.text or "" for p in event.content.parts or [])
+                        cited_ids.extend(self._cited_source_ids(text))
 
-                if (
-                    event.author == self.chat_agent.name
-                    and event.is_final_response()
-                    and event.content
-                    and not event.partial
-                ):
-                    text = "".join(
-                        p.text
-                        for p in event.content.parts or []
-                        if p.text and not p.thought
-                    )
-                    if text.strip():
-                        reply = text.strip()
+                    if (
+                        event.author == self.chat_agent.name
+                        and event.is_final_response()
+                        and event.content
+                        and not event.partial
+                    ):
+                        text = "".join(
+                            p.text
+                            for p in event.content.parts or []
+                            if p.text and not p.thought
+                        )
+                        if text.strip():
+                            reply = text.strip()
+
+        if appointment_payloads.get("appointment") is not None:
+            appointment = AppointmentSchema.model_validate(appointment_payloads["appointment"])
 
         # Citations may reference sources retrieved in earlier turns, which the
         # knowledge tool accumulates in session state for exactly this case.
@@ -317,8 +323,9 @@ class AgentClient:
         frame if this generator raises mid-stream.
         """
         self._check_validation(message)
-        async for item in self._turn_stream(message, user_id, streaming=True):
-            yield item
+        async with aclosing(self._turn_stream(message, user_id, streaming=True)) as items:
+            async for item in items:
+                yield item
 
     async def confirm_booking(self, appointment_id: str, user_id: str | None = None):
         """

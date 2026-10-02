@@ -14,7 +14,9 @@ from appointment.api.v1.public.serializers import (
     VisitorAppointmentQuerySerializer,
     VisitorAppointmentSerializer,
 )
-from appointment.services import book_visitor_appointment
+from appointment.services import book_visitor_appointment, save_booking_confirmation
+from chat.models import ChatMessage
+from chat.services.messages import serialize_message_event
 from chat.services.chat_public import get_visitor_chat_session
 from chat.services.visitor_tokens import InvalidConversationToken
 from chatbot.services.chatbot_public import (
@@ -120,6 +122,21 @@ class VisitorAppointmentCreateAPIView(GenericAPIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
+        previous_message = ChatMessage.objects.filter(
+            chat_session=chat_session, external_id=f"appointment:{appointment.id}",
+        ).first()
+        if previous_message is not None:
+            return APIResponse.success(
+                data={
+                    "appointment": VisitorAppointmentSerializer(appointment).data,
+                    "duplicate": True,
+                    "agent_acknowledged": True,
+                    "agent_reply": previous_message.content,
+                    "message": serialize_message_event(previous_message),
+                },
+                message="Appointment already booked.",
+            )
+
         agent_response = None
         try:
             agent_response = AgentClient(chatbot, chat_session).confirm_booking_sync(
@@ -145,16 +162,23 @@ class VisitorAppointmentCreateAPIView(GenericAPIView):
                 chat_session.id,
             )
 
+        fallback = (
+            "Thank you! Your appointment is confirmed."
+            if appointment.status == "confirmed"
+            else "Thank you! Your appointment request has been received and is awaiting approval."
+        )
+        message = save_booking_confirmation(
+            chat_session, appointment,
+            content=agent_response["result"]["content"] if agent_response else fallback,
+        )
+
         return APIResponse.success(
             data={
                 "appointment": VisitorAppointmentSerializer(appointment).data,
                 "duplicate": not created,
                 "agent_acknowledged": agent_response is not None,
-                "agent_reply": (
-                    agent_response["result"]["content"]
-                    if agent_response is not None
-                    else ""
-                ),
+                "agent_reply": message.content,
+                "message": serialize_message_event(message),
             },
             message=(
                 "Appointment already booked."

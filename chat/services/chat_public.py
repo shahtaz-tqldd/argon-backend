@@ -170,7 +170,14 @@ def create_public_visitor(
         is_test=False,
     )
     visitor_created = not existing_sessions.exists()
-    if lead_data is None:
+    lead_capture_enabled = (
+        lead_data is not None
+        and LeadCaptureConfig.objects.filter(
+            chatbot=chatbot,
+            is_enabled=True,
+        ).exists()
+    )
+    if not lead_capture_enabled:
         active_session = (
             existing_sessions.filter(status__in=RESUMABLE_SESSION_STATUSES)
             .select_related("lead")
@@ -181,13 +188,6 @@ def create_public_visitor(
             return active_session, visitor_created, False
         lead = None
     else:
-        if not LeadCaptureConfig.objects.filter(
-            chatbot=chatbot,
-            is_enabled=True,
-        ).exists():
-            raise ValidationError(
-                {"lead_data": "Lead capture is not enabled."}
-            )
         lead_session = (
             existing_sessions.filter(lead__isnull=False)
             .select_related("lead")

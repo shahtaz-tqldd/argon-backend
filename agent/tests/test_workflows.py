@@ -3,7 +3,7 @@ import json
 from datetime import date, datetime, time, timezone
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from django.test import SimpleTestCase, override_settings
 from google.adk.models import BaseLlm, LlmResponse
@@ -105,7 +105,7 @@ class ClientTests(IsolatedAsyncioTestCase):
                 has_feature=lambda feature: feature == PlanFeature.LEAD_CAPTURE,
             ),
         )
-        self.conversation = SimpleNamespace(id="session-1", chatbot_id="bot-1", messages=Mock())
+        self.conversation = SimpleNamespace(id="session-1", chatbot_id="bot-1", is_test=False, messages=Mock())
         self.service = InMemorySessionService()
         self.client = AgentClient(self.bot, self.conversation, session_service=self.service)
 
@@ -118,6 +118,8 @@ class ClientTests(IsolatedAsyncioTestCase):
 
     async def test_real_adk_tools_structured_output_usage_and_source_selection(self):
         self.bot.never_answer = "Never disclose employee payroll."
+        # Global policy is rendered when the client is constructed.
+        self.client = AgentClient(self.bot, self.conversation, session_service=self.service)
         model = self.script(call("knowledge_agent", request="Find the opening hours"),
                             call("search_knowledge", query="opening hours"),
                             answer("Open at 9", ["kb-2"]),
@@ -240,9 +242,69 @@ class ClientTests(IsolatedAsyncioTestCase):
             result = await self.client.chat("What service can I book on June 16?")
         self.assertEqual(result["result"]["source_ids"], ["kb-1"])
         self.assertEqual(result["result"]["appointment"]["date"], "2026-06-16")
-        self.assertEqual(result["result"]["appointment"]["slots"], slots)
+        self.assertEqual(result["result"]["appointment"]["slots"], [
+            {**slot, "available": True, "booked": False, "reason": None} for slot in slots
+        ])
+        tool_responses = [part.function_response.response
+                          for request in model.requests for content in request.contents
+                          for part in content.parts or []
+                          if part.function_response and part.function_response.name == "find_appointment_availability"]
+        self.assertTrue(tool_responses)
+        self.assertTrue(all("slots" not in payload for payload in tool_responses))
         self.assertEqual(result["token"]["total_tokens"], 7 * 125)
         self.assertEqual(len(model.requests), 7)
+
+    async def test_runner_shares_vertex_client_per_turn_and_closes_between_turns(self):
+        from agent.helpers.model import vertex_client
+
+        original_generate = ScriptedModel.generate_content_async
+        seen_clients = []
+
+        async def generate(model, llm_request, stream=False):
+            seen_clients.append(vertex_client())
+            async for item in original_generate(model, llm_request, stream):
+                yield item
+
+        clients = [Mock(aio=Mock(aclose=AsyncMock())), Mock(aio=Mock(aclose=AsyncMock()))]
+        self.script(
+            call("appointment_agent", request="Ask for preferred date"),
+            answer("Which date would you prefer?"), say("Which date would you prefer?"),
+            call("appointment_agent", request="Clarify the requested month"),
+            answer("Which month?"), say("Which month?"),
+        )
+        with patch("agent.helpers.model.Client", side_effect=clients) as factory, patch.object(
+            ScriptedModel, "generate_content_async", generate
+        ):
+            await self.client.chat("I'd like an appointment")
+            clients[0].aio.aclose.assert_awaited_once()
+            clients[0].close.assert_called_once()
+            await self.client.chat("On the 15th")
+        self.assertEqual(factory.call_count, 2)
+        self.assertEqual(seen_clients, [clients[0]] * 3 + [clients[1]] * 3)
+        clients[1].aio.aclose.assert_awaited_once()
+        clients[1].close.assert_called_once()
+
+    async def test_closing_stream_early_closes_vertex_transports(self):
+        from agent.helpers.model import vertex_client
+
+        original_generate = ScriptedModel.generate_content_async
+
+        async def generate(model, llm_request, stream=False):
+            vertex_client()
+            async for item in original_generate(model, llm_request, stream):
+                yield item
+
+        client = Mock(aio=Mock(aclose=AsyncMock()))
+        self.script(partial("Hello"), say("Hello there"))
+        with patch("agent.helpers.model.Client", return_value=client), patch.object(
+            ScriptedModel, "generate_content_async", generate
+        ):
+            stream = self.client.chat_stream("Hello")
+            first = await anext(stream)
+            self.assertEqual(first, {"type": "delta", "content": "Hello"})
+            await stream.aclose()
+            client.aio.aclose.assert_awaited_once()
+            client.close.assert_called_once()
 
     async def test_context_answer_cites_previously_retrieved_sources(self):
         matches = [SimpleNamespace(knowledge_base_id="kb-1", content="Open at 9")]
@@ -284,7 +346,7 @@ class ClientTests(IsolatedAsyncioTestCase):
         # model call: delegate, search, specialist answer, streamed relay.
         self.assertEqual(done["response"]["token"]["total_tokens"], 4 * 125)
 
-    async def test_redelegating_does_not_reset_seven_day_search_budget(self):
+    async def test_redelegating_does_not_reset_search_budget(self):
         payload = dict(status="unavailable", available=False, date=None,
                        requested_date="2026-06-16", searched_through="2026-06-22")
         self.script(
@@ -445,24 +507,29 @@ class AvailabilityTests(SimpleTestCase):
         self.addCleanup(self.config_patch.stop)
         self.addCleanup(self.now_patch.stop)
 
+    @staticmethod
+    def details(slots, reason="not_offered"):
+        return {"slots": slots, "available_count": len(slots),
+                "remaining_capacity": None, "reason": None if slots else reason}
+
     def test_stops_on_first_available_day(self):
         available = [{
             "starts_at": "2026-06-18T09:00:00+06:00",
             "ends_at": "2026-06-18T09:30:00+06:00",
         }]
-        with patch("agent.sub_agents.appointment.tools.available_slots", side_effect=[[], [], available]) as slots:
+        with patch("agent.sub_agents.appointment.tools.day_availability", side_effect=[self.details([]), self.details([]), self.details(available)]) as slots:
             result = booking.find_availability("bot", "2026-06-16")
         self.assertEqual(result["date"], "2026-06-18")
         self.assertTrue(result["available"])
         self.assertEqual(result["slots"], available)
         self.assertEqual([c.args[1] for c in slots.call_args_list], [date(2026, 6, d) for d in (16, 17, 18)])
 
-    def test_searches_exactly_seven_days_including_preferred(self):
-        with patch("agent.sub_agents.appointment.tools.available_slots", return_value=[]) as slots:
+    def test_searches_to_booking_horizon(self):
+        with patch("agent.sub_agents.appointment.tools.day_availability", return_value=self.details([])) as slots:
             result = booking.find_availability("bot", "2026-06-16")
-        self.assertEqual(slots.call_count, 7)
-        self.assertEqual(result["searched_through"], "2026-06-22")
-        self.assertEqual(result["next_search_date"], "2026-06-23")
+        self.assertEqual(slots.call_count, 31)
+        self.assertEqual(result["searched_through"], "2026-07-16")
+        self.assertIsNone(result["next_search_date"])
         self.assertFalse(result["available"])
 
     def test_requested_day_available(self):
@@ -470,28 +537,28 @@ class AvailabilityTests(SimpleTestCase):
             "starts_at": "2026-06-16T09:00:00+06:00",
             "ends_at": "2026-06-16T09:30:00+06:00",
         }]
-        with patch("agent.sub_agents.appointment.tools.available_slots", return_value=available) as slots:
+        with patch("agent.sub_agents.appointment.tools.day_availability", return_value=self.details(available)) as slots:
             result = booking.find_availability("bot", "2026-06-16")
         self.assertEqual(result["date"], "2026-06-16")
         self.assertEqual(result["slots"], available)
         self.assertEqual(slots.call_count, 1)
 
     def test_invalid_past_and_beyond_horizon_never_query_slots(self):
-        with patch("agent.sub_agents.appointment.tools.available_slots") as slots:
+        with patch("agent.sub_agents.appointment.tools.day_availability") as slots:
             for day in ["garbage", "2026-02-30", "20260616", "2026-06-15", "2027-01-01"]:
                 self.assertEqual(booking.find_availability("bot", day)["status"], "invalid")
         slots.assert_not_called()
 
     def test_horizon_truncates_search_without_offering_next_week(self):
         self.config.maximum_advance_days = 2
-        with patch("agent.sub_agents.appointment.tools.available_slots", return_value=[]) as slots:
+        with patch("agent.sub_agents.appointment.tools.day_availability", return_value=self.details([])) as slots:
             result = booking.find_availability("bot", "2026-06-16")
         self.assertEqual(slots.call_count, 3)
         self.assertIsNone(result["next_search_date"])
         self.assertEqual(result["searched_through"], "2026-06-18")
 
     def test_disabled_booking(self):
-        with patch("agent.sub_agents.appointment.tools.get_config", return_value=None), patch("agent.sub_agents.appointment.tools.available_slots") as slots:
+        with patch("agent.sub_agents.appointment.tools.get_config", return_value=None), patch("agent.sub_agents.appointment.tools.day_availability") as slots:
             self.assertEqual(booking.find_availability("bot", "2026-06-16")["status"], "disabled")
         slots.assert_not_called()
 
@@ -515,10 +582,49 @@ class AvailabilityTests(SimpleTestCase):
         config.schedules.filter.return_value = [schedule]
         existing = SimpleNamespace(starts_at=datetime.fromisoformat("2026-06-16T09:30:00+06:00"),
                                    ends_at=datetime.fromisoformat("2026-06-16T10:00:00+06:00"))
-        with patch("agent.sub_agents.appointment.tools.Appointment.objects.filter", return_value=[existing]):
+        with patch("agent.sub_agents.appointment.tools.Appointment.objects.filter", return_value=Mock(only=Mock(return_value=[existing]))):
             slots = booking.available_slots(config, date(2026, 6, 16),
                         now=datetime.fromisoformat("2026-06-16T09:00:00+06:00"))
             self.assertEqual([s["starts_at"] for s in slots],
                              ["2026-06-16T10:00:00+06:00", "2026-06-16T10:30:00+06:00"])
             config.max_appointments_per_day = 1
             self.assertEqual(booking.available_slots(config, date(2026, 6, 16), now=self.now), [])
+
+    def test_slot_flags_disable_overlapping_booking_and_daily_capacity(self):
+        config = SimpleNamespace(
+            chatbot_id="bot", chatbot=SimpleNamespace(timezone="Asia/Dhaka"),
+            is_enabled=True, maximum_advance_days=30, max_appointments_per_day=5,
+            appointment_duration_minutes=30, closed_dates=Mock(), schedules=Mock(),
+        )
+        config.closed_dates.filter.return_value.exists.return_value = False
+        schedule = Mock()
+        schedule.slots.filter.return_value = [SimpleNamespace(start_time=time(9), end_time=time(12))]
+        config.schedules.filter.return_value = [schedule]
+        existing = SimpleNamespace(
+            starts_at=datetime.fromisoformat("2026-06-16T09:30:00+06:00"),
+            ends_at=datetime.fromisoformat("2026-06-16T10:30:00+06:00"),
+        )
+        query = Mock(only=Mock(return_value=[existing]))
+        with patch("agent.sub_agents.appointment.tools.Appointment.objects.filter", return_value=query):
+            details = booking.day_availability(config, date(2026, 6, 16), now=self.now)
+            self.assertEqual(details["available_count"], 4)
+            self.assertEqual(details["remaining_capacity"], 4)
+            self.assertEqual([s["booked"] for s in details["slots"]], [False, True, True, False, False, False])
+            self.assertFalse(details["slots"][1]["available"])
+            config.max_appointments_per_day = 1
+            details = booking.day_availability(config, date(2026, 6, 16), now=self.now)
+            self.assertEqual(details["reason"], "daily_limit_reached")
+            self.assertEqual(details["available_count"], 0)
+            self.assertTrue(all(not s["available"] for s in details["slots"]))
+            self.assertEqual(len(details["slots"]), 6)
+
+    def test_closed_date_and_unscheduled_day_have_distinct_reasons(self):
+        config = SimpleNamespace(
+            chatbot=SimpleNamespace(timezone="Asia/Dhaka"), is_enabled=True,
+            maximum_advance_days=30, closed_dates=Mock(), schedules=Mock(),
+        )
+        config.closed_dates.filter.return_value.exists.return_value = True
+        self.assertEqual(booking.day_availability(config, date(2026, 6, 16), now=self.now)["reason"], "closed_date")
+        config.closed_dates.filter.return_value.exists.return_value = False
+        config.schedules.filter.return_value = []
+        self.assertEqual(booking.day_availability(config, date(2026, 6, 16), now=self.now)["reason"], "not_offered")

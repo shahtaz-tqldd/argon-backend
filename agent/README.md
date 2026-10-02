@@ -39,8 +39,11 @@ statuses, citations) to the visitor.
 
 The runner is created from an ADK `App`, with event compaction every three
 events, one event of overlap, and context caching for contexts of at least
-2,048 tokens. One shared Vertex client (HTTP pool) backs every agent model
-(`agent/helpers/model.py`). Trusted backend booking state is appended to the
+2,048 tokens. Each turn lazily creates one Vertex client (HTTP pool), shared
+by the coordinator and specialists (`agent/helpers/model.py`). The turn closes
+both async and sync transports before its event loop exits, including on errors
+and streaming cancellation. Clients are never reused across `async_to_sync`
+event loops or concurrent turns. Trusted backend booking state is appended to the
 ADK session before each App run; this avoids relying on
 `Runner.run_async(state_delta=...)`, which ADK 2.1.0's App node path does not
 expose to agent context.
@@ -123,23 +126,22 @@ async for item in client.chat_stream(message, user_id=visitor_id):
 
 ## Appointment UI flow
 
-1. Chat asks for the preferred date, resolving it in the chatbot timezone.
-2. `find_appointment_availability` searches the preferred date plus at most
-   six following dates and stops at the first available day. Only one search
-   window can run per invocation, enforced through ADK `temp:` state.
-   Available slots are returned in `result.appointment.slots` and saved in
-   the AI message metadata for the widget.
-3. On success, `result.appointment` contains `status: "available"`,
-   `available: true`, `requested_date`, `date`, `searched_through`, and
-   `timezone`. For June 16 with first availability on June 18, `date` is
-   `2026-06-18`. Each slot contains offset-aware `starts_at` and `ends_at`
-   values. Render these choices in the widget, but treat them as offers
-   rather than reservations.
-4. If June 16–22 is unavailable, `available` is false, `date` is null,
-   `searched_through` is June 22, and `next_search_date` is June 23. Chat
-   asks whether to try next week and waits for another visitor turn.
-   Searches stop at the configured booking horizon; disabled/invalid
-   requests have distinct statuses.
+1. Booking intent and follow-ups are delegated to `appointment_agent`, which
+   asks for a preferred date and resolves it in the chatbot timezone.
+2. `find_appointment_availability` checks the requested day, then suggests the
+   first available date up to the configured booking horizon. Only one search
+   can run per invocation, enforced through ADK `temp:` state.
+3. The model receives a compact summary: dates, `requested_date_reason`,
+   `available_count`, and `remaining_capacity`. Python attaches the full choices
+   to `result.appointment.slots` via an invocation-scoped context shared with the tool, outside model responses.
+   Each choice has offset-aware `starts_at`/`ends_at`, `booked`, `available`, and
+   `reason`. Disable choices with `available: false`, including booked, past,
+   and daily-limit-blocked choices. `available_count` counts selectable times;
+   `remaining_capacity` limits how many more appointments can be booked that day.
+4. If the requested day is unavailable, the agent explains whether it is closed,
+   unscheduled, fully booked, or has no future times and asks whether the visitor
+   wants the suggested date. An alternative is an offer, never a reservation.
+   If no day is available before the horizon, it returns `unavailable`.
 5. POST the selected `starts_at` and customer `collected_fields` to
    `/api/v1/chatbots/{public_key}/book-appointment/?session_id={session_id}`
    using the conversation bearer token. The endpoint rechecks availability
@@ -160,9 +162,14 @@ backend event in conversation history, and a trusted state event commits
 timestamps. A pending request is described as awaiting approval.
 `available` applies to availability offers only and is false for recorded
 bookings. Repeated confirmation calls reuse the state record keyed by
-appointment ID but produce another acknowledgment turn; callers should
-deduplicate delivery retries. A failure during acknowledgment does not undo
-the saved booking or event.
+appointment ID but produce another acknowledgment turn; the booking endpoint
+reuses the saved chat message for delivery retries. A failure during
+acknowledgment does not undo the saved booking. The endpoint persists a truthful
+fallback thank-you message if model generation fails. Its response includes
+`agent_reply` and `message`; the message carries
+`event_type: appointment_confirmation` and the saved appointment data. Existing
+chat signals publish `message.created` after commit, with the event metadata
+and thank-you content together.
 
 ## In-conversation lead scoring
 
@@ -209,8 +216,8 @@ client in a single async service boundary rather than carrying pooled
 connections between `async_to_sync` event loops. Callers must serialize turns
 per conversation across workers.
 
-This module does not register HTTP endpoints or save assistant replies into
-Django. `chat.tasks` persists returned replies, public message metadata,
+AgentClient does not register HTTP endpoints or save assistant replies into
+Django. The booking endpoint persists appointment acknowledgments. `chat.tasks` persists returned replies, public message metadata,
 usage, and escalation notifications. Internal lead-score and escalation tool
 payloads are not placed in public message metadata. The confirmation method
 remains backend-only and is not exposed as a visitor-callable model tool.

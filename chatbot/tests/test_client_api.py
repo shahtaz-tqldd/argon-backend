@@ -394,6 +394,60 @@ class ChatbotClientAPITests(APITestCase):
             str(session.lead_id),
         )
 
+    def test_public_visitor_create_ignores_stale_form_when_disabled(self):
+        lead_config = LeadCaptureConfig.objects.create(
+            chatbot=self.chatbot,
+            is_enabled=True,
+        )
+        self.client.force_authenticate(user=None)
+        url = reverse(
+            "public-visitor-create",
+            kwargs={
+                "public_key": self.chatbot.widget_settings.public_key,
+            },
+        )
+        query = {"visitor_id": "previous-lead-visitor"}
+        initial_response = self.client.post(
+            url,
+            {
+                "lead_data": {
+                    "name": "Ada Lovelace",
+                    "email": "ada@example.com",
+                },
+            },
+            format="json",
+            query_params=query,
+        )
+        lead_config.is_enabled = False
+        lead_config.save(update_fields=["is_enabled", "updated_at"])
+
+        response = self.client.post(
+            url,
+            {
+                "lead_data": {
+                    "name": "Stale Name",
+                    "email": "stale@example.com",
+                },
+            },
+            format="json",
+            query_params=query,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["data"]["session_created"])
+        self.assertEqual(
+            response.data["data"]["session"]["id"],
+            initial_response.data["data"]["session"]["id"],
+        )
+        lead = Lead.objects.get(chatbot=self.chatbot)
+        self.assertEqual(
+            lead.collected_fields,
+            {
+                "name": "Ada Lovelace",
+                "email": "ada@example.com",
+            },
+        )
+
     def test_public_visitor_message_list_returns_paginated_messages(self):
         session = ChatSession.objects.create(
             chatbot=self.chatbot,

@@ -1,5 +1,7 @@
 """Appointment availability tools and backend booking operations."""
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 from zoneinfo import ZoneInfo
 
@@ -11,66 +13,86 @@ from appointment.models import Appointment, AppointmentBookingConfig
 
 
 OPEN_STATUSES = ("pending", "confirmed")
+_APPOINTMENT_PAYLOADS = ContextVar("appointment_payloads", default=None)
 
 
-def available_slots(config, day, *, now=None):
+@contextmanager
+def appointment_payload_scope():
+    """Share offers with the caller across ADK tasks, isolated to this invocation."""
+    payloads = {}
+    token = _APPOINTMENT_PAYLOADS.set(payloads)
+    try:
+        yield payloads
+    finally:
+        _APPOINTMENT_PAYLOADS.reset(token)
+
+
+def day_availability(config, day, *, now=None):
+    """Build visitor-safe slot choices and explain why a day cannot be booked."""
     zone = ZoneInfo(config.chatbot.timezone)
     now = now or timezone.now()
     today = now.astimezone(zone).date()
-    if (
-        not config.is_enabled
-        or not today <= day <= today + timedelta(days=config.maximum_advance_days)
-    ):
-        return []
+    base = {"slots": [], "available_count": 0, "remaining_capacity": None}
+    if not config.is_enabled:
+        return {**base, "reason": "disabled"}
+    if not today <= day <= today + timedelta(days=config.maximum_advance_days):
+        return {**base, "reason": "outside_booking_horizon"}
     if config.closed_dates.filter(date=day, is_active=True).exists():
-        return []
+        return {**base, "reason": "closed_date"}
+    schedules = list(config.schedules.filter(weekday=day.weekday(), is_active=True))
+    if not schedules:
+        return {**base, "reason": "not_offered"}
     start = datetime.combine(day, datetime.min.time(), zone)
     end = datetime.combine(day + timedelta(days=1), datetime.min.time(), zone)
-    bookings = list(
-        Appointment.objects.filter(
-            chatbot_id=config.chatbot_id,
-            status__in=OPEN_STATUSES,
-            starts_at__lt=end,
-            ends_at__gt=start,
-        )
+    # Only intervals are needed; never expose customer data to the model or UI.
+    bookings = list(Appointment.objects.filter(
+        chatbot_id=config.chatbot_id, status__in=OPEN_STATUSES,
+        starts_at__lt=end, ends_at__gt=start,
+    ).only("starts_at", "ends_at"))
+    remaining = (
+        max(0, config.max_appointments_per_day - len(bookings))
+        if config.max_appointments_per_day else None
     )
-    if (
-        config.max_appointments_per_day
-        and len(bookings) >= config.max_appointments_per_day
-    ):
-        return []
     duration = timedelta(minutes=config.appointment_duration_minutes)
     if duration <= timedelta(0):
-        return []
+        return {**base, "reason": "not_offered"}
     slots = {}
-    for schedule in config.schedules.filter(
-        weekday=day.weekday(),
-        is_active=True,
-    ):
+    for schedule in schedules:
         for window in schedule.slots.filter(is_active=True):
-            cursor = datetime.combine(
-                day,
-                window.start_time,
-                zone,
-            ).astimezone(dt_timezone.utc)
-            stop = datetime.combine(
-                day,
-                window.end_time,
-                zone,
-            ).astimezone(dt_timezone.utc)
+            cursor = datetime.combine(day, window.start_time, zone).astimezone(dt_timezone.utc)
+            stop = datetime.combine(day, window.end_time, zone).astimezone(dt_timezone.utc)
             while cursor + duration <= stop:
                 finish = cursor + duration
-                if cursor > now and not any(
-                    booking.starts_at < finish and booking.ends_at > cursor
-                    for booking in bookings
-                ):
-                    local_start = cursor.astimezone(zone).isoformat()
-                    slots[local_start] = {
-                        "starts_at": local_start,
-                        "ends_at": finish.astimezone(zone).isoformat(),
-                    }
+                booked = any(b.starts_at < finish and b.ends_at > cursor for b in bookings)
+                reason = (
+                    "booked" if booked else "past" if cursor <= now
+                    else "daily_limit_reached" if remaining == 0 else None
+                )
+                local_start = cursor.astimezone(zone).isoformat()
+                slots[local_start] = {
+                    "starts_at": local_start,
+                    "ends_at": finish.astimezone(zone).isoformat(),
+                    "booked": booked,
+                    "available": reason is None,
+                    "reason": reason,
+                }
                 cursor = finish
-    return sorted(slots.values(), key=lambda slot: slot["starts_at"])
+    choices = sorted(slots.values(), key=lambda slot: slot["starts_at"])
+    count = sum(slot["available"] for slot in choices)
+    reason = (
+        None if count else "daily_limit_reached" if remaining == 0
+        else "not_offered" if not choices
+        else "fully_booked" if any(slot["booked"] for slot in choices)
+        else "no_future_slots"
+    )
+    return {"slots": choices, "available_count": count,
+            "remaining_capacity": remaining, "reason": reason}
+
+
+def available_slots(config, day, *, now=None):
+    """Selectable slots, shared by offers and the locked booking validation."""
+    return [slot for slot in day_availability(config, day, now=now)["slots"]
+            if slot["available"]]
 
 
 def get_config(chatbot_id):
@@ -109,12 +131,12 @@ def booking_schedule(chatbot_id, requested_date):
     return {
         "status": "ok",
         "timezone": config.chatbot.timezone,
-        "slots": available_slots(config, day),
+        **day_availability(config, day),
     }
 
 
 def find_availability(chatbot_id, requested_date):
-    """Check an inclusive seven-day window, stopping at the first available day."""
+    """Check the requested day, then find the next date within the booking horizon."""
     config = get_config(chatbot_id)
     if config is None:
         return {"status": "disabled", "available": False}
@@ -144,18 +166,20 @@ def find_availability(chatbot_id, requested_date):
             "status": "invalid",
             "message": f"Choose a date between {today} and {last_allowed}.",
         }
-    end = min(day + timedelta(days=6), last_allowed)
+    end = last_allowed
+    requested = day_availability(config, day, now=now)
+    base["requested_date_reason"] = requested["reason"]
     cursor = day
     while cursor <= end:
-        slots = available_slots(config, cursor, now=now)
-        if slots:
+        details = requested if cursor == day else day_availability(config, cursor, now=now)
+        if details["available_count"]:
             return {
                 **base,
                 "status": "available",
                 "available": True,
                 "date": cursor.isoformat(),
                 "searched_through": cursor.isoformat(),
-                "slots": slots,
+                **details,
             }
         cursor += timedelta(days=1)
     return {
@@ -166,9 +190,7 @@ def find_availability(chatbot_id, requested_date):
             cursor.isoformat() if cursor <= last_allowed else None
         ),
         "message": (
-            "No availability in this seven-day window. Ask about next week."
-            if end == day + timedelta(days=6) and cursor <= last_allowed
-            else "No availability before the booking horizon. Ask for an earlier date."
+            "No availability before the booking horizon. Ask for an earlier date."
         ),
     }
 
@@ -212,7 +234,7 @@ def create_appointment_tools(chatbot):
         requested_date: str,
         tool_context: ToolContext,
     ) -> dict:
-        """Find the first available date within seven days including requested_date.
+        """Check a preferred date and suggest the next available day within the booking horizon.
 
         Args:
             requested_date: Visitor's preferred date as YYYY-MM-DD in the business timezone.
@@ -239,7 +261,12 @@ def create_appointment_tools(chatbot):
             chatbot.id,
             requested_date,
         )
-        tool_context.state["temp:appointment_search"] = result
-        return result
+        # Keep slots out of model history and attach them to the caller's reply.
+        payloads = _APPOINTMENT_PAYLOADS.get()
+        if payloads is not None:
+            payloads["appointment"] = result
+        summary = {key: value for key, value in result.items() if key != "slots"}
+        tool_context.state["temp:appointment_search"] = summary
+        return summary
 
     return [FunctionTool(find_appointment_availability)]

@@ -71,3 +71,39 @@ def book_visitor_appointment(chat_session, *, starts_at, collected_fields):
     appointment.full_clean()
     appointment.save()
     return appointment, True
+
+
+@transaction.atomic
+def save_booking_confirmation(chat_session, appointment, *, content):
+    """Persist one visitor-visible acknowledgment; ChatMessage signals publish it."""
+    from chat.models import ChatMessage
+    from chat.utils.choices import ChatMessageSenderType
+
+    # Serialize retries for this conversation, including across API workers.
+    ChatSession.objects.select_for_update().get(pk=chat_session.pk)
+    external_id = f"appointment:{appointment.id}"
+    existing = ChatMessage.objects.filter(
+        chat_session=chat_session, external_id=external_id,
+    ).first()
+    if existing is not None:
+        return existing
+    message = ChatMessage(
+        chat_session=chat_session,
+        sender_type=ChatMessageSenderType.AI,
+        external_id=external_id,
+        content=content,
+        metadata={
+            "event_type": "appointment_confirmation",
+            "appointment": {
+                "status": "booking_recorded",
+                "available": False,
+                "appointment_id": str(appointment.id),
+                "appointment_status": appointment.status,
+                "starts_at": appointment.starts_at.isoformat(),
+                "ends_at": appointment.ends_at.isoformat(),
+            },
+        },
+    )
+    message.full_clean()
+    message.save()
+    return message
