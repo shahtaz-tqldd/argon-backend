@@ -269,11 +269,7 @@ class SubscriptionClientAPITests(APITestCase):
         }
         capacity = ChatbotConfig.objects.create(
             chatbot=self.chatbot,
-            ai_message_limit=1000,
             current_ai_message_count=658,
-            file_size_limit_bytes=25 * 1024 * 1024,
-            knowledge_chunk_limit=5000,
-            active_features=[PlanFeature.KNOWLEDGE_BASE],
         )
 
         response = self.client.post(
@@ -294,12 +290,8 @@ class SubscriptionClientAPITests(APITestCase):
         self.assertEqual(replacement.plan_price, premium_price)
         self.assertEqual(replacement.provider_subscription_id, "sub_123")
         capacity.refresh_from_db()
-        self.assertEqual(capacity.ai_message_limit, 2500)
+        self.assertEqual(capacity.ai_message_limit, 1500)
         self.assertEqual(capacity.current_ai_message_count, 658)
-        self.assertEqual(
-            capacity.ai_message_limit - capacity.current_ai_message_count,
-            342 + 1500,
-        )
         self.assertEqual(capacity.file_size_limit_bytes, 75 * 1024 * 1024)
         self.assertEqual(capacity.knowledge_chunk_limit, 1500)
         self.assertEqual(capacity.active_features, [PlanFeature.LEAD_CAPTURE])
@@ -434,9 +426,7 @@ class SubscriptionClientAPITests(APITestCase):
         )
         capacity = ChatbotConfig.objects.create(
             chatbot=self.chatbot,
-            ai_message_limit=1000,
             current_ai_message_count=658,
-            active_features=[PlanFeature.LEAD_CAPTURE],
         )
         lead_config = LeadCaptureConfig.objects.create(
             chatbot=self.chatbot,

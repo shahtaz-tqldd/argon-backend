@@ -31,10 +31,13 @@ def root_agent(chatbot, session):
                 - Delegate domain work to the matching specialist; delegate each
                   independent intent.
                 - Route booking intent, availability questions, requests to visit or
-                  schedule, and replies to earlier date/slot offers to appointment_agent
+                  schedule, and replies to earlier date offers to appointment_agent
                   when enabled. Include the visitor's preferred date and relevant
                   conversation context. Route trusted booking events there too.
                 - Relay specialist facts, dates, statuses, and limitations accurately.
+                  For appointment results, relay the specialist's message without
+                  adding slot counts or appointment times; code attaches slots after
+                  `agreed_date` is returned.
                 - Do not answer a specialist's domain from your own knowledge.
                 - Use the configured fallback when no specialist can handle an
                   in-scope request.

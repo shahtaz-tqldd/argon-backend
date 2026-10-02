@@ -1,7 +1,6 @@
 from chatbot.services.capacity import (
     apply_active_subscription_to_chatbot_capacity,
     get_chatbot_capacity,
-    sync_chatbot_capacity_from_subscription,
     update_chatbot_capacity,
 )
 from chatbot.services.activity_logs import (
@@ -26,7 +25,6 @@ __all__ = [
     "record_chatbot_activity",
     "apply_active_subscription_to_chatbot_capacity",
     "get_chatbot_capacity",
-    "sync_chatbot_capacity_from_subscription",
     "update_chatbot_capacity",
     "assign_user_to_chatbot",
     "create_chatbot",

@@ -17,9 +17,14 @@ STANDARD_FEATURES = [
     PlanFeature.KNOWLEDGE_BASE,
 ]
 
-LEAD_CAPTURE_FEATURES = [
+PLUS_FEATURES = [
     *STANDARD_FEATURES,
-    PlanFeature.LEAD_CAPTURE,
+    PlanFeature.LEAD_CAPTURE
+]
+
+PRO_FEATURES = [
+    *PLUS_FEATURES,
+    PlanFeature.APPOINTMENT_BOOKING
 ]
 
 PLAN_CONFIGURATIONS = (
@@ -46,7 +51,7 @@ PLAN_CONFIGURATIONS = (
         "ai_message_limit": 1000,
         "file_size_limit_mb": 25,
         "knowledge_chunk_limit": 625,
-        "features": STANDARD_FEATURES,
+        "features": PLUS_FEATURES,
         "is_free": False,
         "requires_sales_contact": False,
         "sort_order": 10,
@@ -62,7 +67,7 @@ PLAN_CONFIGURATIONS = (
         "ai_message_limit": 2500,
         "file_size_limit_mb": 50,
         "knowledge_chunk_limit": 1250,
-        "features": LEAD_CAPTURE_FEATURES,
+        "features": PRO_FEATURES,
         "is_free": False,
         "requires_sales_contact": False,
         "sort_order": 20,
@@ -78,7 +83,7 @@ PLAN_CONFIGURATIONS = (
         "ai_message_limit": 5000,
         "file_size_limit_mb": 100,
         "knowledge_chunk_limit": 2500,
-        "features": LEAD_CAPTURE_FEATURES,
+        "features": PRO_FEATURES,
         "is_free": False,
         "requires_sales_contact": False,
         "sort_order": 30,
@@ -94,7 +99,7 @@ PLAN_CONFIGURATIONS = (
         "ai_message_limit": None,
         "file_size_limit_mb": None,
         "knowledge_chunk_limit": None,
-        "features": LEAD_CAPTURE_FEATURES,
+        "features": PRO_FEATURES,
         "is_free": False,
         "requires_sales_contact": True,
         "sort_order": 40,

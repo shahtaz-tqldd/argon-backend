@@ -7,11 +7,13 @@ from django.test import TestCase, override_settings
 from analytics.choices import AIUsageType
 from analytics.models import AIUsage
 from analytics.services.ai_usage import record_ai_usage
+from agent.client import AgentClient
 from chatbot.models import Chatbot
 from chat.models import ChatMessage, ChatSession
 from chat.tasks import generate_ai_reply_task
 from chat.utils.choices import ChatMessageSenderType
-from notification.models import NotificationRecipientType, NotificationType
+from knowledge.models import KnowledgeBase
+from knowledge.utils.choices import KnowledgeSourceTypes
 from workspace.models import Workspace
 
 
@@ -47,74 +49,32 @@ class GenerateAIReplyTaskTests(TestCase):
         )
 
     @patch("chat.tasks.AgentClient")
-    def test_agent_reply_saves_public_metadata_and_usage(self, agent_client):
-        agent_client.return_value.chat_sync.return_value = {
-            "result": {
-                "content": "Tomorrow is available.",
-                "source_ids": ["source-1"],
-                "appointment": {
-                    "status": "available",
-                    "available": True,
+    def test_task_returns_only_public_agent_reply(self, agent_client):
+        public_reply = {
+            "content": "Tomorrow is available.",
+            "metadata": {
+                "appointments": {
                     "date": "2026-09-11",
-                    "slots": [
-                        {
-                            "starts_at": "2026-09-11T09:00:00+06:00",
-                            "ends_at": "2026-09-11T09:30:00+06:00",
-                        }
+                    "timezone": "UTC+6.00",
+                    "available_slots": [
+                        {"start_time": "9.00 AM", "end_time": "9.30 AM"},
                     ],
                 },
             },
-            "token": {
-                "input_tokens": 100,
-                "output_tokens": 30,
-                "thinking_tokens": 10,
-                "cached_input_tokens": 5,
-                "total_tokens": 130,
-            },
-            "cost": 0.000105,
         }
+        agent_client.return_value.generate_reply_sync.return_value = public_reply
 
         result = generate_ai_reply_task.apply(
             args=[str(self.visitor_message.id)],
             throw=True,
         )
 
-        reply = ChatMessage.objects.get(pk=result.result)
-        self.assertEqual(reply.content, "Tomorrow is available.")
-        self.assertEqual(
-            reply.metadata,
-            {
-                "in_reply_to": str(self.visitor_message.id),
-                "source_ids": ["source-1"],
-                "appointment": {
-                    "status": "available",
-                    "available": True,
-                    "date": "2026-09-11",
-                    "slots": [
-                        {
-                            "starts_at": "2026-09-11T09:00:00+06:00",
-                            "ends_at": "2026-09-11T09:30:00+06:00",
-                        }
-                    ],
-                },
-            },
-        )
+        self.assertEqual(result.result, public_reply)
         agent_client.assert_called_once_with(self.chatbot, self.session)
-        agent_client.return_value.chat_sync.assert_called_once_with(
-            message="Can I book tomorrow?",
+        agent_client.return_value.generate_reply_sync.assert_called_once_with(
+            visitor_message=self.visitor_message,
             user_id="visitor-1",
         )
-
-        usage = AIUsage.objects.get(chat_message=reply)
-        self.assertEqual(usage.chatbot, self.chatbot)
-        self.assertEqual(usage.chat_session, self.session)
-        self.assertEqual(usage.tokens, 130)
-        self.assertEqual(usage.input_tokens, 100)
-        self.assertEqual(usage.output_tokens, 30)
-        self.assertEqual(usage.thinking_tokens, 10)
-        self.assertEqual(usage.cached_input_tokens, 5)
-        self.assertEqual(usage.cost, Decimal("0.00010500"))
-        self.assertEqual(usage.model, "gemini-2.5-flash")
 
     @patch("chat.tasks.AgentClient")
     def test_async_reply_task_ignores_test_sessions(self, agent_client):
@@ -137,45 +97,46 @@ class GenerateAIReplyTaskTests(TestCase):
         self.assertEqual(test_session.messages.count(), 1)
         agent_client.assert_not_called()
 
-    @patch("chat.tasks.create_notification")
     @patch("chat.tasks.AgentClient")
-    def test_escalation_creates_attention_notification(
-        self,
-        agent_client,
-        create_notification,
-    ):
-        escalation = {
-            "requires_attention": True,
-            "escalation_reason": "Visitor explicitly requested a human.",
-        }
-        agent_client.return_value.chat_sync.return_value = {
-            "result": {
-                "content": "I have requested human assistance.",
-                "source_ids": [],
-                "appointment": None,
-                "lead_score": None,
-                "escalation": escalation,
+    def test_task_does_not_repeat_agent_side_effects(self, agent_client):
+        public_reply = {
+            "content": "I have requested human assistance.",
+            "metadata": {
+                "escalation": {
+                    "reason": "Visitor explicitly requested a human.",
+                },
             },
-            "token": {"total_tokens": 12},
-            "cost": 0.0001,
         }
+        agent_client.return_value.generate_reply_sync.return_value = public_reply
 
-        generate_ai_reply_task.apply(
+        result = generate_ai_reply_task.apply(
             args=[str(self.visitor_message.id)],
             throw=True,
         )
+        self.assertEqual(result.result, public_reply)
 
-        create_notification.assert_called_once_with(
-            recipient_type=NotificationRecipientType.CHATBOT,
-            notification_type=NotificationType.AI_NOTIFICATION,
-            chatbot=self.chatbot,
-            title="Attention required",
-            message="Visitor explicitly requested a human.",
-            metadata={
+    @patch("chat.tasks.AgentClient")
+    def test_appointment_trigger_uses_booking_reply_lifecycle(self, agent_client):
+        public_reply = {
+            "content": "Your appointment request is awaiting approval.",
+            "metadata": {},
+        }
+        agent_client.return_value.generate_booking_reply_sync.return_value = (
+            public_reply
+        )
+
+        result = generate_ai_reply_task.apply(
+            kwargs={
                 "chat_session_id": str(self.session.id),
-                "escalation_reason": "Visitor explicitly requested a human.",
-                "source": "chat_agent",
+                "appointment_id": "appointment-1",
             },
+            throw=True,
+        )
+
+        self.assertEqual(result.result, public_reply)
+        agent_client.return_value.generate_booking_reply_sync.assert_called_once_with(
+            appointment_id="appointment-1",
+            user_id="visitor-1",
         )
 
     @patch("chat.tasks.AgentClient")
@@ -215,34 +176,71 @@ class GenerateAIReplyTaskTests(TestCase):
         self.assertEqual(usage.chatbot_id_snapshot, self.chatbot.id)
         self.assertIsNone(usage.chat_session_id_snapshot)
 
-    @patch("chat.tasks.AgentClient")
-    def test_usage_survives_session_and_chatbot_deletion(self, agent_client):
-        agent_client.return_value.chat_sync.return_value = {
-            "result": {
-                "content": "Reply",
-                "source_ids": [],
-                "appointment": None,
-            },
-            "token": {"total_tokens": 12},
-            "cost": 0.0001,
-        }
-        result = generate_ai_reply_task.apply(
-            args=[str(self.visitor_message.id)],
-            throw=True,
+    def test_agent_client_persists_public_metadata_and_usage(self):
+        source = KnowledgeBase.objects.create(
+            chatbot=self.chatbot,
+            source_type=KnowledgeSourceTypes.WEBSITE,
+            title="Booking FAQ",
+            url="https://example.com/booking",
         )
-        usage = AIUsage.objects.get(chat_message_id=result.result)
-        chatbot_id = self.chatbot.id
-        session_id = self.session.id
-        message_id = usage.chat_message_id
+        response = {
+            "result": {
+                "content": "Tomorrow is available.",
+                "source_ids": [str(source.id)],
+                "agreed_date": "2026-09-11",
+                "lead_score": {"score": 80, "summary": "Ready to book."},
+                "escalation": {"escalation_reason": "Requested a person."},
+            },
+            "token": {
+                "input_tokens": 100,
+                "output_tokens": 30,
+                "thinking_tokens": 10,
+                "cached_input_tokens": 5,
+                "total_tokens": 130,
+            },
+            "cost": 0.000105,
+        }
+        client = object.__new__(AgentClient)
+        client.chatbot = self.chatbot
+        client.session = self.session
 
-        self.session.delete()
-        usage.refresh_from_db()
-        self.assertIsNone(usage.chat_session)
-        self.assertIsNone(usage.chat_message)
-        self.assertEqual(usage.chat_session_id_snapshot, session_id)
-        self.assertEqual(usage.chat_message_id_snapshot, message_id)
+        with patch("agent.client.slots_for_agreed_date", return_value={
+            "date": "2026-09-11",
+            "timezone": "UTC+6.00",
+            "slots": [{
+                "starts_at": "2026-09-11T09:00:00+06:00",
+                "ends_at": "2026-09-11T09:30:00+06:00",
+            }],
+        }):
+            public_reply = client._persist_reply(
+                f"ai:{self.visitor_message.id}",
+                response,
+            )
 
-        self.chatbot.delete()
-        usage.refresh_from_db()
-        self.assertIsNone(usage.chatbot)
-        self.assertEqual(usage.chatbot_id_snapshot, chatbot_id)
+        self.assertEqual(public_reply, {
+            "content": "Tomorrow is available.",
+            "metadata": {
+                "appointments": {
+                    "date": "2026-09-11",
+                    "timezone": "UTC+6.00",
+                    "available_slots": [
+                        {"start_time": "9.00 AM", "end_time": "9.30 AM"},
+                    ],
+                },
+                "lead_analytics": {"score": 80, "summary": "Ready to book."},
+                "escalation": {"reason": "Requested a person."},
+                "sources": [{
+                    "id": str(source.id),
+                    "source_type": "website",
+                    "name": "Booking FAQ",
+                    "url": "https://example.com/booking",
+                }],
+            },
+        })
+        message = ChatMessage.objects.get(
+            external_id=f"ai:{self.visitor_message.id}"
+        )
+        self.assertEqual(message.metadata, public_reply["metadata"])
+        usage = AIUsage.objects.get(chat_message=message)
+        self.assertEqual(usage.tokens, 130)
+        self.assertEqual(usage.cost, Decimal("0.00010500"))

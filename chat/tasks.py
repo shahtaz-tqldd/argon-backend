@@ -1,18 +1,13 @@
 from app.utils.logger import logger
 
 from celery import shared_task
-from django.conf import settings
 from django.db import transaction
 
 from agent.client import AgentClient
-from analytics.choices import AIUsageType
-from analytics.services.ai_usage import record_ai_usage
 from chatbot.models import ChatbotConfig
 from chat.models import ChatMessage, ChatSession
 from chat.services.events import publish_session_event
 from chat.utils.choices import ChatMessageSenderType, ChatSessionStatus
-from notification.models import NotificationRecipientType, NotificationType
-from notification.services import create_notification
 
 
 def is_ai_reply_enabled(session, chatbot=None):
@@ -27,32 +22,24 @@ def is_ai_reply_enabled(session, chatbot=None):
 
 
 def _generate_reply(session, visitor_message):
-    response = AgentClient(session.chatbot, session).chat_sync(
-        message=visitor_message.content,
+    return AgentClient(session.chatbot, session).generate_reply_sync(
+        visitor_message=visitor_message,
         user_id=session.visitor_id or str(session.id),
-    )
-    result = response["result"]
-    metadata = {
-        "in_reply_to": str(visitor_message.id),
-        "source_ids": result.get("source_ids", []),
-        "appointment": result.get("appointment"),
-    }
-    agent_actions = {
-        "lead_score": result.get("lead_score"),
-        "escalation": result.get("escalation"),
-    }
-    return (
-        result["content"],
-        metadata,
-        response["token"],
-        response["cost"],
-        agent_actions,
     )
 
 
 def dispatch_ai_reply(visitor_message_id):
     """Queue an AgentClient response for a visitor message."""
     generate_ai_reply_task.delay(str(visitor_message_id))
+    return True
+
+
+def dispatch_appointment_reply(chat_session_id, appointment_id):
+    """Queue the conversational acknowledgment for a saved appointment."""
+    generate_ai_reply_task.delay(
+        chat_session_id=str(chat_session_id),
+        appointment_id=str(appointment_id),
+    )
     return True
 
 
@@ -87,7 +74,68 @@ def _release_ai_message(chatbot_id):
     retry_backoff=True,
     retry_kwargs={"max_retries": 2},
 )
-def generate_ai_reply_task(self, visitor_message_id):
+def generate_ai_reply_task(
+    self,
+    visitor_message_id=None,
+    *,
+    chat_session_id=None,
+    appointment_id=None,
+):
+    if appointment_id is not None:
+        if visitor_message_id is not None or chat_session_id is None:
+            raise ValueError(
+                "Appointment replies require chat_session_id and appointment_id only."
+            )
+        session = (
+            ChatSession.objects.select_related("chatbot")
+            .filter(pk=chat_session_id, is_test=False)
+            .first()
+        )
+        if session is None:
+            return None
+
+        external_id = f"appointment:{appointment_id}"
+        existing_reply = ChatMessage.objects.filter(
+            chat_session=session,
+            external_id=external_id,
+        ).first()
+        if existing_reply is not None:
+            return {
+                "content": existing_reply.content,
+                "metadata": existing_reply.metadata,
+            }
+
+        publish_session_event(
+            session.id,
+            session.chatbot_id,
+            "ai.response.started",
+            {"appointment_id": str(appointment_id)},
+        )
+        try:
+            return AgentClient(
+                session.chatbot,
+                session,
+            ).generate_booking_reply_sync(
+                appointment_id=str(appointment_id),
+                user_id=session.visitor_id or str(session.id),
+            )
+        except Exception:
+            logger.exception(
+                "Appointment reply failed for appointment %s",
+                appointment_id,
+            )
+            if self.request.retries >= 2:
+                publish_session_event(
+                    session.id,
+                    session.chatbot_id,
+                    "ai.response.failed",
+                    {"code": "generation_failed", "retryable": True},
+                )
+            raise
+
+    if visitor_message_id is None or chat_session_id is not None:
+        raise ValueError("Visitor replies require visitor_message_id only.")
+
     visitor_message = (
         ChatMessage.objects.select_related("chat_session__chatbot")
         .filter(
@@ -103,17 +151,21 @@ def generate_ai_reply_task(self, visitor_message_id):
     chatbot = session.chatbot
     if session.is_test:
         return None
-    external_id = f"ai:{visitor_message.id}"
-    if ChatMessage.objects.filter(
+
+    existing_reply = ChatMessage.objects.filter(
         chat_session=session,
-        external_id=external_id,
-    ).exists():
-        return None
+        external_id=f"ai:{visitor_message.id}",
+    ).first()
+    if existing_reply is not None:
+        return {
+            "content": existing_reply.content,
+            "metadata": existing_reply.metadata,
+        }
+
     if not is_ai_reply_enabled(session, chatbot):
         return None
 
-    capacity_reserved = True
-    if capacity_reserved and not _reserve_ai_message(chatbot.id):
+    if not _reserve_ai_message(chatbot.id):
         publish_session_event(
             session.id,
             chatbot.id,
@@ -129,55 +181,17 @@ def generate_ai_reply_task(self, visitor_message_id):
         {"in_reply_to": str(visitor_message.id)},
     )
     try:
-        content, metadata, token_usage, cost, agent_actions = _generate_reply(
+        reply = _generate_reply(
             session,
             visitor_message,
         )
-        with transaction.atomic():
-            locked_session = ChatSession.objects.select_for_update().get(
-                pk=session.pk
-            )
-            if not is_ai_reply_enabled(locked_session):
-                if capacity_reserved:
-                    _release_ai_message(chatbot.id)
-                return None
-            message = ChatMessage(
-                chat_session=locked_session,
-                sender_type=ChatMessageSenderType.AI,
-                content=content,
-                metadata=metadata,
-                external_id=external_id,
-            )
-            message.full_clean()
-            message.save()
-            escalation = agent_actions.get("escalation")
-            if escalation:
-                create_notification(
-                    recipient_type=NotificationRecipientType.CHATBOT,
-                    notification_type=NotificationType.AI_NOTIFICATION,
-                    chatbot=chatbot,
-                    title="Attention required",
-                    message=escalation["escalation_reason"],
-                    metadata={
-                        "chat_session_id": str(locked_session.id),
-                        "escalation_reason": escalation["escalation_reason"],
-                        "source": "chat_agent",
-                    },
-                )
-            record_ai_usage(
-                chatbot=chatbot,
-                chat_session=locked_session,
-                chat_message=message,
-                usage_type=AIUsageType.CHAT,
-                cost=cost,
-                token_usage=token_usage,
-                model=settings.GEMINI_CHAT_MODEL,
-            )
-        return str(message.id)
+        if reply is None:
+            _release_ai_message(chatbot.id)
+            return None
+        return reply
 
     except Exception:
-        if capacity_reserved:
-            _release_ai_message(chatbot.id)
+        _release_ai_message(chatbot.id)
         logger.exception("AI reply failed for visitor message %s", visitor_message.id)
         if self.request.retries >= 2:
             publish_session_event(

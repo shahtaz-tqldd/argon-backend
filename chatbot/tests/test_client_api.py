@@ -44,6 +44,7 @@ from subscription.choices import (
     SubscriptionStatus,
 )
 from subscription.models import ChatbotSubscription, PlanPrice, SubscriptionPlan
+from subscription.services.subscriptions import activate_free_subscription
 from workspace.models import Workspace
 from workspace.services import add_workspace_user, ensure_personal_workspace
 
@@ -75,17 +76,32 @@ class ChatbotClientAPITests(APITestCase):
         self.client.force_authenticate(self.owner)
 
     def test_chatbot_base_returns_subscription_backed_capabilities(self):
-        capacity = ChatbotConfig.objects.get(chatbot=self.chatbot)
-        capacity.active_features = [
-            PlanFeature.KNOWLEDGE_BASE,
-            PlanFeature.HUMAN_HANDOFF,
-            PlanFeature.APPOINTMENT_BOOKING,
-            PlanFeature.LEAD_CAPTURE,
-        ]
-        capacity.save(update_fields=["active_features", "updated_at"])
-        subscription = self.chatbot.subscriptions.get(
-            status=SubscriptionStatus.ACTIVE
+        complete_plan = SubscriptionPlan.objects.create(
+            name="Complete",
+            is_free=True,
+            ai_message_limit=2500,
+            file_size_limit_mb=50,
+            knowledge_chunk_limit=1250,
+            features=[
+                PlanFeature.KNOWLEDGE_BASE,
+                PlanFeature.HUMAN_HANDOFF,
+                PlanFeature.APPOINTMENT_BOOKING,
+                PlanFeature.LEAD_CAPTURE,
+            ],
         )
+        complete_price = PlanPrice.objects.create(
+            plan=complete_plan,
+            provider=PaymentProvider.MANUAL,
+            billing_interval=BillingInterval.MONTHLY,
+            currency="USD",
+            amount=Decimal("0.00"),
+        )
+        subscription = activate_free_subscription(
+            chatbot=self.chatbot,
+            plan_price=complete_price,
+            user=self.owner,
+        )[0]
+        capacity = ChatbotConfig.objects.get(chatbot=self.chatbot)
         allowed_origin = ChatbotAllowedOrigin.objects.create(
             chatbot=self.chatbot,
             origin="https://app.example.com",
@@ -833,14 +849,12 @@ class ChatbotClientAPITests(APITestCase):
         )
         self.assertFalse(ChatMessage.objects.filter(chat_session=session).exists())
 
-    @patch("appointment.api.v1.public.views.record_ai_usage")
-    @patch("appointment.api.v1.public.views.AgentClient")
+    @patch("appointment.api.v1.public.views.dispatch_appointment_reply")
     @patch("appointment.services.available_slots")
     def test_visitor_can_book_available_slot_and_notify_agent(
         self,
         available_slots,
-        agent_client,
-        record_ai_usage,
+        dispatch_appointment_reply,
     ):
         AppointmentBookingConfig.objects.create(
             chatbot=self.chatbot,
@@ -858,11 +872,7 @@ class ChatbotClientAPITests(APITestCase):
             "starts_at": starts_at.isoformat(),
             "ends_at": ends_at.isoformat(),
         }]
-        agent_client.return_value.confirm_booking_sync.return_value = {
-            "result": {"content": "Your appointment request is awaiting approval."},
-            "token": {"total_tokens": 20},
-            "cost": 0.0001,
-        }
+        dispatch_appointment_reply.return_value = True
         self.client.force_authenticate(user=None)
 
         response = self.client.post(
@@ -897,12 +907,11 @@ class ChatbotClientAPITests(APITestCase):
         )
         self.assertEqual(appointment.starts_at, starts_at)
         self.assertEqual(appointment.ends_at, ends_at)
-        agent_client.return_value.confirm_booking_sync.assert_called_once_with(
-            appointment_id=str(appointment.id),
-            user_id="booking-visitor",
+        dispatch_appointment_reply.assert_called_once_with(
+            session.id,
+            appointment.id,
         )
-        self.assertTrue(response.data["data"]["agent_acknowledged"])
-        record_ai_usage.assert_called_once()
+        self.assertTrue(response.data["data"]["reply_queued"])
 
     def test_chatbot_detail_uses_chatbot_query_parameter(self):
         response = self.client.get(

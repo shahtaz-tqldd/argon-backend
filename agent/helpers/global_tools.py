@@ -6,13 +6,14 @@ from google.adk.tools import FunctionTool
 from chat.models import ChatSession
 from chat.services.messages import create_system_message
 from lead_capture.models import Lead
+from notification.models import NotificationRecipientType, NotificationType
+from notification.services import create_notification
 
 # features
 from chatbot.services.capacity import chatbot_has_feature
 from subscription.choices import PlanFeature
 
 
-LEAD_SCORE_SUMMARY_KEY = "lead_score_summary"
 MAX_LEAD_SUMMARY_LENGTH = 240
 MAX_ESCALATION_REASON_LENGTH = 500
 
@@ -55,11 +56,6 @@ def _record_lead_score(chatbot_id, session_id, score, summary):
         lead.lead_score = score
         lead.save(update_fields=["lead_score", "updated_at"])
 
-        metadata = dict(chat_session.metadata or {})
-        metadata[LEAD_SCORE_SUMMARY_KEY] = summary
-        chat_session.metadata = metadata
-        chat_session.save(update_fields=["metadata", "updated_at"])
-
     return {"score": score, "summary": summary, "recorded": True}
 
 
@@ -75,10 +71,20 @@ def _request_human_escalation(
     )
 
     with transaction.atomic():
-        chat_session = ChatSession.objects.select_for_update().get(
-            pk=session_id,
-            chatbot_id=chatbot_id,
+        chat_session = (
+            ChatSession.objects.select_for_update()
+            .select_related("chatbot")
+            .get(pk=session_id, chatbot_id=chatbot_id)
         )
+        if (
+            chat_session.requires_attention
+            and chat_session.attention_reason == escalation_reason
+        ):
+            return {
+                "requires_attention": True,
+                "escalation_reason": escalation_reason,
+            }
+
         chat_session.requires_attention = True
         chat_session.attention_reason = escalation_reason
         chat_session.attention_requested_at = timezone.now()
@@ -95,6 +101,18 @@ def _request_human_escalation(
             content=f"Human attention requested: {escalation_reason}",
             event_type="session.attention_requested",
             metadata={"reason": escalation_reason},
+        )
+        create_notification(
+            recipient_type=NotificationRecipientType.CHATBOT,
+            notification_type=NotificationType.AI_NOTIFICATION,
+            chatbot=chat_session.chatbot,
+            title="Attention required",
+            message=escalation_reason,
+            metadata={
+                "chat_session_id": str(chat_session.id),
+                "escalation_reason": escalation_reason,
+                "source": "chat_agent",
+            },
         )
 
     return {

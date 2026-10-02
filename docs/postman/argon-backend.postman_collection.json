@@ -1623,7 +1623,7 @@
               "name": "Book Appointment (Visitor)",
               "request": {
                 "method": "POST",
-                "description": "Book an appointment from the widget. **Auth: `Bearer {{conversation_token}}`** + Origin check.\n\n**Query**: `session_id` (UUID, required).\n\n**Body**: `starts_at` (ISO-8601 **with explicit UTC offset**, required), `collected_fields` (JSON, optional).\n\n**201** → `data: {appointment {id, collected_fields, starts_at, ends_at, status, created_at}, duplicate, agent_acknowledged, agent_reply}`. **409** on booking validation failure.",
+                "description": "Book an appointment from the widget. **Auth: `Bearer {{conversation_token}}`** + Origin check.\n\n**Query**: `session_id` (UUID, required).\n\n**Body**: `starts_at` (ISO-8601 **with explicit UTC offset**, required), `collected_fields` (JSON, optional).\n\n**201** → `data: {appointment {id, collected_fields, starts_at, ends_at, status, created_at}, duplicate, reply_queued}`. The confirmation arrives as the next chat message. **409** on booking validation failure.",
                 "url": {
                   "raw": "{{base_url}}/api/v1/chatbots/{{public_key}}/book-appointment/?session_id={{session_id}}",
                   "host": [

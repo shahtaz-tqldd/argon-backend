@@ -15,7 +15,6 @@ from chatbot.models import (
     Chatbot,
     ChatbotActivityLog,
     ChatbotAllowedOrigin,
-    ChatbotConfig,
     ChatbotInvitation,
     ChatbotUser,
     ChatbotWidgetSettings,
@@ -446,23 +445,25 @@ class ChatbotBaseWorkspaceSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class ChatbotConfigSerializer(serializers.ModelSerializer):
-    """Serialize the cached limits, usage, and entitlements for a chatbot."""
+class ChatbotConfigSerializer(serializers.Serializer):
+    """Serialize subscription-derived limits and tracked usage for a chatbot."""
 
-    class Meta:
-        model = ChatbotConfig
-        fields = (
-            "ai_message_limit",
-            "current_ai_message_count",
-            "test_ai_message_limit",
-            "current_test_ai_message_count",
-            "file_size_limit_bytes",
-            "current_file_size_bytes",
-            "knowledge_chunk_limit",
-            "current_knowledge_chunk_count",
-            "active_features",
-        )
-        read_only_fields = fields
+    ai_message_limit = serializers.IntegerField(read_only=True, allow_null=True)
+    current_ai_message_count = serializers.IntegerField(read_only=True)
+    test_ai_message_limit = serializers.IntegerField(read_only=True)
+    current_test_ai_message_count = serializers.IntegerField(read_only=True)
+    file_size_limit_bytes = serializers.IntegerField(
+        read_only=True, allow_null=True,
+    )
+    current_file_size_bytes = serializers.IntegerField(read_only=True)
+    knowledge_chunk_limit = serializers.IntegerField(
+        read_only=True, allow_null=True,
+    )
+    current_knowledge_chunk_count = serializers.IntegerField(read_only=True)
+    active_features = serializers.ListField(
+        child=serializers.CharField(),
+        read_only=True,
+    )
 
 
 class ChatbotCurrentSubscriptionPlanSerializer(serializers.Serializer):

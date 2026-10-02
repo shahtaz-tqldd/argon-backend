@@ -2,7 +2,6 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from agent.helpers.global_tools import (
-    LEAD_SCORE_SUMMARY_KEY,
     _record_lead_score,
     _request_human_escalation,
 )
@@ -10,6 +9,7 @@ from chatbot.models import Chatbot
 from chat.models import ChatMessage, ChatSession
 from chat.utils.choices import ChatMessageSenderType
 from lead_capture.models import Lead
+from notification.models import Notification, NotificationType
 from workspace.models import Workspace
 
 
@@ -36,7 +36,7 @@ class ConversationToolPersistenceTests(TestCase):
             lead=self.lead,
         )
 
-    def test_record_lead_score_updates_lead_and_reason(self):
+    def test_record_lead_score_updates_lead_without_session_metadata(self):
         result = _record_lead_score(
             self.chatbot.id,
             self.session.id,
@@ -47,8 +47,9 @@ class ConversationToolPersistenceTests(TestCase):
         self.lead.refresh_from_db()
         self.session.refresh_from_db()
         self.assertEqual(self.lead.lead_score, 78)
+        self.assertEqual(self.session.metadata, {})
         self.assertEqual(
-            self.session.metadata[LEAD_SCORE_SUMMARY_KEY],
+            result["summary"],
             "Has a concrete need and wants to buy this month.",
         )
         self.assertTrue(result["recorded"])
@@ -81,6 +82,14 @@ class ConversationToolPersistenceTests(TestCase):
             ChatMessageSenderType.SYSTEM,
         )
         self.assertIsNone(first_timeline_message.sender)
+        notification = Notification.objects.get(
+            chatbot=self.chatbot,
+            notification_type=NotificationType.AI_NOTIFICATION,
+        )
+        self.assertEqual(
+            notification.metadata["chat_session_id"],
+            str(self.session.id),
+        )
 
         changed = _request_human_escalation(
             self.chatbot.id,
@@ -100,6 +109,21 @@ class ConversationToolPersistenceTests(TestCase):
             ).count(),
             2,
         )
+        self.assertEqual(Notification.objects.filter(chatbot=self.chatbot).count(), 2)
+
+        _request_human_escalation(
+            self.chatbot.id,
+            self.session.id,
+            "Availability lookup failed.",
+        )
+        self.assertEqual(
+            ChatMessage.objects.filter(
+                chat_session=self.session,
+                metadata__event_type="session.attention_requested",
+            ).count(),
+            2,
+        )
+        self.assertEqual(Notification.objects.filter(chatbot=self.chatbot).count(), 2)
 
     def test_score_is_not_recorded_without_a_captured_lead(self):
         self.session.lead = None

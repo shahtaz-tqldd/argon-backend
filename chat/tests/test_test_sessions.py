@@ -1,4 +1,5 @@
 from unittest.mock import patch
+from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.urls import reverse
@@ -11,6 +12,13 @@ from chatbot.utils.choices import ChatbotRoleTypes
 from chat.models import ChatMessage, ChatSession
 from chat.utils.choices import ChatMessageSenderType
 from notification.models import Notification
+from subscription.choices import (
+    BillingInterval,
+    PaymentProvider,
+    RenewalMode,
+    SubscriptionStatus,
+)
+from subscription.models import ChatbotSubscription, PlanPrice, SubscriptionPlan
 from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
 
 
@@ -46,7 +54,28 @@ class TestChatSessionAPITests(APITestCase):
         )
         self.capacity = ChatbotConfig.objects.create(
             chatbot=self.chatbot,
+        )
+        plan = SubscriptionPlan.objects.create(
+            name="Limited",
             ai_message_limit=10,
+            file_size_limit_mb=10,
+            knowledge_chunk_limit=30,
+            features=["knowledge_base"],
+        )
+        price = PlanPrice.objects.create(
+            plan=plan,
+            provider=PaymentProvider.MANUAL,
+            billing_interval=BillingInterval.MONTHLY,
+            currency="USD",
+            amount=Decimal("0.00"),
+        )
+        ChatbotSubscription.objects.create(
+            chatbot=self.chatbot,
+            plan_price=price,
+            selected_by=self.owner,
+            provider=PaymentProvider.MANUAL,
+            renewal_mode=RenewalMode.MANUAL,
+            status=SubscriptionStatus.ACTIVE,
         )
         self.client.force_authenticate(self.owner)
 
@@ -61,20 +90,6 @@ class TestChatSessionAPITests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         return ChatSession.objects.get(pk=response.data["data"]["id"])
-
-    @staticmethod
-    def ai_response(content="The chatbot is working."):
-        return {
-            "result": {
-                "content": content,
-                "source_ids": ["source-1"],
-                "appointment": None,
-                "lead_score": None,
-                "escalation": None,
-            },
-            "token": {"total_tokens": 12},
-            "cost": 0.0001,
-        }
 
     def test_admin_can_create_and_list_multiple_test_sessions(self):
         first = self.create_test_session()
@@ -113,7 +128,10 @@ class TestChatSessionAPITests(APITestCase):
         publish_session_event,
     ):
         session = self.create_test_session()
-        agent_client.return_value.chat_sync.return_value = self.ai_response()
+        agent_client.return_value.generate_test_reply_sync.return_value = {
+            "content": "The chatbot is working.",
+            "metadata": {},
+        }
 
         response = self.client.post(
             reverse("test-chat-message-send"),
@@ -141,7 +159,7 @@ class TestChatSessionAPITests(APITestCase):
             response.data["data"]["capacity"]["current_ai_message_count"],
             0,
         )
-        agent_client.return_value.chat_sync.assert_called_once_with(
+        agent_client.return_value.generate_test_reply_sync.assert_called_once_with(
             message="Are you working?",
             user_id=f"test:{session.id}",
         )
@@ -173,7 +191,10 @@ class TestChatSessionAPITests(APITestCase):
                 "updated_at",
             ]
         )
-        agent_client.return_value.chat_sync.return_value = self.ai_response()
+        agent_client.return_value.generate_test_reply_sync.return_value = {
+            "content": "The chatbot is working.",
+            "metadata": {},
+        }
 
         response = self.client.post(
             reverse("test-chat-message-send"),
@@ -224,7 +245,7 @@ class TestChatSessionAPITests(APITestCase):
     @patch("chat.services.test_sessions.AgentClient")
     def test_generation_failure_releases_reserved_test_capacity(self, agent_client):
         session = self.create_test_session()
-        agent_client.return_value.chat_sync.side_effect = RuntimeError(
+        agent_client.return_value.generate_test_reply_sync.side_effect = RuntimeError(
             "AI unavailable"
         )
 

@@ -1,12 +1,8 @@
-from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny
 
-from agent.client import AgentClient
-from analytics.choices import AIUsageType
-from analytics.services.ai_usage import record_ai_usage
 from app.utils.logger import logger
 from app.utils.response import APIResponse
 from appointment.api.v1.public.serializers import (
@@ -14,10 +10,10 @@ from appointment.api.v1.public.serializers import (
     VisitorAppointmentQuerySerializer,
     VisitorAppointmentSerializer,
 )
-from appointment.services import book_visitor_appointment, save_booking_confirmation
+from appointment.services import book_visitor_appointment
 from chat.models import ChatMessage
-from chat.services.messages import serialize_message_event
 from chat.services.chat_public import get_visitor_chat_session
+from chat.tasks import dispatch_appointment_reply
 from chat.services.visitor_tokens import InvalidConversationToken
 from chatbot.services.chatbot_public import (
     get_public_chatbot,
@@ -125,60 +121,24 @@ class VisitorAppointmentCreateAPIView(GenericAPIView):
         previous_message = ChatMessage.objects.filter(
             chat_session=chat_session, external_id=f"appointment:{appointment.id}",
         ).first()
-        if previous_message is not None:
-            return APIResponse.success(
-                data={
-                    "appointment": VisitorAppointmentSerializer(appointment).data,
-                    "duplicate": True,
-                    "agent_acknowledged": True,
-                    "agent_reply": previous_message.content,
-                    "message": serialize_message_event(previous_message),
-                },
-                message="Appointment already booked.",
-            )
-
-        agent_response = None
-        try:
-            agent_response = AgentClient(chatbot, chat_session).confirm_booking_sync(
-                appointment_id=str(appointment.id),
-                user_id=chat_session.visitor_id or str(chat_session.id),
-            )
-            record_ai_usage(
-                chatbot=chatbot,
-                chat_session=chat_session,
-                usage_type=AIUsageType.CHAT,
-                cost=agent_response["cost"],
-                token_usage=agent_response["token"],
-                model=settings.GEMINI_CHAT_MODEL,
-                metadata={
-                    "event": "appointment_confirmation",
-                    "appointment_id": str(appointment.id),
-                },
-            )
-        except Exception:
-            logger.exception(
-                "Could not append appointment %s to agent session %s",
-                appointment.id,
-                chat_session.id,
-            )
-
-        fallback = (
-            "Thank you! Your appointment is confirmed."
-            if appointment.status == "confirmed"
-            else "Thank you! Your appointment request has been received and is awaiting approval."
-        )
-        message = save_booking_confirmation(
-            chat_session, appointment,
-            content=agent_response["result"]["content"] if agent_response else fallback,
-        )
+        reply_queued = False
+        if previous_message is None:
+            try:
+                reply_queued = dispatch_appointment_reply(
+                    chat_session.id,
+                    appointment.id,
+                )
+            except Exception:
+                logger.exception(
+                    "Could not queue confirmation for appointment %s",
+                    appointment.id,
+                )
 
         return APIResponse.success(
             data={
                 "appointment": VisitorAppointmentSerializer(appointment).data,
                 "duplicate": not created,
-                "agent_acknowledged": agent_response is not None,
-                "agent_reply": message.content,
-                "message": serialize_message_event(message),
+                "reply_queued": reply_queued,
             },
             message=(
                 "Appointment already booked."

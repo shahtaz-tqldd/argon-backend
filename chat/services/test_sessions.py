@@ -86,15 +86,13 @@ def _release_test_ai_message(chatbot_id, usage_source):
 
 
 def _generate_test_reply(session, visitor_message):
-    response = AgentClient(session.chatbot, session).chat_sync(
+    response = AgentClient(session.chatbot, session).generate_test_reply_sync(
         message=visitor_message.content,
         user_id=f"test:{session.id}",
     )
-    result = response["result"]
-    return result["content"], {
+    return response["content"], {
+        **response["metadata"],
         "in_reply_to": str(visitor_message.id),
-        "source_ids": result.get("source_ids", []),
-        "appointment": result.get("appointment"),
         "test_message": True,
     }
 

@@ -92,18 +92,10 @@ class VisitorBookingConfirmationTests(SimpleTestCase):
         patched("require_allowed_widget_origin")
         patched("get_visitor_chat_session", return_value=self.session)
         self.book = patched("book_visitor_appointment", return_value=(self.appointment, True))
-        self.client = patched("AgentClient")
-        self.client.return_value.confirm_booking_sync.return_value = {
-            "result": {"content": "Thank you! Awaiting approval."},
-            "token": {}, "cost": 0,
-        }
         self.previous = patched("ChatMessage.objects.filter")
         self.previous.return_value.first.return_value = None
-        self.save = patched("save_booking_confirmation")
-        self.save.return_value = SimpleNamespace(content="Thank you! Awaiting approval.")
+        self.dispatch = patched("dispatch_appointment_reply", return_value=True)
         patched("VisitorAppointmentSerializer").return_value.data = {"id": "appointment"}
-        patched("serialize_message_event", return_value={"id": "message", "metadata": {"event_type": "appointment_confirmation"}})
-        patched("record_ai_usage")
         patched("logger")
 
     def post(self):
@@ -114,38 +106,29 @@ class VisitorBookingConfirmationTests(SimpleTestCase):
         )
         return self.view(request, public_key="public-key")
 
-    def test_confirmation_is_saved_and_returned_with_event_metadata(self):
+    def test_confirmation_reply_is_queued_after_booking(self):
         response = self.post()
         self.assertEqual(response.status_code, 201)
-        self.save.assert_called_once_with(
-            self.session, self.appointment, content="Thank you! Awaiting approval.",
+        self.dispatch.assert_called_once_with(
+            self.session.id,
+            self.appointment.id,
         )
-        self.assertEqual(response.data["data"]["message"]["metadata"]["event_type"], "appointment_confirmation")
-        self.assertEqual(response.data["data"]["agent_reply"], self.save.return_value.content)
+        self.assertTrue(response.data["data"]["reply_queued"])
 
-    def test_model_failure_still_saves_truthful_pending_acknowledgment(self):
-        self.client.return_value.confirm_booking_sync.side_effect = RuntimeError("model offline")
+    def test_queue_failure_does_not_undo_saved_appointment(self):
+        self.dispatch.side_effect = RuntimeError("broker offline")
         response = self.post()
         self.assertEqual(response.status_code, 201)
-        self.assertIn("Thank you", self.save.call_args.kwargs["content"])
-        self.assertIn("awaiting approval", self.save.call_args.kwargs["content"])
-        self.assertFalse(response.data["data"]["agent_acknowledged"])
+        self.assertFalse(response.data["data"]["reply_queued"])
 
-    def test_duplicate_reuses_message_without_another_model_call(self):
+    def test_duplicate_with_existing_reply_is_not_queued_again(self):
         self.book.return_value = self.appointment, False
         self.previous.return_value.first.return_value = SimpleNamespace(content="Original acknowledgment")
         response = self.post()
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data["data"]["duplicate"])
-        self.assertEqual(response.data["data"]["agent_reply"], "Original acknowledgment")
-        self.client.assert_not_called()
-        self.save.assert_not_called()
-
-    def test_confirmed_fallback_uses_actual_booking_status(self):
-        self.appointment.status = "confirmed"
-        self.client.return_value.confirm_booking_sync.side_effect = RuntimeError("model offline")
-        self.assertEqual(self.post().status_code, 201)
-        self.assertEqual(self.save.call_args.kwargs["content"], "Thank you! Your appointment is confirmed.")
+        self.assertFalse(response.data["data"]["reply_queued"])
+        self.dispatch.assert_not_called()
 
     def test_unavailable_slot_returns_conflict_without_confirmation(self):
         from django.core.exceptions import ValidationError
@@ -153,5 +136,4 @@ class VisitorBookingConfirmationTests(SimpleTestCase):
         self.book.side_effect = ValidationError("The selected appointment slot is no longer available.")
         response = self.post()
         self.assertEqual(response.status_code, 409)
-        self.client.assert_not_called()
-        self.save.assert_not_called()
+        self.dispatch.assert_not_called()

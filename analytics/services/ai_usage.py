@@ -1,9 +1,6 @@
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-
 from django.core.exceptions import ValidationError
-
 from analytics.models import AIUsage
-
 
 AI_USAGE_COST_QUANTUM = Decimal("0.00000001")
 

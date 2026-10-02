@@ -1,6 +1,8 @@
 import csv
 from datetime import timedelta
+from decimal import Decimal
 from io import BytesIO, StringIO
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.urls import reverse
@@ -12,7 +14,14 @@ from rest_framework.test import APITestCase
 from chatbot.models import Chatbot, ChatbotConfig, ChatbotUser
 from chatbot.utils.choices import ChatbotRoleTypes
 from lead_capture.models import Lead, LeadCaptureConfig, LeadNote
-from subscription.choices import PlanFeature
+from subscription.choices import (
+    BillingInterval,
+    PaymentProvider,
+    PlanFeature,
+    RenewalMode,
+    SubscriptionStatus,
+)
+from subscription.models import ChatbotSubscription, PlanPrice, SubscriptionPlan
 from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
 
 User = get_user_model()
@@ -47,7 +56,28 @@ class LeadCaptureClientAPITests(APITestCase):
         )
         self.capacity = ChatbotConfig.objects.create(
             chatbot=self.chatbot,
-            active_features=[PlanFeature.LEAD_CAPTURE],
+        )
+        plan = SubscriptionPlan.objects.create(
+            name="Lead Plan",
+            ai_message_limit=100,
+            file_size_limit_mb=10,
+            knowledge_chunk_limit=30,
+            features=[PlanFeature.LEAD_CAPTURE],
+        )
+        price = PlanPrice.objects.create(
+            plan=plan,
+            provider=PaymentProvider.MANUAL,
+            billing_interval=BillingInterval.MONTHLY,
+            currency="USD",
+            amount=Decimal("0.00"),
+        )
+        ChatbotSubscription.objects.create(
+            chatbot=self.chatbot,
+            plan_price=price,
+            selected_by=self.user,
+            provider=PaymentProvider.MANUAL,
+            renewal_mode=RenewalMode.MANUAL,
+            status=SubscriptionStatus.ACTIVE,
         )
         self.client.force_authenticate(self.user)
 
@@ -100,10 +130,12 @@ class LeadCaptureClientAPITests(APITestCase):
         config.refresh_from_db()
 
     def test_feature_is_required(self):
-        self.capacity.active_features = []
-        self.capacity.save(update_fields=["active_features", "updated_at"])
-
-        response = self.client.get(self.url("lead-list"))
+        with patch.object(
+            ChatbotConfig,
+            "has_feature",
+            return_value=False,
+        ):
+            response = self.client.get(self.url("lead-list"))
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 

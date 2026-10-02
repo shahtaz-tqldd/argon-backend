@@ -1,5 +1,4 @@
 from django.conf import settings
-from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
@@ -27,7 +26,11 @@ from chatbot.utils.validation import (
     validate_other_settings,
     validate_widget_settings,
 )
-from subscription.choices import PlanFeature
+
+
+DEFAULT_TEST_AI_MESSAGE_LIMIT = 100
+BYTES_PER_MEGABYTE = 1024 * 1024
+_UNSET_SUBSCRIPTION = object()
 
 
 DEFAULT_CHATBOT_WELCOME_MESSAGE_TEMPLATE = (
@@ -259,66 +262,82 @@ class Chatbot(BaseModel):
 
 
 class ChatbotConfig(BaseMinModel):
-    """Pre-calculated subscription limits and usage for one chatbot."""
+    """Usage counters for one chatbot.
+
+    Limits and features are not stored here; they are derived from the
+    chatbot's current subscription snapshot on demand.
+    """
+
     chatbot = models.OneToOneField(
         Chatbot,
         related_name="capacity",
         on_delete=models.CASCADE,
     )
 
-    ai_message_limit = models.PositiveIntegerField(
-        null=True,
-        blank=True,
-        help_text="Maximum AI messages for the period; null means unlimited.",
-    )
     current_ai_message_count = models.PositiveIntegerField(default=0)
-    test_ai_message_limit = models.PositiveIntegerField(
-        default=100,
-        help_text=(
-            "Free AI replies reserved for chatbot test sessions before "
-            "subscription messages are used."
-        ),
-    )
     current_test_ai_message_count = models.PositiveIntegerField(default=0)
-
-    file_size_limit_bytes = models.PositiveBigIntegerField(
-        null=True,
-        blank=True,
-        help_text="Maximum stored knowledge bytes; null means unlimited.",
-    )
     current_file_size_bytes = models.PositiveBigIntegerField(default=0)
-
-    knowledge_chunk_limit = models.PositiveIntegerField(
-        null=True,
-        blank=True,
-        help_text="Maximum knowledge chunks; null means unlimited.",
-    )
     current_knowledge_chunk_count = models.PositiveIntegerField(default=0)
 
-    active_features = ArrayField(
-        base_field=models.CharField(
-            max_length=40,
-            choices=PlanFeature.choices,
-        ),
-        default=list,
-        blank=True,
-    )
+    _active_subscription = _UNSET_SUBSCRIPTION
 
     class Meta:
         verbose_name = "Chatbot config"
         verbose_name_plural = "Chatbot configs"
 
-    def clean(self):
-        super().clean()
-        features = self.active_features or []
-        if len(features) != len(set(features)):
-            raise ValidationError(
-                {"active_features": "Active features must be unique."}
-            )
+    def active_subscription(self):
+        """Return the chatbot's open subscription, or None.
+
+        The result is cached on the instance so limit and feature lookups
+        share a single query.
+        """
+        from subscription.models import ChatbotSubscription
+        from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
+
+        if self._active_subscription is _UNSET_SUBSCRIPTION:
+            self._active_subscription = ChatbotSubscription.objects.filter(
+                chatbot_id=self.chatbot_id,
+                status__in=OPEN_SUBSCRIPTION_STATUSES,
+            ).first()
+        return self._active_subscription
+
+    @property
+    def ai_message_limit(self):
+        """Maximum AI messages for the period; None means unlimited."""
+        subscription = self.active_subscription()
+        return subscription.get_ai_message_limit() if subscription else None
+
+    @property
+    def test_ai_message_limit(self):
+        """Free AI replies reserved for test sessions."""
+        return DEFAULT_TEST_AI_MESSAGE_LIMIT
+
+    @property
+    def file_size_limit_bytes(self):
+        """Maximum stored knowledge bytes; None means unlimited."""
+        subscription = self.active_subscription()
+        if subscription is None:
+            return None
+        file_size_limit_mb = subscription.get_file_size_limit_mb()
+        if file_size_limit_mb is None:
+            return None
+        return file_size_limit_mb * BYTES_PER_MEGABYTE
+
+    @property
+    def knowledge_chunk_limit(self):
+        """Maximum knowledge chunks; None means unlimited."""
+        subscription = self.active_subscription()
+        return subscription.get_knowledge_chunk_limit() if subscription else None
+
+    @property
+    def active_features(self):
+        """Plan features enabled by the current subscription."""
+        subscription = self.active_subscription()
+        return subscription.get_features() if subscription else []
 
     def has_feature(self, feature):
-        feature = getattr(feature, "value", feature)
-        return feature in (self.active_features or [])
+        subscription = self.active_subscription()
+        return bool(subscription and subscription.has_feature(feature))
 
     def current_subscription(self):
         """Return snapshot pricing and the live next billing date, or None.
@@ -327,13 +346,8 @@ class ChatbotConfig(BaseMinModel):
         Billing dates remain live so renewals and cancellations are reflected.
         """
         from subscription.choices import RenewalMode
-        from subscription.models import ChatbotSubscription
-        from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
 
-        subscription = ChatbotSubscription.objects.filter(
-            chatbot_id=self.chatbot_id,
-            status__in=OPEN_SUBSCRIPTION_STATUSES,
-        ).first()
+        subscription = self.active_subscription()
         if subscription is None:
             return None
 

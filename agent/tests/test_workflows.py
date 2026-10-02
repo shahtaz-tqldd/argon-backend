@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import date, datetime, time, timezone
+from datetime import datetime, time, timezone
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, Mock, patch
@@ -53,25 +53,18 @@ def call(name, **args):
     return response(types.Part.from_function_call(name=name, args=args))
 
 
-def answer(content="Hello", source_ids=None):
+def answer(content="Hello", source_ids=None, agreed_date=None):
     """A specialist's structured final answer."""
     return response(types.Part.from_text(text=json.dumps({
         "content": content,
         "source_ids": source_ids or [],
+        **({"agreed_date": agreed_date} if agreed_date else {}),
     })))
 
 
 def say(content="Hello"):
     """The coordinator's plain-text final answer."""
     return response(types.Part.from_text(text=content))
-
-
-def partial(content):
-    """A streamed text delta from the coordinator."""
-    return LlmResponse(
-        partial=True,
-        content=types.Content(role="model", parts=[types.Part.from_text(text=content)]),
-    )
 
 
 def inline_async(func, **kwargs):
@@ -126,7 +119,7 @@ class ClientTests(IsolatedAsyncioTestCase):
                             say("We open at 9."))
         matches = [SimpleNamespace(knowledge_base_id=s, content="Open at 9") for s in ["kb-1", "kb-2"]]
         with patch("agent.sub_agents.knowledge.tools.KnowledgeVectorService.search", return_value=matches) as search:
-            result = await self.client.chat("When do you open?", user_id="visitor")
+            result = await self.client._run_turn("When do you open?", user_id="visitor")
         self.assertEqual(result["result"]["source_ids"], ["kb-2"])
         self.assertEqual(result["result"]["content"], "We open at 9.")
         self.assertEqual(result["token"], dict(input_tokens=400, output_tokens=100,
@@ -225,26 +218,39 @@ class ClientTests(IsolatedAsyncioTestCase):
             "starts_at": "2026-06-16T09:00:00+06:00",
             "ends_at": "2026-06-16T09:30:00+06:00",
         }]
-        payload = dict(status="available", available=True,
-                       requested_date="2026-06-16", date="2026-06-16",
-                       slots=slots)
+        payload = dict(requested_date="2026-06-16",
+                       is_available_on_requested_date=True,
+                       timezone="UTC+6.00", available_slots=1)
+        slot_payload = dict(status="available", available=True,
+                            requested_date="2026-06-16", date="2026-06-16",
+                            timezone="UTC+6.00", available_count=1, slots=slots)
         model = self.script(
             call("knowledge_agent", request="Which service is offered?"),
             call("search_knowledge", query="services"), answer("Consultations", ["kb-1"]),
             call("appointment_agent", request="Book a consultation on June 16"),
             call("find_appointment_availability", requested_date="2026-06-16"),
-            answer("June 16 is available."),
+            answer("June 16 is available.", agreed_date="2026-06-16"),
             say("We offer consultations. Select a June 16 slot in the UI."),
         )
         with patch("agent.sub_agents.knowledge.tools.KnowledgeVectorService.search", return_value=[
             SimpleNamespace(knowledge_base_id="kb-1", content="Consultations")
-        ]), patch("agent.sub_agents.appointment.tools.find_availability", return_value=payload):
-            result = await self.client.chat("What service can I book on June 16?")
+        ]), patch(
+            "agent.sub_agents.appointment.tools.find_appointment_slot_counts",
+            return_value=payload,
+        ), patch(
+            "agent.client.slots_for_agreed_date", return_value=slot_payload,
+        ), patch.object(self.client, "_source_metadata", return_value=[]):
+            result = await self.client._run_turn("What service can I book on June 16?", None)
+            public_reply = self.client._public_reply(result)
         self.assertEqual(result["result"]["source_ids"], ["kb-1"])
-        self.assertEqual(result["result"]["appointment"]["date"], "2026-06-16")
-        self.assertEqual(result["result"]["appointment"]["slots"], [
-            {**slot, "available": True, "booked": False, "reason": None} for slot in slots
-        ])
+        self.assertEqual(result["result"]["agreed_date"], "2026-06-16")
+        self.assertEqual(public_reply["metadata"]["appointments"], {
+            "date": "2026-06-16",
+            "timezone": "UTC+6.00",
+            "available_slots": [
+                {"start_time": "9.00 AM", "end_time": "9.30 AM"},
+            ],
+        })
         tool_responses = [part.function_response.response
                           for request in model.requests for content in request.contents
                           for part in content.parts or []
@@ -275,36 +281,14 @@ class ClientTests(IsolatedAsyncioTestCase):
         with patch("agent.helpers.model.Client", side_effect=clients) as factory, patch.object(
             ScriptedModel, "generate_content_async", generate
         ):
-            await self.client.chat("I'd like an appointment")
+            await self.client._run_turn("I'd like an appointment", None)
             clients[0].aio.aclose.assert_awaited_once()
             clients[0].close.assert_called_once()
-            await self.client.chat("On the 15th")
+            await self.client._run_turn("On the 15th", None)
         self.assertEqual(factory.call_count, 2)
         self.assertEqual(seen_clients, [clients[0]] * 3 + [clients[1]] * 3)
         clients[1].aio.aclose.assert_awaited_once()
         clients[1].close.assert_called_once()
-
-    async def test_closing_stream_early_closes_vertex_transports(self):
-        from agent.helpers.model import vertex_client
-
-        original_generate = ScriptedModel.generate_content_async
-
-        async def generate(model, llm_request, stream=False):
-            vertex_client()
-            async for item in original_generate(model, llm_request, stream):
-                yield item
-
-        client = Mock(aio=Mock(aclose=AsyncMock()))
-        self.script(partial("Hello"), say("Hello there"))
-        with patch("agent.helpers.model.Client", return_value=client), patch.object(
-            ScriptedModel, "generate_content_async", generate
-        ):
-            stream = self.client.chat_stream("Hello")
-            first = await anext(stream)
-            self.assertEqual(first, {"type": "delta", "content": "Hello"})
-            await stream.aclose()
-            client.aio.aclose.assert_awaited_once()
-            client.close.assert_called_once()
 
     async def test_context_answer_cites_previously_retrieved_sources(self):
         matches = [SimpleNamespace(knowledge_base_id="kb-1", content="Open at 9")]
@@ -319,86 +303,60 @@ class ClientTests(IsolatedAsyncioTestCase):
             say("Still open at 9."),
         )
         with patch("agent.sub_agents.knowledge.tools.KnowledgeVectorService.search", return_value=matches) as search:
-            first = await self.client.chat("When do you open?")
-            second = await self.client.chat("Right, and you said?")
+            first = await self.client._run_turn("When do you open?", None)
+            second = await self.client._run_turn("Right, and you said?", None)
         search.assert_called_once()
         self.assertEqual(first["result"]["source_ids"], ["kb-1"])
         self.assertEqual(second["result"]["source_ids"], ["kb-1"])
 
-    async def test_chat_stream_yields_deltas_and_done(self):
-        matches = [SimpleNamespace(knowledge_base_id="kb-2", content="Open at 9")]
-        self.script(call("knowledge_agent", request="Find the opening hours"),
-                    call("search_knowledge", query="opening hours"),
-                    answer("Open at 9", ["kb-2"]),
-                    partial("We "),
-                    partial("open at 9."),
-                    say("We open at 9."))
-        with patch("agent.sub_agents.knowledge.tools.KnowledgeVectorService.search", return_value=matches):
-            items = [item async for item in
-                     self.client.chat_stream("When do you open?", user_id="visitor")]
-        self.assertEqual([i["content"] for i in items if i["type"] == "delta"],
-                         ["We ", "open at 9."])
-        done = items[-1]
-        self.assertEqual(done["type"], "done")
-        self.assertEqual(done["response"]["result"]["content"], "We open at 9.")
-        self.assertEqual(done["response"]["result"]["source_ids"], ["kb-2"])
-        # The streamed answer's chunks plus its completed response are one
-        # model call: delegate, search, specialist answer, streamed relay.
-        self.assertEqual(done["response"]["token"]["total_tokens"], 4 * 125)
-
-    async def test_redelegating_does_not_reset_search_budget(self):
-        payload = dict(status="unavailable", available=False, date=None,
-                       requested_date="2026-06-16", searched_through="2026-06-22")
+    async def test_alternative_is_attached_only_after_visitor_agrees(self):
+        unavailable = {
+            "requested_date": "2026-06-16",
+            "is_available_on_requested_date": False,
+            "timezone": "UTC+6.00",
+            "alternative_dates": [
+                {"date": "2026-06-18", "available_slots": 2},
+            ],
+        }
+        slot_payload = {
+            "status": "available", "available": True,
+            "requested_date": "2026-06-18", "date": "2026-06-18",
+            "timezone": "UTC+6.00", "available_count": 1,
+            "slots": [{
+                "starts_at": "2026-06-18T09:00:00+06:00",
+                "ends_at": "2026-06-18T09:30:00+06:00",
+            }],
+        }
         self.script(
-            call("appointment_agent", request="Search June 16"),
+            call("appointment_agent", request="Find June 16 availability"),
             call("find_appointment_availability", requested_date="2026-06-16"),
-            answer("No availability."),
-            call("appointment_agent", request="Try June 23 too"),
-            call("find_appointment_availability", requested_date="2026-06-23"),
-            answer("No availability."),
-            say("Would you like to try next week?"),
+            answer("June 16 is unavailable. Would June 18 work?"),
+            say("June 16 is unavailable. Would June 18 work?"),
+            call("appointment_agent", request="Visitor accepts June 18"),
+            answer("June 18 works.", agreed_date="2026-06-18"),
+            say("June 18 works."),
         )
-        with patch("agent.sub_agents.appointment.tools.find_availability", return_value=payload) as search:
-            result = await self.client.chat("Book June 16")
+        with patch(
+            "agent.sub_agents.appointment.tools.find_appointment_slot_counts",
+            return_value=unavailable,
+        ) as search, patch(
+            "agent.client.slots_for_agreed_date", return_value=slot_payload,
+        ) as attach, patch.object(self.client, "_source_metadata", return_value=[]):
+            offered = await self.client._run_turn("June 16 please", None)
+            agreed = await self.client._run_turn("Yes, June 18", None)
+            offered_public = self.client._public_reply(offered)
+            agreed_public = self.client._public_reply(agreed)
         search.assert_called_once_with("bot-1", "2026-06-16")
-        self.assertEqual(result["result"]["appointment"]["searched_through"], "2026-06-22")
+        self.assertIsNone(offered["result"]["agreed_date"])
+        self.assertNotIn("appointments", offered_public["metadata"])
+        self.assertEqual(agreed["result"]["agreed_date"], "2026-06-18")
+        self.assertEqual(
+            agreed_public["metadata"]["appointments"]["date"],
+            "2026-06-18",
+        )
+        attach.assert_called_once_with("bot-1", "2026-06-18")
 
-    async def test_search_budget_and_no_stale_appointment_on_next_turn(self):
-        payload = dict(status="available", available=True, requested_date="2026-06-16",
-                       date="2026-06-18", searched_through="2026-06-18", timezone="Asia/Dhaka")
-        self.script(call("appointment_agent", request="Book June 16"),
-                    call("find_appointment_availability", requested_date="2026-06-16"),
-                    call("find_appointment_availability", requested_date="2026-06-23"),
-                    answer("June 18 is available."),
-                    say("June 18 is available."),
-                    say("You're welcome"))
-        with patch("agent.sub_agents.appointment.tools.find_availability", return_value=payload) as search:
-            result = await self.client.chat("Book June 16")
-            next_turn = await self.client.chat("Thanks")
-        search.assert_called_once_with("bot-1", "2026-06-16")
-        self.assertTrue(result["result"]["appointment"]["available"])
-        self.assertEqual(result["result"]["appointment"]["date"], "2026-06-18")
-        self.assertIsNone(next_turn["result"]["appointment"])
-
-    async def test_parallel_searches_cannot_expand_window_and_next_turn_can_search(self):
-        payload = dict(status="unavailable", available=False, requested_date="2026-06-16",
-                       date=None, searched_through="2026-06-22", next_search_date="2026-06-23")
-        self.script(call("appointment_agent", request="Find June 16 availability"), response(
-            types.Part.from_function_call(name="find_appointment_availability", args={"requested_date": "2026-06-16"}),
-            types.Part.from_function_call(name="find_appointment_availability", args={"requested_date": "2026-06-23"}),
-        ), answer("No availability. Try next week?"), say("No availability. Try next week?"),
-            call("appointment_agent", request="Visitor agreed to search June 23"),
-            call("find_appointment_availability", requested_date="2026-06-23"),
-            answer("No availability."), say("No availability."))
-        with patch("agent.sub_agents.appointment.tools.find_availability", return_value=payload) as search:
-            result = await self.client.chat("June 16 please")
-            self.assertEqual(search.call_count, 1)
-            self.assertEqual(result["result"]["appointment"]["status"], "unavailable")
-            await self.client.chat("Yes, try next week")
-        self.assertEqual(search.call_count, 2)
-        self.assertEqual(search.call_args.args, ("bot-1", "2026-06-23"))
-
-    async def test_booking_confirmation_is_recorded_and_not_created_by_llm(self):
+    async def test_booking_confirmation_uses_invocation_context_and_runner_memory(self):
         payload = dict(status="booking_recorded", available=False, appointment_id="appt-1",
                        appointment_status="pending", starts_at="2026-06-18T09:00:00+06:00",
                        ends_at="2026-06-18T09:30:00+06:00")
@@ -408,15 +366,14 @@ class ClientTests(IsolatedAsyncioTestCase):
                             call("appointment_agent", request="Visitor asks whether their booking is confirmed"),
                             answer("No new booking event."),
                             say("No new booking event."))
-        with patch("agent.client.verified_booking", return_value=payload) as verify:
-            result = await self.client.confirm_booking("appt-1")
-        verify.assert_called_once_with("bot-1", "session-1", "appt-1")
-        self.assertEqual(result["result"]["appointment"]["appointment_status"], "pending")
+        message = json.dumps({"event": "booking_confirmation", "booking": payload})
+        result = await self.client._run_turn(message, None, confirmation=payload)
+        self.assertIsNone(result["result"]["agreed_date"])
         session = await self.client._get_or_create_session("bot-1:session-1")
-        self.assertEqual(session.state["booking_confirmations"]["appt-1"], payload)
+        self.assertNotIn("booking_confirmations", session.state)
         self.assertTrue(any("booking_confirmation" in str(e.content) for e in session.events))
         self.assertIn('"appointment_status": "pending"', model.requests[1].config.system_instruction)
-        await self.client.chat("Is my booking confirmed?")
+        await self.client._run_turn("Is my booking confirmed?", None)
         self.assertIn("Backend-verified booking event for this turn: null", model.requests[4].config.system_instruction)
         names = [tool.name for tool in self.client.chat_agent.tools]
         self.assertEqual(names, ["record_lead_score", "request_human_escalation",
@@ -439,7 +396,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             "recorded": True,
         }
         with patch("agent.helpers.global_tools._record_lead_score", return_value=payload) as record:
-            result = await self.client.chat("We need this this month. Can we book a call?")
+            result = await self.client._run_turn("We need this this month. Can we book a call?", None)
         record.assert_called_once_with(
             "bot-1",
             "session-1",
@@ -463,7 +420,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             "escalation_reason": "Visitor explicitly asked to speak with a person.",
         }
         with patch("agent.helpers.global_tools._request_human_escalation", return_value=payload):
-            result = await self.client.chat("Let me speak with a human")
+            result = await self.client._run_turn("Let me speak with a human", None)
         self.assertEqual(result["result"]["escalation"], payload)
 
     async def test_invalid_specialist_output_fails_closed(self):
@@ -471,23 +428,22 @@ class ClientTests(IsolatedAsyncioTestCase):
                     response(types.Part.from_text(text="not JSON")))
         with patch("agent.sub_agents.knowledge.tools.KnowledgeVectorService.search", return_value=[]):
             with self.assertRaisesRegex(RuntimeError, "ValidationError"):
-                await self.client.chat("Hours?")
+                await self.client._run_turn("Hours?", None)
 
-    async def test_booking_event_survives_model_failure(self):
+    async def test_booking_context_is_not_persisted_after_model_failure(self):
         payload = dict(status="booking_recorded", appointment_id="appt-1", appointment_status="confirmed")
         self.script(LlmResponse(error_code="unavailable", error_message="Try later"))
-        with patch("agent.client.verified_booking", return_value=payload):
-            with self.assertRaisesRegex(RuntimeError, "unavailable"):
-                await self.client.confirm_booking("appt-1")
+        with self.assertRaisesRegex(RuntimeError, "unavailable"):
+            await self.client._run_turn("booking event", None, confirmation=payload)
         session = await self.client._get_or_create_session("bot-1:session-1")
-        self.assertEqual(session.state["booking_confirmations"]["appt-1"], payload)
+        self.assertNotIn("booking_confirmations", session.state)
 
     async def test_missing_knowledge_returns_empty_citations(self):
         self.script(call("knowledge_agent", request="Find hours"),
                     call("search_knowledge", query="hours"), answer("Unknown"),
                     say("Unknown"))
         with patch("agent.sub_agents.knowledge.tools.KnowledgeVectorService.search", return_value=[]):
-            result = await self.client.chat("Hours?")
+            result = await self.client._run_turn("Hours?", None)
         self.assertEqual(result["result"]["source_ids"], [])
 
     def test_cross_chatbot_conversation_is_rejected(self):
@@ -495,136 +451,50 @@ class ClientTests(IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             AgentClient(self.bot, self.conversation, session_service=self.service)
 
+    def test_public_reply_omits_metadata_sections_not_generated(self):
+        response = {
+            "result": {
+                "content": "How can I help?",
+                "source_ids": [],
+                "agreed_date": None,
+                "lead_score": None,
+                "escalation": None,
+            },
+        }
+        with patch.object(self.client, "_source_metadata", return_value=[]):
+            self.assertEqual(
+                self.client._public_reply(response),
+                {"content": "How can I help?", "metadata": {}},
+            )
+
 
 class AvailabilityTests(SimpleTestCase):
-    def setUp(self):
-        self.config = SimpleNamespace(chatbot=SimpleNamespace(timezone="Asia/Dhaka"), maximum_advance_days=30)
-        self.now = datetime(2026, 6, 15, 20, tzinfo=timezone.utc)  # June 16 locally.
-        self.config_patch = patch("agent.sub_agents.appointment.tools.get_config", return_value=self.config)
-        self.now_patch = patch("agent.sub_agents.appointment.tools.timezone.now", return_value=self.now)
-        self.config_patch.start()
-        self.now_patch.start()
-        self.addCleanup(self.config_patch.stop)
-        self.addCleanup(self.now_patch.stop)
-
-    @staticmethod
-    def details(slots, reason="not_offered"):
-        return {"slots": slots, "available_count": len(slots),
-                "remaining_capacity": None, "reason": None if slots else reason}
-
-    def test_stops_on_first_available_day(self):
-        available = [{
-            "starts_at": "2026-06-18T09:00:00+06:00",
-            "ends_at": "2026-06-18T09:30:00+06:00",
-        }]
-        with patch("agent.sub_agents.appointment.tools.day_availability", side_effect=[self.details([]), self.details([]), self.details(available)]) as slots:
-            result = booking.find_availability("bot", "2026-06-16")
-        self.assertEqual(result["date"], "2026-06-18")
-        self.assertTrue(result["available"])
-        self.assertEqual(result["slots"], available)
-        self.assertEqual([c.args[1] for c in slots.call_args_list], [date(2026, 6, d) for d in (16, 17, 18)])
-
-    def test_searches_to_booking_horizon(self):
-        with patch("agent.sub_agents.appointment.tools.day_availability", return_value=self.details([])) as slots:
-            result = booking.find_availability("bot", "2026-06-16")
-        self.assertEqual(slots.call_count, 31)
-        self.assertEqual(result["searched_through"], "2026-07-16")
-        self.assertIsNone(result["next_search_date"])
-        self.assertFalse(result["available"])
-
-    def test_requested_day_available(self):
-        available = [{
-            "starts_at": "2026-06-16T09:00:00+06:00",
-            "ends_at": "2026-06-16T09:30:00+06:00",
-        }]
-        with patch("agent.sub_agents.appointment.tools.day_availability", return_value=self.details(available)) as slots:
-            result = booking.find_availability("bot", "2026-06-16")
-        self.assertEqual(result["date"], "2026-06-16")
-        self.assertEqual(result["slots"], available)
-        self.assertEqual(slots.call_count, 1)
-
-    def test_invalid_past_and_beyond_horizon_never_query_slots(self):
-        with patch("agent.sub_agents.appointment.tools.day_availability") as slots:
-            for day in ["garbage", "2026-02-30", "20260616", "2026-06-15", "2027-01-01"]:
-                self.assertEqual(booking.find_availability("bot", day)["status"], "invalid")
-        slots.assert_not_called()
-
-    def test_horizon_truncates_search_without_offering_next_week(self):
-        self.config.maximum_advance_days = 2
-        with patch("agent.sub_agents.appointment.tools.day_availability", return_value=self.details([])) as slots:
-            result = booking.find_availability("bot", "2026-06-16")
-        self.assertEqual(slots.call_count, 3)
-        self.assertIsNone(result["next_search_date"])
-        self.assertEqual(result["searched_through"], "2026-06-18")
-
-    def test_disabled_booking(self):
-        with patch("agent.sub_agents.appointment.tools.get_config", return_value=None), patch("agent.sub_agents.appointment.tools.day_availability") as slots:
-            self.assertEqual(booking.find_availability("bot", "2026-06-16")["status"], "disabled")
-        slots.assert_not_called()
-
     def test_booking_verification_scopes_tenant_conversation_and_status(self):
         with patch("agent.sub_agents.appointment.tools.Appointment.objects.filter") as query:
             query.return_value.first.return_value = None
             with self.assertRaises(ValueError):
                 booking.verified_booking("bot", "session", "appointment")
-        query.assert_called_once_with(pk="appointment", chatbot_id="bot",
-                                      metadata__chat_session_id="session", status__in=("pending", "confirmed"))
+        query.assert_called_once_with(
+            pk="appointment",
+            chatbot_id="bot",
+            metadata__chat_session_id="session",
+            status__in=("pending", "confirmed"),
+        )
 
-    def test_slots_exclude_past_overlap_and_observe_daily_limit(self):
-        config = SimpleNamespace(
-            chatbot_id="bot", chatbot=SimpleNamespace(timezone="Asia/Dhaka"),
-            is_enabled=True, maximum_advance_days=30, max_appointments_per_day=None,
-            appointment_duration_minutes=30, closed_dates=Mock(), schedules=Mock(),
-        )
-        config.closed_dates.filter.return_value.exists.return_value = False
-        schedule = Mock()
-        schedule.slots.filter.return_value = [SimpleNamespace(start_time=time(9), end_time=time(11))]
-        config.schedules.filter.return_value = [schedule]
-        existing = SimpleNamespace(starts_at=datetime.fromisoformat("2026-06-16T09:30:00+06:00"),
-                                   ends_at=datetime.fromisoformat("2026-06-16T10:00:00+06:00"))
-        with patch("agent.sub_agents.appointment.tools.Appointment.objects.filter", return_value=Mock(only=Mock(return_value=[existing]))):
-            slots = booking.available_slots(config, date(2026, 6, 16),
-                        now=datetime.fromisoformat("2026-06-16T09:00:00+06:00"))
-            self.assertEqual([s["starts_at"] for s in slots],
-                             ["2026-06-16T10:00:00+06:00", "2026-06-16T10:30:00+06:00"])
-            config.max_appointments_per_day = 1
-            self.assertEqual(booking.available_slots(config, date(2026, 6, 16), now=self.now), [])
-
-    def test_slot_flags_disable_overlapping_booking_and_daily_capacity(self):
-        config = SimpleNamespace(
-            chatbot_id="bot", chatbot=SimpleNamespace(timezone="Asia/Dhaka"),
-            is_enabled=True, maximum_advance_days=30, max_appointments_per_day=5,
-            appointment_duration_minutes=30, closed_dates=Mock(), schedules=Mock(),
-        )
-        config.closed_dates.filter.return_value.exists.return_value = False
-        schedule = Mock()
-        schedule.slots.filter.return_value = [SimpleNamespace(start_time=time(9), end_time=time(12))]
-        config.schedules.filter.return_value = [schedule]
-        existing = SimpleNamespace(
-            starts_at=datetime.fromisoformat("2026-06-16T09:30:00+06:00"),
-            ends_at=datetime.fromisoformat("2026-06-16T10:30:00+06:00"),
-        )
-        query = Mock(only=Mock(return_value=[existing]))
-        with patch("agent.sub_agents.appointment.tools.Appointment.objects.filter", return_value=query):
-            details = booking.day_availability(config, date(2026, 6, 16), now=self.now)
-            self.assertEqual(details["available_count"], 4)
-            self.assertEqual(details["remaining_capacity"], 4)
-            self.assertEqual([s["booked"] for s in details["slots"]], [False, True, True, False, False, False])
-            self.assertFalse(details["slots"][1]["available"])
-            config.max_appointments_per_day = 1
-            details = booking.day_availability(config, date(2026, 6, 16), now=self.now)
-            self.assertEqual(details["reason"], "daily_limit_reached")
-            self.assertEqual(details["available_count"], 0)
-            self.assertTrue(all(not s["available"] for s in details["slots"]))
-            self.assertEqual(len(details["slots"]), 6)
-
-    def test_closed_date_and_unscheduled_day_have_distinct_reasons(self):
-        config = SimpleNamespace(
-            chatbot=SimpleNamespace(timezone="Asia/Dhaka"), is_enabled=True,
-            maximum_advance_days=30, closed_dates=Mock(), schedules=Mock(),
-        )
-        config.closed_dates.filter.return_value.exists.return_value = True
-        self.assertEqual(booking.day_availability(config, date(2026, 6, 16), now=self.now)["reason"], "closed_date")
-        config.closed_dates.filter.return_value.exists.return_value = False
-        config.schedules.filter.return_value = []
-        self.assertEqual(booking.day_availability(config, date(2026, 6, 16), now=self.now)["reason"], "not_offered")
+    def test_agreed_date_payload_adds_slots_in_code(self):
+        config = SimpleNamespace(chatbot=SimpleNamespace(timezone="Asia/Dhaka"))
+        slots = [{
+            "starts_at": "2026-06-18T09:00:00+06:00",
+            "ends_at": "2026-06-18T09:30:00+06:00",
+        }]
+        with patch(
+            "agent.sub_agents.appointment.tools.get_appointment_booking_config",
+            return_value=config,
+        ), patch(
+            "agent.sub_agents.appointment.tools.get_available_appointment_slots",
+            return_value=slots,
+        ):
+            result = booking.slots_for_agreed_date("bot", "2026-06-18")
+        self.assertEqual(result["date"], "2026-06-18")
+        self.assertEqual(result["available_count"], 1)
+        self.assertEqual(result["slots"], slots)

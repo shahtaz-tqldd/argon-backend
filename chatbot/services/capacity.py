@@ -5,13 +5,11 @@ from django.utils import timezone
 from appointment.models import AppointmentBookingConfig
 from chatbot.models import ChatbotConfig
 from chatbot.services.resolution import resolve_chatbot_reference
-from chatbot.services.subscription import get_chatbot_subscription_entitlements
 from lead_capture.models import LeadCaptureConfig
 from subscription.choices import PlanFeature, SubscriptionStatus
 from subscription.models import ChatbotSubscription
 
 
-BYTES_PER_MEGABYTE = 1024 * 1024
 CAPACITY_APPLIED_METADATA_KEY = "chatbot_capacity_applied_at"
 UNSET = object()
 
@@ -32,29 +30,15 @@ def get_chatbot_capacity(
 
 def chatbot_has_feature(chatbot, feature):
     """
-    Return whether the chatbot's current capacity enables ``feature``.
+    Return whether the chatbot's current subscription enables ``feature``.
     """
     try:
         capacity = chatbot.capacity
 
     except (AttributeError, ChatbotConfig.DoesNotExist):
         return False
-    
+
     return capacity.has_feature(feature)
-
-
-def _normalized_features(features):
-    try:
-        normalized = [PlanFeature(feature).value for feature in features]
-    except ValueError as exc:
-        raise ValidationError(
-            {"active_features": f"Unknown plan feature: {exc}."}
-        ) from exc
-    if len(normalized) != len(set(normalized)):
-        raise ValidationError(
-            {"active_features": "Active features must be unique."}
-        )
-    return normalized
 
 
 def _updated_count(*, current, absolute, delta, field_name):
@@ -77,10 +61,6 @@ def update_chatbot_capacity(
     *,
     chatbot_slug=None,
     chatbot_id=None,
-    ai_message_limit=UNSET,
-    file_size_limit_bytes=UNSET,
-    knowledge_chunk_limit=UNSET,
-    active_features=UNSET,
     current_ai_message_count=UNSET,
     current_file_size_bytes=UNSET,
     current_knowledge_chunk_count=UNSET,
@@ -88,7 +68,7 @@ def update_chatbot_capacity(
     file_size_delta_bytes=0,
     knowledge_chunk_delta=0,
 ):
-    """Create or atomically update a chatbot's cached limits and usage."""
+    """Create or atomically update a chatbot's tracked usage counters."""
 
     chatbot = resolve_chatbot_reference(
         chatbot,
@@ -101,15 +81,6 @@ def update_chatbot_capacity(
             capacity = ChatbotConfig.objects.select_for_update().get(
                 pk=capacity.pk
             )
-
-        if ai_message_limit is not UNSET:
-            capacity.ai_message_limit = ai_message_limit
-        if file_size_limit_bytes is not UNSET:
-            capacity.file_size_limit_bytes = file_size_limit_bytes
-        if knowledge_chunk_limit is not UNSET:
-            capacity.knowledge_chunk_limit = knowledge_chunk_limit
-        if active_features is not UNSET:
-            capacity.active_features = _normalized_features(active_features)
 
         capacity.current_ai_message_count = _updated_count(
             current=capacity.current_ai_message_count,
@@ -135,60 +106,14 @@ def update_chatbot_capacity(
         return capacity
 
 
-def sync_chatbot_capacity_from_subscription(
-    chatbot=None,
-    *,
-    chatbot_slug=None,
-    chatbot_id=None,
-):
-    """Copy active subscription limits/features while preserving usage."""
-
-    chatbot = resolve_chatbot_reference(
-        chatbot,
-        chatbot_slug=chatbot_slug,
-        chatbot_id=chatbot_id,
-    )
-    entitlements = get_chatbot_subscription_entitlements(chatbot)
-    file_size_limit_mb = entitlements.file_size_limit_mb
-
-    return update_chatbot_capacity(
-        chatbot,
-        ai_message_limit=entitlements.ai_message_limit,
-        file_size_limit_bytes=(
-            file_size_limit_mb * BYTES_PER_MEGABYTE
-            if file_size_limit_mb is not None
-            else None
-        ),
-        knowledge_chunk_limit=entitlements.knowledge_chunk_limit,
-        active_features=entitlements.features,
-    )
-
-
-def _message_limit_after_paid_plan(capacity, new_plan_allowance, *, created):
-    if created:
-        return new_plan_allowance
-    if capacity.ai_message_limit is None or new_plan_allowance is None:
-        return None
-
-    remaining_messages = max(
-        capacity.ai_message_limit - capacity.current_ai_message_count,
-        0,
-    )
-    return (
-        capacity.current_ai_message_count
-        + remaining_messages
-        + new_plan_allowance
-    )
-
-
 @transaction.atomic
 def apply_active_subscription_to_chatbot_capacity(subscription):
-    """Apply one newly activated subscription to cached chatbot capacity.
+    """Apply one newly activated subscription to chatbot capacity.
 
-    Each subscription contract is applied once. Paid plans add their message
-    allowance to the chatbot's remaining balance, while free plans reset the
-    message allowance and usage. All other limits and features are replaced by
-    the newly active contract.
+    Each subscription contract is applied once. Limits and features are
+    derived from the contract snapshot, so only usage is adjusted here: a
+    free plan resets the message usage, while feature-dependent configs are
+    enabled or disabled to match the contract.
     """
 
     subscription = (
@@ -213,35 +138,14 @@ def apply_active_subscription_to_chatbot_capacity(subscription):
             pk=capacity.pk
         )
 
-    features = _normalized_features(subscription.get_features())
-    file_size_limit_mb = subscription.get_file_size_limit_mb()
-    new_plan_allowance = subscription.get_ai_message_limit()
-
     if subscription.is_free_plan():
-        capacity.ai_message_limit = new_plan_allowance
         capacity.current_ai_message_count = 0
-    else:
-        capacity.ai_message_limit = _message_limit_after_paid_plan(
-            capacity,
-            new_plan_allowance,
-            created=created,
-        )
-
-    capacity.file_size_limit_bytes = (
-        file_size_limit_mb * BYTES_PER_MEGABYTE
-        if file_size_limit_mb is not None
-        else None
-    )
-    capacity.knowledge_chunk_limit = (
-        subscription.get_knowledge_chunk_limit()
-    )
-    capacity.active_features = features
-    capacity.full_clean()
-    capacity.save()
+        capacity.full_clean()
+        capacity.save()
 
     if (
         not subscription.is_free_plan()
-        and PlanFeature.LEAD_CAPTURE in features
+        and subscription.has_feature(PlanFeature.LEAD_CAPTURE)
     ):
         LeadCaptureConfig.objects.get_or_create(
             chatbot_id=subscription.chatbot_id,
@@ -262,7 +166,7 @@ def apply_active_subscription_to_chatbot_capacity(subscription):
 
     if (
         not subscription.is_free_plan()
-        and PlanFeature.APPOINTMENT_BOOKING in features
+        and subscription.has_feature(PlanFeature.APPOINTMENT_BOOKING)
     ):
         AppointmentBookingConfig.objects.get_or_create(
             chatbot_id=subscription.chatbot_id,

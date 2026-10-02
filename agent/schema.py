@@ -1,5 +1,4 @@
-from datetime import date as Date, datetime
-from typing import Literal
+from datetime import date as Date
 
 from pydantic import BaseModel, Field
 
@@ -19,34 +18,15 @@ class SpecialistResponseSchema(BaseModel):
     source_ids: list[str] = Field(default_factory=list)
 
 
+class AppointmentAgentResponseSchema(BaseModel):
+    """The appointment specialist selects a date; code attaches its slots."""
+
+    content: str = Field(min_length=1)
+    agreed_date: Date | None = None
+
+
 class KnowledgeBaseAgentOutputSchema(SpecialistResponseSchema):
     """Backward-compatible name for older imports."""
-
-
-class AppointmentSlotSchema(BaseModel):
-    starts_at: datetime
-    ends_at: datetime
-    booked: bool = False
-    available: bool = True
-    reason: str | None = None
-
-
-class AppointmentSchema(BaseModel):
-    status: Literal["available", "unavailable", "disabled", "invalid", "booking_recorded"]
-    available: bool = False
-    requested_date: Date | None = None
-    date: Date | None = None
-    searched_through: Date | None = None
-    next_search_date: Date | None = None
-    timezone: str | None = None
-    requested_date_reason: str | None = None
-    available_count: int = 0
-    remaining_capacity: int | None = None
-    appointment_id: str | None = None
-    appointment_status: str | None = None
-    starts_at: datetime | None = None
-    ends_at: datetime | None = None
-    slots: list[AppointmentSlotSchema] = Field(default_factory=list)
 
 
 class LeadScoreSchema(BaseModel):
@@ -61,7 +41,7 @@ class EscalationSchema(BaseModel):
 
 
 class AgentResultSchema(SpecialistResponseSchema):
-    appointment: AppointmentSchema | None = None
+    agreed_date: Date | None = None
     lead_score: LeadScoreSchema | None = None
     escalation: EscalationSchema | None = None
 

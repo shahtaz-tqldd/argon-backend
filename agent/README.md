@@ -42,11 +42,9 @@ events, one event of overlap, and context caching for contexts of at least
 2,048 tokens. Each turn lazily creates one Vertex client (HTTP pool), shared
 by the coordinator and specialists (`agent/helpers/model.py`). The turn closes
 both async and sync transports before its event loop exits, including on errors
-and streaming cancellation. Clients are never reused across `async_to_sync`
-event loops or concurrent turns. Trusted backend booking state is appended to the
-ADK session before each App run; this avoids relying on
-`Runner.run_async(state_delta=...)`, which ADK 2.1.0's App node path does not
-expose to agent context.
+and cancellation. Clients are never reused across `async_to_sync` event loops
+or concurrent turns. Trusted backend booking data is invocation-scoped while
+the runner records the booking event in normal conversation memory.
 
 Booking operations and the appointment tool factory live in
 `agent/sub_agents/appointment/tools.py`.
@@ -57,29 +55,19 @@ Booking operations and the appointment tool factory live in
 from agent.client import AgentClient
 
 client = AgentClient(chatbot, chat_session)
-response = await client.chat("What services do you offer?")
-# Synchronous Django callers: client.chat_sync(message="...")
+reply = client.generate_reply_sync(visitor_message=message)
+booking_reply = client.generate_booking_reply_sync(appointment_id=appointment.id)
 ```
 
-All entry points return a JSON-serializable dictionary:
+Lifecycle entry points return visitor-facing message data and persist live
+replies and usage atomically:
 
 ```json
 {
-  "result": {
-    "content": "We offer …",
-    "source_ids": ["knowledge-base-uuid"],
-    "appointment": null,
-    "lead_score": null,
-    "escalation": null
-  },
-  "token": {
-    "input_tokens": 200,
-    "output_tokens": 50,
-    "thinking_tokens": 10,
-    "cached_input_tokens": 20,
-    "total_tokens": 250
-  },
-  "cost": 0.000185
+  "content": "We offer …",
+  "metadata": {
+    "sources": []
+  }
 }
 ```
 
@@ -92,8 +80,8 @@ removed. Invalid specialist structured output fails the turn (ADK rejects it
 before a reply is produced) instead of leaking raw output to the UI.
 
 Token usage sums ADK model events across all calls in the invocation,
-including tool-selection and final-response calls; a streamed answer's chunks
-count as one call. `output_tokens` includes thinking; `thinking_tokens` and
+including tool-selection and final-response calls. `output_tokens` includes
+thinking; `thinking_tokens` and
 `cached_input_tokens` are subsets, not additional totals. `cost` is an
 estimated USD amount using `GEMINI_INPUT_COST_PER_MILLION` and
 `GEMINI_OUTPUT_COST_PER_MILLION`. It excludes retrieval embeddings and other
@@ -101,86 +89,55 @@ infrastructure charges and does not apply cache discounts or pricing tiers.
 Configure rates for your selected model. Missing provider usage contributes
 zero; this estimate is not a billing receipt.
 
-## Streaming (socket-style chatbots)
-
-`chat_stream` runs the same turn through ADK's SSE streaming mode and is a
-separate entry point designed for WebSocket consumers:
-
-```python
-async for item in client.chat_stream(message, user_id=visitor_id):
-    match item["type"]:
-        case "delta":
-            await socket.send(json.dumps(item))  # {"type": "delta", "content": "..."}
-        case "done":
-            await socket.send(json.dumps(item))  # {"type": "done", "response": {...envelope...}}
-```
-
-- `delta` frames carry coordinator text chunks as they are produced (thought
-  parts excluded). If the model or deployment does not emit partials, only
-  the `done` frame arrives; consumers should render from `done` alone.
-- The final `done` frame carries `response`, the exact envelope `chat`
-  returns, including `appointment` slots for the booking UI, `lead_score`,
-  `escalation`, token usage, and cost. Persist this frame, not the deltas.
-- If the generator raises mid-stream (after deltas were already delivered),
-  consumers should emit their own error frame; no `done` frame is produced.
 
 ## Appointment UI flow
 
-1. Booking intent and follow-ups are delegated to `appointment_agent`, which
-   asks for a preferred date and resolves it in the chatbot timezone.
-2. `find_appointment_availability` checks the requested day, then suggests the
-   first available date up to the configured booking horizon. Only one search
-   can run per invocation, enforced through ADK `temp:` state.
-3. The model receives a compact summary: dates, `requested_date_reason`,
-   `available_count`, and `remaining_capacity`. Python attaches the full choices
-   to `result.appointment.slots` via an invocation-scoped context shared with the tool, outside model responses.
-   Each choice has offset-aware `starts_at`/`ends_at`, `booked`, `available`, and
-   `reason`. Disable choices with `available: false`, including booked, past,
-   and daily-limit-blocked choices. `available_count` counts selectable times;
-   `remaining_capacity` limits how many more appointments can be booked that day.
-4. If the requested day is unavailable, the agent explains whether it is closed,
-   unscheduled, fully booked, or has no future times and asks whether the visitor
-   wants the suggested date. An alternative is an offer, never a reservation.
-   If no day is available before the horizon, it returns `unavailable`.
+1. Booking intent and date-offer follow-ups are delegated to
+   `appointment_agent`, which asks for a preferred date and resolves it in the
+   chatbot timezone.
+2. `find_appointment_availability` checks the requested day. If unavailable, it
+   returns up to three later available dates within the booking horizon.
+3. The specialist returns only a visitor-facing `content` message and nullable
+   `agreed_date`. It never exposes slot counts or appointment times. A requested
+   available date is immediately agreed; an alternative remains unagreed until
+   the visitor clearly accepts it.
+4. After `agreed_date` is returned, Python fetches that day's full choices and
+   adds them directly to `metadata.appointments.available_slots` for the booking
+   UI. The model does not generate, select, or describe slots.
+
+For live visitor replies, `AgentClient.generate_reply_sync()` converts the
+internal agent envelope into `{content, metadata}`, saves the AI message, and
+records its usage in one transaction. Metadata includes only sections produced
+by that turn: `appointments`, `lead_analytics`, `escalation`, and enriched
+`sources` records. The Celery task handles capacity, lifecycle events, and
+retries only.
+
 5. POST the selected `starts_at` and customer `collected_fields` to
    `/api/v1/chatbots/{public_key}/book-appointment/?session_id={session_id}`
    using the conversation bearer token. The endpoint rechecks availability
    while locking the booking configuration, derives `ends_at`, and stores
    the trusted chat-session association itself.
-6. After the save commits, call the backend-only confirmation method:
+6. After saving, the endpoint queues `generate_ai_reply_task` with the trusted
+   appointment and session IDs. The task asks `AgentClient` to verify the saved
+   booking, generate the acknowledgment, persist its usage, and save the next AI
+   chat message under `appointment:<id>`. The normal `message.created` signal
+   delivers that message to the UI. The booking response contains
+   `reply_queued`; it does not synchronously return another chat message.
 
-```python
-response = await client.confirm_booking(appointment_id=str(appointment.id))
-# Or client.confirm_booking_sync(appointment_id=...)
-```
-
-The method reads the saved appointment scoped to the chatbot, conversation,
-and pending/confirmed status. It creates no appointment. ADK records the
-backend event in conversation history, and a trusted state event commits
-`booking_confirmations` before model execution. The response contains
-`status: "booking_recorded"`, appointment ID, actual status, and start/end
-timestamps. A pending request is described as awaiting approval.
-`available` applies to availability offers only and is false for recorded
-bookings. Repeated confirmation calls reuse the state record keyed by
-appointment ID but produce another acknowledgment turn; the booking endpoint
-reuses the saved chat message for delivery retries. A failure during
-acknowledgment does not undo the saved booking. The endpoint persists a truthful
-fallback thank-you message if model generation fails. Its response includes
-`agent_reply` and `message`; the message carries
-`event_type: appointment_confirmation` and the saved appointment data. Existing
-chat signals publish `message.created` after commit, with the event metadata
-and thank-you content together.
+The acknowledgment uses the saved pending/confirmed status. Repeated booking
+submissions do not enqueue another reply once its chat message exists. If AI is
+disabled or generation fails, `AgentClient` saves a truthful deterministic
+acknowledgment without an AI usage record.
 
 ## In-conversation lead scoring
 
 Specialists call `record_lead_score` only after a meaningful qualification
 signal, such as a concrete need, timeline, budget, booking intent, or
 committed next step. The tool validates a 0–100 integer, updates
-`Lead.lead_score`, and saves its concise rationale in
-`ChatSession.metadata["lead_score_summary"]`. If the session has not yet
-been associated with a lead, the tool returns `recorded: false` and writes
-nothing. The result is also returned as `result.lead_score` for message
-metadata.
+`Lead.lead_score`, and returns its concise rationale for that turn's message
+metadata. It does not store the changing rationale in `ChatSession.metadata`.
+If the session has not yet been associated with a lead, the tool returns
+`recorded: false` and writes nothing.
 
 ## Human escalation
 
@@ -191,10 +148,9 @@ required tool failures; the tool is only exposed when
 `human_handoff_enabled` is on. The tool atomically sets
 `requires_attention`, stores its concise escalation explanation directly in
 the `attention_reason` text field, and updates `attention_requested_at` on
-`ChatSession`. `chat.tasks` creates an `AI_NOTIFICATION` for the chatbot
-dashboard, with the chat-session ID in its metadata, after the AI reply is
-saved. The reply and notification are in the same database transaction, so
-a failed task does not leave a notification without its corresponding reply.
+`ChatSession`. It creates the system timeline event and chatbot
+`AI_NOTIFICATION` in the same transaction; repeated calls with the same active
+reason are idempotent.
 Existing resolution/takeover services remain responsible for clearing the
 attention fields.
 
@@ -210,17 +166,11 @@ compatible async SQLAlchemy URL for your database, e.g.
 
 Conversation IDs use `ChatSession.id`; default ADK user identity is scoped to
 the chatbot and conversation. An optional `user_id` must remain stable across
-chat, streaming, and confirmation calls. Reuse the client/session service on
-one async event loop. For synchronous requests backed by asyncpg, create the
-client in a single async service boundary rather than carrying pooled
-connections between `async_to_sync` event loops. Callers must serialize turns
-per conversation across workers.
+turns. Callers must serialize turns per conversation across workers.
 
-AgentClient does not register HTTP endpoints or save assistant replies into
-Django. The booking endpoint persists appointment acknowledgments. `chat.tasks` persists returned replies, public message metadata,
-usage, and escalation notifications. Internal lead-score and escalation tool
-payloads are not placed in public message metadata. The confirmation method
-remains backend-only and is not exposed as a visitor-callable model tool.
+AgentClient does not register HTTP endpoints. It persists generated assistant
+messages, public metadata, and AI usage; `chat.tasks` handles dispatch,
+capacity, retries, and lifecycle events.
 
 The existing `google-adk==2.1.0` dependency is retained. Specialists use
 structured output with tools via native model support or ADK's
