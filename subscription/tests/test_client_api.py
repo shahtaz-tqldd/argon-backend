@@ -16,7 +16,12 @@ from subscription.choices import (
     RenewalMode,
     SubscriptionStatus,
 )
-from subscription.models import ChatbotSubscription, PlanPrice, SubscriptionPlan
+from subscription.models import (
+    BillingPaymentMethod,
+    ChatbotSubscription,
+    PlanPrice,
+    SubscriptionPlan,
+)
 from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
 
 
@@ -65,6 +70,18 @@ class SubscriptionClientAPITests(APITestCase):
             amount=Decimal("19.00"),
         )
         self.client.force_authenticate(self.user)
+
+    def create_active_stripe_subscription(self):
+        return ChatbotSubscription.objects.create(
+            chatbot=self.chatbot,
+            plan_price=self.price,
+            selected_by=self.user,
+            provider=PaymentProvider.STRIPE,
+            renewal_mode=RenewalMode.PROVIDER_MANAGED,
+            status=SubscriptionStatus.ACTIVE,
+            provider_customer_id="cus_123",
+            provider_subscription_id="sub_123",
+        )
 
     @patch(
         "subscription.services.subscriptions.StripeBillingService.retrieve_checkout_session"
@@ -508,6 +525,141 @@ class SubscriptionClientAPITests(APITestCase):
             ).count(),
             1,
         )
+
+    @patch(
+        "subscription.api.v1.client.views.StripeBillingService.list_card_payment_methods"
+    )
+    @patch(
+        "subscription.api.v1.client.views.StripeBillingService.retrieve_subscription"
+    )
+    @patch(
+        "subscription.api.v1.client.views.StripeBillingService.retrieve_customer"
+    )
+    def test_payment_method_list_synchronizes_safe_card_metadata(
+        self, retrieve_customer, retrieve_subscription, list_methods
+    ):
+        self.create_active_stripe_subscription()
+        retrieve_customer.return_value = {
+            "id": "cus_123",
+            "invoice_settings": {"default_payment_method": "pm_default"},
+        }
+        retrieve_subscription.return_value = {
+            "id": "sub_123",
+            "default_payment_method": "pm_default",
+        }
+        list_methods.return_value = [
+            {
+                "id": "pm_default",
+                "type": "card",
+                "customer": "cus_123",
+                "card": {
+                    "brand": "visa",
+                    "last4": "4242",
+                    "exp_month": 12,
+                    "exp_year": 2030,
+                },
+            }
+        ]
+
+        response = self.client.get(
+            f'{reverse("stripe-payment-method-list")}?chatbot={self.chatbot.slug}'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"][0]["card_last4"], "4242")
+        self.assertTrue(response.data["data"][0]["is_default"])
+        stored = BillingPaymentMethod.objects.get(
+            provider_payment_method_id="pm_default"
+        )
+        self.assertEqual(stored.card_brand, "visa")
+        self.assertEqual(stored.card_exp_year, 2030)
+
+    @patch(
+        "subscription.api.v1.client.views.StripeBillingService.create_setup_intent"
+    )
+    def test_chatbot_admin_can_create_card_setup_intent(self, create_setup_intent):
+        subscription = self.create_active_stripe_subscription()
+        create_setup_intent.return_value = {
+            "id": "seti_123",
+            "client_secret": "seti_123_secret_example",
+        }
+
+        response = self.client.post(
+            f'{reverse("stripe-payment-method-setup")}?chatbot={self.chatbot.slug}',
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            response.data["data"]["client_secret"],
+            "seti_123_secret_example",
+        )
+        create_setup_intent.assert_called_once_with(
+            customer_id="cus_123",
+            metadata={
+                "argon_subscription_id": str(subscription.id),
+                "argon_chatbot_id": str(self.chatbot.id),
+                "argon_user_id": str(self.user.id),
+            },
+        )
+
+    @patch(
+        "subscription.api.v1.client.views.StripeBillingService.set_default_payment_method"
+    )
+    @patch(
+        "subscription.api.v1.client.views.StripeBillingService.retrieve_payment_method"
+    )
+    def test_chatbot_admin_can_change_default_payment_method(
+        self, retrieve_payment_method, set_default
+    ):
+        self.create_active_stripe_subscription()
+        retrieve_payment_method.return_value = {
+            "id": "pm_new",
+            "type": "card",
+            "customer": "cus_123",
+            "card": {
+                "brand": "mastercard",
+                "last4": "4444",
+                "exp_month": 8,
+                "exp_year": 2031,
+            },
+        }
+
+        response = self.client.post(
+            f'{reverse("stripe-payment-method-default")}?chatbot={self.chatbot.slug}',
+            {"payment_method_id": "pm_new"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["data"]["is_default"])
+        set_default.assert_called_once_with(
+            customer_id="cus_123",
+            subscription_id="sub_123",
+            payment_method_id="pm_new",
+        )
+
+    @patch(
+        "subscription.api.v1.client.views.StripeBillingService.retrieve_payment_method"
+    )
+    def test_cannot_select_another_customers_payment_method(self, retrieve_method):
+        self.create_active_stripe_subscription()
+        retrieve_method.return_value = {
+            "id": "pm_foreign",
+            "type": "card",
+            "customer": "cus_other",
+            "card": {"brand": "visa", "last4": "1111"},
+        }
+
+        response = self.client.post(
+            f'{reverse("stripe-payment-method-default")}?chatbot={self.chatbot.slug}',
+            {"payment_method_id": "pm_foreign"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(BillingPaymentMethod.objects.exists())
 
     def test_non_admin_chatbot_member_cannot_checkout(self):
         member = get_user_model().objects.create_user(

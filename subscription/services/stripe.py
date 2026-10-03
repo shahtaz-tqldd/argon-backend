@@ -151,7 +151,10 @@ class StripeBillingService:
             "client_reference_id": str(subscription.id),
             "line_items": line_items,
             "metadata": metadata,
-            "subscription_data": {"metadata": metadata},
+            "subscription_data": {
+                "metadata": metadata,
+                "payment_settings": {"save_default_payment_method": "on_subscription"},
+            },
         }
         if promotion_code_id:
             params["discounts"] = [{"promotion_code": promotion_code_id}]
@@ -431,6 +434,92 @@ class StripeBillingService:
                 "Stripe billing management is temporarily unavailable."
             ) from exc
         return stripe_object_to_dict(session)
+
+    def create_setup_intent(self, *, customer_id, metadata):
+        try:
+            setup_intent = self._client().v1.setup_intents.create(
+                {
+                    "customer": customer_id,
+                    "payment_method_types": ["card"],
+                    "usage": "off_session",
+                    "metadata": metadata,
+                }
+            )
+        except stripe.StripeError as exc:
+            logger.exception("Stripe SetupIntent creation failed")
+            raise StripeServiceError(
+                "Stripe could not prepare a new payment method."
+            ) from exc
+        return stripe_object_to_dict(setup_intent)
+
+    def list_card_payment_methods(self, *, customer_id):
+        try:
+            methods = self._client().v1.payment_methods.list(
+                {"customer": customer_id, "type": "card"}
+            )
+        except stripe.StripeError as exc:
+            logger.exception("Stripe payment-method listing failed")
+            raise StripeServiceError(
+                "Stripe payment methods are temporarily unavailable."
+            ) from exc
+        return stripe_object_to_dict(methods).get("data", [])
+
+    def retrieve_payment_method(self, *, payment_method_id):
+        try:
+            payment_method = self._client().v1.payment_methods.retrieve(
+                payment_method_id
+            )
+        except stripe.StripeError as exc:
+            logger.exception("Stripe payment-method retrieval failed")
+            raise StripeServiceError(
+                "Stripe could not retrieve that payment method."
+            ) from exc
+        return stripe_object_to_dict(payment_method)
+
+    def retrieve_customer(self, *, customer_id):
+        try:
+            customer = self._client().v1.customers.retrieve(customer_id)
+        except stripe.StripeError as exc:
+            logger.exception("Stripe customer retrieval failed")
+            raise StripeServiceError(
+                "Stripe billing details are temporarily unavailable."
+            ) from exc
+        return stripe_object_to_dict(customer)
+
+    def retrieve_subscription(self, *, subscription_id):
+        try:
+            subscription = self._client().v1.subscriptions.retrieve(
+                subscription_id
+            )
+        except stripe.StripeError as exc:
+            logger.exception("Stripe subscription retrieval failed")
+            raise StripeServiceError(
+                "Stripe subscription details are temporarily unavailable."
+            ) from exc
+        return stripe_object_to_dict(subscription)
+
+    def set_default_payment_method(
+        self, *, customer_id, subscription_id, payment_method_id
+    ):
+        client = self._client().v1
+        try:
+            customer = client.customers.update(
+                customer_id,
+                {"invoice_settings": {"default_payment_method": payment_method_id}},
+            )
+            subscription = client.subscriptions.update(
+                subscription_id,
+                {"default_payment_method": payment_method_id},
+            )
+        except stripe.StripeError as exc:
+            logger.exception("Stripe default payment-method update failed")
+            raise StripeServiceError(
+                "Stripe could not update the default payment method."
+            ) from exc
+        return (
+            stripe_object_to_dict(customer),
+            stripe_object_to_dict(subscription),
+        )
 
     def set_cancel_at_period_end(self, *, subscription_id, cancel):
         try:

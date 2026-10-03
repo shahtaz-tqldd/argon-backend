@@ -236,8 +236,9 @@ class ChatbotSubscription(BaseModel):
     started_at = models.DateTimeField(null=True, blank=True)
     current_period_start = models.DateTimeField(null=True, blank=True)
     current_period_end = models.DateTimeField(null=True, blank=True, db_index=True)
-    # Only meaningful for APP_MANAGED providers — when the renewal job should
-    # next attempt a charge. Indexed since the scheduler queries on it.
+    # The next expected renewal/charge time. Provider-managed subscriptions
+    # synchronize this from their current period end; app-managed providers
+    # set it to the next time the renewal job should attempt a charge.
     next_billing_at = models.DateTimeField(null=True, blank=True, db_index=True)
     cancel_at_period_end = models.BooleanField(default=False)
     canceled_at = models.DateTimeField(null=True, blank=True)
@@ -472,6 +473,52 @@ class ChatbotSubscription(BaseModel):
         self.validate_contract_snapshot()
         self.validate_snapshot_immutability()
         super().save(*args, **kwargs)
+
+
+class BillingPaymentMethod(BaseModel):
+    """Display-safe metadata for a provider-hosted payment method.
+
+    Full card numbers and CVC values never enter this database. The provider
+    payment-method id remains the source of truth for charging and updates.
+    """
+
+    chatbot = models.ForeignKey(
+        "chatbot.Chatbot",
+        on_delete=models.CASCADE,
+        related_name="billing_payment_methods",
+    )
+    provider = models.CharField(max_length=20, choices=PaymentProvider.choices)
+    provider_customer_id = models.CharField(max_length=255)
+    provider_payment_method_id = models.CharField(max_length=255)
+    card_brand = models.CharField(max_length=40, blank=True)
+    card_last4 = models.CharField(max_length=4, blank=True)
+    card_exp_month = models.PositiveSmallIntegerField(null=True, blank=True)
+    card_exp_year = models.PositiveSmallIntegerField(null=True, blank=True)
+    is_default = models.BooleanField(default=False, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        ordering = ["-is_default", "-created_at"]
+        indexes = [
+            models.Index(
+                fields=["chatbot", "provider", "is_active"],
+                name="sub_pm_chatbot_active_idx",
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "provider_payment_method_id"],
+                name="sub_pm_provider_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["chatbot", "provider"],
+                condition=Q(is_default=True, is_active=True),
+                name="sub_pm_one_default",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.card_brand} ending in {self.card_last4}".strip()
 
 
 class Payment(BaseModel):

@@ -12,6 +12,9 @@ urlpatterns = [
     path("cancellation/", views.SubscriptionCancellationAPIView.as_view(), name="subscription-cancellation"),
     
     path("billing-portal/", views.StripeBillingPortalAPIView.as_view(), name="stripe-billing-portal"),
+    path("payment-methods/", views.StripePaymentMethodListAPIView.as_view(), name="stripe-payment-method-list"),
+    path("payment-methods/setup/", views.StripePaymentMethodSetupAPIView.as_view(), name="stripe-payment-method-setup"),
+    path("payment-methods/default/", views.StripeDefaultPaymentMethodAPIView.as_view(), name="stripe-payment-method-default"),
     path("checkout/", views.StripeCheckoutAPIView.as_view(), name="subscription-checkout"),
     path("stripe/webhook/", views.StripeWebhookAPIView.as_view(), name="stripe-webhook"),
     

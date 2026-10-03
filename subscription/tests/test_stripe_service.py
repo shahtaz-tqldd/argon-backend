@@ -215,6 +215,53 @@ class StripeBillingServiceTests(SimpleTestCase):
             {"cancel_at_period_end": True},
         )
 
+    @patch("subscription.services.stripe.stripe.StripeClient")
+    def test_setup_and_default_payment_method_use_stripe_customer(
+        self, client_class
+    ):
+        setup_intent = Mock()
+        setup_intent.to_dict.return_value = {
+            "id": "seti_123",
+            "client_secret": "seti_123_secret_example",
+        }
+        customer = Mock()
+        customer.to_dict.return_value = {"id": "cus_123"}
+        subscription = Mock()
+        subscription.to_dict.return_value = {"id": "sub_123"}
+        client = client_class.return_value.v1
+        client.setup_intents.create.return_value = setup_intent
+        client.customers.update.return_value = customer
+        client.subscriptions.update.return_value = subscription
+        service = StripeBillingService()
+
+        result = service.create_setup_intent(
+            customer_id="cus_123",
+            metadata={"argon_subscription_id": "local-id"},
+        )
+        service.set_default_payment_method(
+            customer_id="cus_123",
+            subscription_id="sub_123",
+            payment_method_id="pm_123",
+        )
+
+        self.assertEqual(result["id"], "seti_123")
+        client.setup_intents.create.assert_called_once_with(
+            {
+                "customer": "cus_123",
+                "payment_method_types": ["card"],
+                "usage": "off_session",
+                "metadata": {"argon_subscription_id": "local-id"},
+            }
+        )
+        client.customers.update.assert_called_once_with(
+            "cus_123",
+            {"invoice_settings": {"default_payment_method": "pm_123"}},
+        )
+        client.subscriptions.update.assert_called_once_with(
+            "sub_123",
+            {"default_payment_method": "pm_123"},
+        )
+
     def test_webhook_signature_is_verified_against_raw_body(self):
         payload = json.dumps(
             {

@@ -1,12 +1,42 @@
 from django.contrib import admin
 
 from subscription.models import (
+    BillingPaymentMethod,
     ChatbotSubscription,
     Payment,
     PaymentWebhookEvent,
     PlanPrice,
     SubscriptionPlan,
 )
+
+
+@admin.register(BillingPaymentMethod)
+class BillingPaymentMethodAdmin(admin.ModelAdmin):
+    list_display = (
+        "chatbot",
+        "card_brand",
+        "card_last4",
+        "card_exp_month",
+        "card_exp_year",
+        "is_default",
+        "is_active",
+        "updated_at",
+    )
+    list_filter = ("provider", "card_brand", "is_default", "is_active")
+    search_fields = (
+        "chatbot__chatbot_name",
+        "provider_customer_id",
+        "provider_payment_method_id",
+        "card_last4",
+    )
+    autocomplete_fields = ("chatbot",)
+    readonly_fields = (
+        "id",
+        "provider_customer_id",
+        "provider_payment_method_id",
+        "created_at",
+        "updated_at",
+    )
 
 
 @admin.register(SubscriptionPlan)

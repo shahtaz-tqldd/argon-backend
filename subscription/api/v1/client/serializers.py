@@ -3,7 +3,13 @@ from rest_framework import serializers
 from coupon.api.v1.client.serializers import CouponRedemptionClientSerializer
 from coupon.models import Coupon
 from subscription.choices import BillingInterval, PaymentProvider
-from subscription.models import ChatbotSubscription, Payment, PlanPrice, SubscriptionPlan
+from subscription.models import (
+    BillingPaymentMethod,
+    ChatbotSubscription,
+    Payment,
+    PlanPrice,
+    SubscriptionPlan,
+)
 
 
 class SubscriptionPlanQuerySerializer(serializers.Serializer):
@@ -122,12 +128,35 @@ class SubscriptionCancellationSerializer(serializers.Serializer):
     cancel_at_period_end = serializers.BooleanField(default=True)
 
 
+class BillingPaymentMethodClientSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BillingPaymentMethod
+        fields = (
+            "id",
+            "provider",
+            "provider_payment_method_id",
+            "card_brand",
+            "card_last4",
+            "card_exp_month",
+            "card_exp_year",
+            "is_default",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+
+class DefaultPaymentMethodSerializer(serializers.Serializer):
+    payment_method_id = serializers.CharField(max_length=255, trim_whitespace=True)
+
+
 class ChatbotSubscriptionClientSerializer(serializers.ModelSerializer):
     chatbot_id = serializers.UUIDField(read_only=True)
     plan_price_id = serializers.UUIDField(read_only=True)
     selected_by_id = serializers.UUIDField(read_only=True, allow_null=True)
     pending_coupon = serializers.SerializerMethodField()
     coupon_redemption = serializers.SerializerMethodField()
+    default_payment_method = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatbotSubscription
@@ -143,11 +172,13 @@ class ChatbotSubscriptionClientSerializer(serializers.ModelSerializer):
             "started_at",
             "current_period_start",
             "current_period_end",
+            "next_billing_at",
             "cancel_at_period_end",
             "canceled_at",
             "ended_at",
             "pending_coupon",
             "coupon_redemption",
+            "default_payment_method",
             "created_at",
             "updated_at",
         )
@@ -166,6 +197,16 @@ class ChatbotSubscriptionClientSerializer(serializers.ModelSerializer):
         if redemption is None:
             return None
         return CouponRedemptionClientSerializer(redemption).data
+
+    def get_default_payment_method(self, obj):
+        payment_method = obj.chatbot.billing_payment_methods.filter(
+            provider=obj.provider,
+            is_active=True,
+            is_default=True,
+        ).first()
+        if payment_method is None:
+            return None
+        return BillingPaymentMethodClientSerializer(payment_method).data
 
 
 class PaymentClientSerializer(serializers.ModelSerializer):

@@ -384,6 +384,16 @@ class ChatSessionClientAPITests(APITestCase):
             attention_requested_at=now,
         )
         regular_session = ChatSession.objects.create(chatbot=self.chatbot)
+        ChatMessage.objects.create(
+            chat_session=regular_session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="Unread question",
+        )
+        ChatMessage.objects.create(
+            chat_session=regular_session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="Another unread question",
+        )
 
         for requires_attention in (None, False):
             query_params = {"chatbot_slug": self.chatbot.slug}
@@ -395,6 +405,14 @@ class ChatSessionClientAPITests(APITestCase):
             )
 
             self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(
+                response.data["meta"]["requires_attention_count"],
+                1,
+            )
+            self.assertEqual(
+                response.data["meta"]["unread_session_count"],
+                1,
+            )
             self.assertEqual(
                 {item["id"] for item in response.data["data"]},
                 {str(attention_session.id), str(regular_session.id)},
@@ -411,8 +429,35 @@ class ChatSessionClientAPITests(APITestCase):
         self.assertEqual(filtered_response.status_code, status.HTTP_200_OK)
         self.assertEqual(filtered_response.data["meta"]["count"], 1)
         self.assertEqual(
+            filtered_response.data["meta"]["requires_attention_count"],
+            1,
+        )
+        self.assertEqual(
+            filtered_response.data["meta"]["unread_session_count"],
+            1,
+        )
+        self.assertEqual(
             filtered_response.data["data"][0]["id"],
             str(attention_session.id),
+        )
+
+        closed_response = self.client.get(
+            reverse("chat-session-list"),
+            query_params={
+                "chatbot_slug": self.chatbot.slug,
+                "status": ChatSessionStatus.CLOSED,
+            },
+        )
+
+        self.assertEqual(closed_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(closed_response.data["meta"]["count"], 0)
+        self.assertEqual(
+            closed_response.data["meta"]["requires_attention_count"],
+            1,
+        )
+        self.assertEqual(
+            closed_response.data["meta"]["unread_session_count"],
+            1,
         )
 
     def test_session_list_filters_sessions_owned_by_or_requested_for_user(self):

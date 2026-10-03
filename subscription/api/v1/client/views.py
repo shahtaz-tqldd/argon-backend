@@ -15,7 +15,9 @@ from app.utils.response import APIResponse
 from chatbot.models import Chatbot
 from coupon.services import CouponNotEligibleError, CouponNotFoundError
 from subscription.api.v1.client.serializers import (
+    BillingPaymentMethodClientSerializer,
     ChatbotSubscriptionClientSerializer,
+    DefaultPaymentMethodSerializer,
     FreeSubscriptionSerializer,
     PaymentClientSerializer,
     StripeCheckoutSerializer,
@@ -26,6 +28,10 @@ from subscription.api.v1.client.serializers import (
 )
 from subscription.choices import PaymentProvider, SubscriptionStatus
 from subscription.models import ChatbotSubscription, Payment, PlanPrice, SubscriptionPlan
+from subscription.services.payment_methods import (
+    sync_payment_method,
+    synchronize_customer_payment_methods,
+)
 from subscription.services.stripe import (
     StripeBillingService,
     StripeConfigurationError,
@@ -303,6 +309,158 @@ class StripeBillingPortalAPIView(SubscriptionChatbotMixin, GenericAPIView):
         )
 
 
+class StripePaymentMethodListAPIView(SubscriptionChatbotMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    serializer_class = BillingPaymentMethodClientSerializer
+    chatbot_admin_only = True
+
+    def get(self, request, *args, **kwargs):
+        subscription = get_open_subscription(self.get_chatbot())
+        if (
+            subscription is None
+            or subscription.provider != PaymentProvider.STRIPE
+            or not subscription.provider_customer_id
+        ):
+            return APIResponse.error(
+                message="This chatbot has no Stripe billing account.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            payment_methods = synchronize_customer_payment_methods(
+                subscription=subscription,
+                stripe_service=StripeBillingService(),
+                user=request.user,
+            )
+        except StripeConfigurationError as exc:
+            return APIResponse.error(
+                message=str(exc), status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        except StripeServiceError as exc:
+            return APIResponse.error(
+                message=str(exc), status=status.HTTP_502_BAD_GATEWAY
+            )
+        return APIResponse.success(
+            data=self.get_serializer(payment_methods, many=True).data,
+            meta={"count": len(payment_methods)},
+            message="Payment methods fetched successfully.",
+        )
+
+
+class StripePaymentMethodSetupAPIView(SubscriptionChatbotMixin, APIView):
+    permission_classes = [IsChatbotUser]
+    chatbot_admin_only = True
+
+    def post(self, request, *args, **kwargs):
+        subscription = get_open_subscription(self.get_chatbot())
+        if (
+            subscription is None
+            or subscription.provider != PaymentProvider.STRIPE
+            or not subscription.provider_customer_id
+        ):
+            return APIResponse.error(
+                message="This chatbot has no Stripe billing account.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            setup_intent = StripeBillingService().create_setup_intent(
+                customer_id=subscription.provider_customer_id,
+                metadata={
+                    "argon_subscription_id": str(subscription.id),
+                    "argon_chatbot_id": str(subscription.chatbot_id),
+                    "argon_user_id": str(request.user.id),
+                },
+            )
+        except StripeConfigurationError as exc:
+            return APIResponse.error(
+                message=str(exc), status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        except StripeServiceError as exc:
+            return APIResponse.error(
+                message=str(exc), status=status.HTTP_502_BAD_GATEWAY
+            )
+        return APIResponse.success(
+            data={
+                "setup_intent_id": setup_intent.get("id", ""),
+                "client_secret": setup_intent.get("client_secret", ""),
+            },
+            message="Payment method setup is ready.",
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class StripeDefaultPaymentMethodAPIView(
+    SubscriptionChatbotMixin, GenericAPIView
+):
+    permission_classes = [IsChatbotUser]
+    serializer_class = DefaultPaymentMethodSerializer
+    chatbot_admin_only = True
+
+    def post(self, request, *args, **kwargs):
+        subscription = get_open_subscription(self.get_chatbot())
+        if (
+            subscription is None
+            or subscription.provider != PaymentProvider.STRIPE
+            or not subscription.provider_customer_id
+            or not subscription.provider_subscription_id
+        ):
+            return APIResponse.error(
+                message="This chatbot has no manageable Stripe subscription.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payment_method_id = serializer.validated_data["payment_method_id"]
+        stripe_service = StripeBillingService()
+        try:
+            payment_method = stripe_service.retrieve_payment_method(
+                payment_method_id=payment_method_id
+            )
+            provider_customer_id = payment_method.get("customer")
+            if isinstance(provider_customer_id, dict):
+                provider_customer_id = provider_customer_id.get("id")
+            if provider_customer_id != subscription.provider_customer_id:
+                return APIResponse.error(
+                    message=(
+                        "That payment method does not belong to this Stripe "
+                        "billing account."
+                    ),
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if (
+                payment_method.get("id") != payment_method_id
+                or payment_method.get("type") != "card"
+            ):
+                return APIResponse.error(
+                    message="Only a valid saved card can be selected.",
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            stripe_service.set_default_payment_method(
+                customer_id=subscription.provider_customer_id,
+                subscription_id=subscription.provider_subscription_id,
+                payment_method_id=payment_method_id,
+            )
+            record = sync_payment_method(
+                chatbot=subscription.chatbot,
+                payment_method=payment_method,
+                customer_id=subscription.provider_customer_id,
+                is_default=True,
+                updated_by=request.user,
+            )
+        except StripeConfigurationError as exc:
+            return APIResponse.error(
+                message=str(exc), status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        except StripeServiceError as exc:
+            return APIResponse.error(
+                message=str(exc), status=status.HTTP_502_BAD_GATEWAY
+            )
+        return APIResponse.success(
+            data=BillingPaymentMethodClientSerializer(record).data,
+            message="Default payment method updated successfully.",
+        )
+
+
 class SubscriptionCancellationAPIView(SubscriptionChatbotMixin, GenericAPIView):
     permission_classes = [IsChatbotUser]
     serializer_class = SubscriptionCancellationSerializer
@@ -318,12 +476,14 @@ class SubscriptionCancellationAPIView(SubscriptionChatbotMixin, GenericAPIView):
             subscription.status = SubscriptionStatus.CANCELED
             subscription.canceled_at = now
             subscription.ended_at = now
+            subscription.next_billing_at = None
             subscription.updated_by = request.user
             subscription.save(
                 update_fields=[
                     "status",
                     "canceled_at",
                     "ended_at",
+                    "next_billing_at",
                     "updated_by",
                     "updated_at",
                 ]
@@ -362,10 +522,16 @@ class SubscriptionCancellationAPIView(SubscriptionChatbotMixin, GenericAPIView):
         subscription.cancel_at_period_end = bool(
             stripe_subscription.get("cancel_at_period_end", cancel)
         )
+        subscription.next_billing_at = (
+            None
+            if subscription.cancel_at_period_end
+            else subscription.current_period_end
+        )
         subscription.updated_by = request.user
         subscription.save(
             update_fields=[
                 "cancel_at_period_end",
+                "next_billing_at",
                 "updated_by",
                 "updated_at",
             ]

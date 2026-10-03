@@ -19,6 +19,10 @@ from subscription.models import (
     Payment,
     PaymentWebhookEvent,
 )
+from subscription.services.payment_methods import (
+    deactivate_payment_method,
+    sync_payment_method,
+)
 from subscription.services.stripe import StripeBillingService
 
 
@@ -44,6 +48,9 @@ HANDLED_EVENT_TYPES = {
     "invoice.payment_failed",
     "invoice.payment_action_required",
     "charge.refunded",
+    "setup_intent.succeeded",
+    "payment_method.attached",
+    "payment_method.detached",
 }
 
 
@@ -269,6 +276,15 @@ class StripeWebhookProcessor:
             return self._sync_invoice(data, event_type)
         if event_type == "charge.refunded":
             return self._sync_refund(data)
+        if event_type == "setup_intent.succeeded":
+            return self._sync_setup_intent(data)
+        if event_type == "payment_method.attached":
+            return self._sync_attached_payment_method(data)
+        if event_type == "payment_method.detached":
+            deactivate_payment_method(
+                provider_payment_method_id=data.get("id", "")
+            )
+            return None
         return None
 
     def _checkout_completed(self, checkout):
@@ -412,8 +428,14 @@ class StripeWebhookProcessor:
         subscription.started_at = started_at or subscription.started_at
         subscription.current_period_start = current_period_start
         subscription.current_period_end = current_period_end
-        subscription.cancel_at_period_end = bool(
+        cancel_at_period_end = bool(
             stripe_subscription.get("cancel_at_period_end", False)
+        )
+        subscription.cancel_at_period_end = cancel_at_period_end
+        subscription.next_billing_at = (
+            current_period_end
+            if status == SubscriptionStatus.ACTIVE and not cancel_at_period_end
+            else None
         )
         subscription.canceled_at = canceled_at
         subscription.ended_at = ended_at
@@ -436,6 +458,7 @@ class StripeWebhookProcessor:
                 "started_at",
                 "current_period_start",
                 "current_period_end",
+                "next_billing_at",
                 "cancel_at_period_end",
                 "canceled_at",
                 "ended_at",
@@ -448,6 +471,66 @@ class StripeWebhookProcessor:
             and subscription.status == SubscriptionStatus.ACTIVE
         ):
             _apply_subscription_capacity(subscription)
+
+        default_payment_method = stripe_subscription.get(
+            "default_payment_method"
+        )
+        if default_payment_method and not isinstance(default_payment_method, dict):
+            default_payment_method = self.stripe_service.retrieve_payment_method(
+                payment_method_id=_object_id(default_payment_method)
+            )
+        if isinstance(default_payment_method, dict):
+            sync_payment_method(
+                chatbot=subscription.chatbot,
+                payment_method=default_payment_method,
+                customer_id=subscription.provider_customer_id,
+                is_default=True,
+            )
+        return None
+
+    def _sync_setup_intent(self, setup_intent):
+        metadata = setup_intent.get("metadata") or {}
+        subscription = _subscription_from_metadata(metadata)
+        if subscription is None:
+            return None
+        payment_method = setup_intent.get("payment_method")
+        if not isinstance(payment_method, dict):
+            payment_method_id = _object_id(payment_method)
+            if not payment_method_id:
+                return None
+            payment_method = self.stripe_service.retrieve_payment_method(
+                payment_method_id=payment_method_id
+            )
+        sync_payment_method(
+            chatbot=subscription.chatbot,
+            payment_method=payment_method,
+            customer_id=(
+                _object_id(setup_intent.get("customer"))
+                or subscription.provider_customer_id
+            ),
+        )
+        return None
+
+    def _sync_attached_payment_method(self, payment_method):
+        customer_id = _object_id(payment_method.get("customer"))
+        if not customer_id:
+            return None
+        subscription = (
+            ChatbotSubscription.objects.select_related("chatbot")
+            .filter(
+                provider=PaymentProvider.STRIPE,
+                provider_customer_id=customer_id,
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        if subscription is None:
+            return None
+        sync_payment_method(
+            chatbot=subscription.chatbot,
+            payment_method=payment_method,
+            customer_id=customer_id,
+        )
         return None
 
     def _sync_invoice(self, invoice, event_type):

@@ -96,7 +96,7 @@ def _percentage_change(current_count, previous_count):
 class PaginatedChatSessionMixin:
     pagination_class = CustomPagination
 
-    def paginated_response(self, queryset, *, message):
+    def paginated_response(self, queryset, *, message, extra_meta=None):
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, self.request, view=self)
         return APIResponse.success(
@@ -108,6 +108,7 @@ class PaginatedChatSessionMixin:
                 "num_pages": paginator.page.paginator.num_pages,
                 "next": paginator.get_next_link(),
                 "previous": paginator.get_previous_link(),
+                **(extra_meta or {}),
             },
             message=message,
         )
@@ -224,6 +225,24 @@ class ChatSessionListView(
 
     def get(self, request, *args, **kwargs):
         query = self.get_query()
+        session_counts = ChatSession.objects.filter(
+            chatbot=self.get_chatbot(),
+            is_test=False,
+        ).aggregate(
+            requires_attention_count=Count(
+                "id",
+                filter=Q(requires_attention=True),
+                distinct=True,
+            ),
+            unread_session_count=Count(
+                "id",
+                filter=(
+                    Q(messages__sender_type=ChatMessageSenderType.VISITOR)
+                    & ~Q(messages__status=ChatMessageStatus.READ)
+                ),
+                distinct=True,
+            ),
+        )
         last_message = ChatMessage.objects.filter(
             chat_session=OuterRef("pk")
         ).order_by("-created_at", "-id")
@@ -352,6 +371,7 @@ class ChatSessionListView(
         return self.paginated_response(
             queryset,
             message="Chat sessions fetched successfully.",
+            extra_meta=session_counts,
         )
 
 
@@ -726,14 +746,31 @@ class ChatMessageListView(
     serializer_class = ChatMessageSerializer
 
     def get(self, request, *args, **kwargs):
+        # The dashboard inbox expects the newest page first (same contract as
+        # the public widget endpoint): paginate newest-first, then reverse the
+        # page so payload order stays chronological within the page.
         queryset = (
             ChatMessage.objects.filter(chat_session=self.get_chat_session())
             .exclude(metadata__contains={"visibility": "public"})
             .select_related("sender__user__profile")
             .prefetch_related("attachments")
+            .order_by("-created_at", "-id")
         )
-        return self.paginated_response(
-            queryset,
+        paginator = self.pagination_class()
+        page = list(
+            paginator.paginate_queryset(queryset, request, view=self)
+        )
+        page.reverse()
+        return APIResponse.success(
+            data=self.get_serializer(page, many=True).data,
+            meta={
+                "count": paginator.page.paginator.count,
+                "page": paginator.page.number,
+                "page_size": paginator.get_page_size(request),
+                "num_pages": paginator.page.paginator.num_pages,
+                "next": paginator.get_next_link(),
+                "previous": paginator.get_previous_link(),
+            },
             message="Chat messages fetched successfully.",
         )
 

@@ -413,6 +413,7 @@ def _change_active_stripe_plan(
         current.canceled_at = now
         current.ended_at = now
         current.cancel_at_period_end = False
+        current.next_billing_at = None
         current.provider_metadata = {
             **(current.provider_metadata or {}),
             "plan_change_status": "complete",
@@ -425,6 +426,7 @@ def _change_active_stripe_plan(
                 "canceled_at",
                 "ended_at",
                 "cancel_at_period_end",
+                "next_billing_at",
                 "provider_metadata",
                 "updated_by",
                 "updated_at",
@@ -442,6 +444,7 @@ def _change_active_stripe_plan(
             period_start or current.current_period_start
         )
         replacement.current_period_end = period_end or current.current_period_end
+        replacement.next_billing_at = replacement.current_period_end
         replacement.cancel_at_period_end = bool(
             stripe_subscription.get("cancel_at_period_end", False)
         )
@@ -848,6 +851,7 @@ def activate_free_subscription(
             existing.canceled_at = now
             existing.ended_at = now
             existing.cancel_at_period_end = False
+            existing.next_billing_at = None
             existing.updated_by = user
             existing.save(
                 update_fields=[
@@ -855,6 +859,7 @@ def activate_free_subscription(
                     "canceled_at",
                     "ended_at",
                     "cancel_at_period_end",
+                    "next_billing_at",
                     "updated_by",
                     "updated_at",
                 ]

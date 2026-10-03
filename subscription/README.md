@@ -16,6 +16,9 @@ workspace administrator.
 | GET | `/api/v1/subscriptions/current/?chatbot=<slug>` | Fetch the chatbot's open subscription. |
 | GET | `/api/v1/subscriptions/payments/?chatbot=<slug>` | List recorded Stripe invoices/payments. |
 | POST | `/api/v1/subscriptions/billing-portal/?chatbot=<slug>` | Create a Stripe customer portal Session. |
+| GET | `/api/v1/subscriptions/payment-methods/?chatbot=<slug>` | List and synchronize saved card display details. |
+| POST | `/api/v1/subscriptions/payment-methods/setup/?chatbot=<slug>` | Create a SetupIntent for adding a card with Stripe Elements. |
+| POST | `/api/v1/subscriptions/payment-methods/default/?chatbot=<slug>` | Make a saved card the renewal default. |
 | POST | `/api/v1/subscriptions/cancellation/?chatbot=<slug>` | Schedule or remove end-of-period cancellation. |
 | POST | `/api/v1/subscriptions/stripe/webhook/` | Receive signed Stripe events. |
 
@@ -57,6 +60,26 @@ Cancellation body (use `false` to resume a scheduled cancellation):
   "cancel_at_period_end": true
 }
 ```
+
+The current-subscription response includes `started_at`,
+`current_period_start`, `current_period_end`, `next_billing_at`, and the
+display-safe `default_payment_method`. Card data stored locally is limited to
+the Stripe payment-method ID, brand, last four digits, and expiry month/year.
+Full card numbers and CVC values are handled only by Stripe.
+
+To add a card, request a SetupIntent from `payment-methods/setup/`, confirm the
+returned `client_secret` with Stripe Elements, and then fetch
+`payment-methods/`. To select it for renewals, post:
+
+```json
+{
+  "payment_method_id": "pm_..."
+}
+```
+
+to `payment-methods/default/`. The backend verifies that the method belongs to
+the chatbot's Stripe customer and updates both the customer invoice settings
+and the active subscription.
 
 ## Stripe configuration
 
@@ -113,6 +136,9 @@ Configure the webhook destination for:
 - `invoice.payment_failed`
 - `invoice.payment_action_required`
 - `charge.refunded`
+- `setup_intent.succeeded`
+- `payment_method.attached`
+- `payment_method.detached`
 
 The webhook verifies the raw request signature, stores every Stripe event for
 idempotency, and updates the immutable local subscription snapshot. Embedded

@@ -12,17 +12,27 @@ from subscription.choices import (
     SubscriptionStatus,
     WebhookProcessingStatus,
 )
-from subscription.models import ChatbotSubscription, Payment, PlanPrice, SubscriptionPlan
+from subscription.models import (
+    BillingPaymentMethod,
+    ChatbotSubscription,
+    Payment,
+    PlanPrice,
+    SubscriptionPlan,
+)
 from subscription.services.webhooks import StripeWebhookProcessor
 from workspace.models import Workspace
 
 
 class FakeStripeService:
-    def __init__(self, event):
+    def __init__(self, event, payment_method=None):
         self.event = event
+        self.payment_method = payment_method
 
     def construct_webhook_event(self, **kwargs):
         return self.event
+
+    def retrieve_payment_method(self, *, payment_method_id):
+        return self.payment_method
 
 
 class StripeWebhookProcessorTests(TestCase):
@@ -227,3 +237,41 @@ class StripeWebhookProcessorTests(TestCase):
         self.assertEqual(ChatbotSubscription.objects.count(), 1)
         self.assertEqual(self.subscription.status, SubscriptionStatus.ACTIVE)
         self.assertEqual(self.subscription.get_plan_name(), "Growth")
+        self.assertEqual(
+            self.subscription.next_billing_at,
+            self.subscription.current_period_end,
+        )
+
+    def test_setup_intent_stores_display_safe_card_metadata(self):
+        event = self.event(
+            "setup_intent.succeeded",
+            {
+                "id": "seti_123",
+                "customer": "cus_123",
+                "payment_method": "pm_123",
+                "metadata": {
+                    "argon_subscription_id": str(self.subscription.id),
+                },
+            },
+        )
+        payment_method = {
+            "id": "pm_123",
+            "type": "card",
+            "customer": "cus_123",
+            "card": {
+                "brand": "visa",
+                "last4": "4242",
+                "exp_month": 12,
+                "exp_year": 2030,
+            },
+        }
+
+        StripeWebhookProcessor(
+            stripe_service=FakeStripeService(event, payment_method)
+        ).process(payload=b"payload", signature="signature")
+
+        stored = BillingPaymentMethod.objects.get(
+            provider_payment_method_id="pm_123"
+        )
+        self.assertEqual(stored.card_last4, "4242")
+        self.assertEqual(stored.card_brand, "visa")
