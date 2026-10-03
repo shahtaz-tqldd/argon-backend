@@ -19,6 +19,7 @@ workspace administrator.
 | GET | `/api/v1/subscriptions/payment-methods/?chatbot=<slug>` | List and synchronize saved card display details. |
 | POST | `/api/v1/subscriptions/payment-methods/setup/?chatbot=<slug>` | Create a SetupIntent for adding a card with Stripe Elements. |
 | POST | `/api/v1/subscriptions/payment-methods/default/?chatbot=<slug>` | Make a saved card the renewal default. |
+| PATCH/POST | `/api/v1/subscriptions/auto-renewal/?chatbot=<slug>` | Enable or disable Stripe automatic renewal. |
 | POST | `/api/v1/subscriptions/cancellation/?chatbot=<slug>` | Schedule or remove end-of-period cancellation. |
 | POST | `/api/v1/subscriptions/stripe/webhook/` | Receive signed Stripe events. |
 
@@ -80,6 +81,16 @@ returned `client_secret` with Stripe Elements, and then fetch
 to `payment-methods/default/`. The backend verifies that the method belongs to
 the chatbot's Stripe customer and updates both the customer invoice settings
 and the active subscription.
+
+Stripe performs recurring charges automatically. To disable renewal while
+keeping access through the paid period, send `{"enabled": false}` to
+`auto-renewal/`; send `{"enabled": true}` before the period ends to resume it.
+Internally this updates Stripe's `cancel_at_period_end` setting.
+
+Celery Beat runs `base.tasks.run_daily_maintenance` once per day at 00:15 in
+`CELERY_TIMEZONE`. It reconciles due Stripe subscriptions and missed billing
+webhooks, removes expired accounts, and produces a seven-day analytics snapshot
+on Mondays. It never charges Stripe subscriptions directly.
 
 ## Stripe configuration
 

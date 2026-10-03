@@ -725,11 +725,18 @@ def start_stripe_checkout(
         metadata = subscription.provider_metadata or {}
 
     idempotency_key = metadata.get("checkout_idempotency_key")
-    if metadata.get("checkout_url") and not metadata.get(
-        "checkout_client_secret"
+    if (
+        not metadata.get("checkout_session_id")
+        and (
+            metadata.get("checkout_error")
+            or (
+                metadata.get("checkout_url")
+                and not metadata.get("checkout_client_secret")
+            )
+        )
     ):
-        # A pre-embedded incomplete checkout cannot be reused because Stripe
-        # idempotency keys bind to the original hosted Session parameters.
+        # A failed or pre-embedded request may have bound its idempotency key
+        # to different parameters. Retry with a fresh key.
         idempotency_key = f"checkout-{uuid4()}"
     if not idempotency_key:
         idempotency_key = f"checkout-{uuid4()}"

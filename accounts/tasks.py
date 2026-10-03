@@ -42,8 +42,7 @@ def send_email_verification_otp(recipient_email, subject, message, html_message=
     return email.send(fail_silently=False)
 
 
-@shared_task
-def permanently_delete_expired_accounts():
+def delete_expired_accounts():
     cutoff = timezone.now() - timedelta(days=14)
     queryset = User.objects.filter(
         profile__status=AccountStatus.DEACTIVATED,
@@ -52,3 +51,8 @@ def permanently_delete_expired_accounts():
     user_count = queryset.count()
     queryset.delete()
     return user_count
+
+
+@shared_task
+def permanently_delete_expired_accounts():
+    return delete_expired_accounts()

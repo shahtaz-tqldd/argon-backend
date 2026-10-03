@@ -253,3 +253,9 @@ Before deployment, configure real secrets, external hosts and trusted origins, T
 ## Additional Documentation
 
 Focused implementation notes are available in [`docs/`](docs/), including widget and dashboard WebSocket behavior, chatbot setup, object storage, roles, and pricing. Module-specific notes also exist under `agent/`, `workspace/`, and `subscription/`.
+
+
+## Open ngrok for local testing command
+```
+ngrok http --domain=neat-crab-sharing.ngrok-free.app 8007
+```

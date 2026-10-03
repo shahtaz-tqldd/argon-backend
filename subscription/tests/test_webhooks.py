@@ -24,15 +24,54 @@ from workspace.models import Workspace
 
 
 class FakeStripeService:
-    def __init__(self, event, payment_method=None):
+    def __init__(self, event, payment_method=None, stripe_subscription=None):
         self.event = event
         self.payment_method = payment_method
+        self.stripe_subscription = stripe_subscription
 
     def construct_webhook_event(self, **kwargs):
         return self.event
 
     def retrieve_payment_method(self, *, payment_method_id):
         return self.payment_method
+
+    def retrieve_subscription(
+        self, *, subscription_id, expand_latest_invoice=False
+    ):
+        if self.stripe_subscription is not None:
+            return self.stripe_subscription
+        checkout = self.event["data"]["object"]
+        metadata = checkout.get("metadata") or {}
+        return {
+            "id": subscription_id,
+            "customer": checkout.get("customer", "cus_123"),
+            "status": "active",
+            "start_date": 1_800_000_000,
+            "cancel_at_period_end": False,
+            "metadata": metadata,
+            "items": {
+                "data": [
+                    {
+                        "current_period_start": 1_800_000_000,
+                        "current_period_end": 1_802_592_000,
+                    }
+                ]
+            },
+            "latest_invoice": {
+                "id": "in_checkout_123",
+                "status": "paid",
+                "customer": checkout.get("customer", "cus_123"),
+                "currency": "usd",
+                "amount_paid": 1900,
+                "status_transitions": {"paid_at": 1_800_000_000},
+                "parent": {
+                    "subscription_details": {
+                        "subscription": subscription_id,
+                        "metadata": metadata,
+                    }
+                },
+            },
+        }
 
 
 class StripeWebhookProcessorTests(TestCase):
@@ -105,6 +144,15 @@ class StripeWebhookProcessorTests(TestCase):
         self.assertTrue(second_duplicate)
         self.assertEqual(self.subscription.status, SubscriptionStatus.ACTIVE)
         self.assertEqual(self.subscription.provider_subscription_id, "sub_123")
+        self.assertIsNotNone(self.subscription.current_period_start)
+        self.assertIsNotNone(self.subscription.current_period_end)
+        self.assertEqual(
+            self.subscription.next_billing_at,
+            self.subscription.current_period_end,
+        )
+        self.assertTrue(
+            Payment.objects.filter(provider_reference="in_checkout_123").exists()
+        )
         self.assertEqual(
             webhook_event.processing_status,
             WebhookProcessingStatus.PROCESSED,

@@ -151,10 +151,7 @@ class StripeBillingService:
             "client_reference_id": str(subscription.id),
             "line_items": line_items,
             "metadata": metadata,
-            "subscription_data": {
-                "metadata": metadata,
-                "payment_settings": {"save_default_payment_method": "on_subscription"},
-            },
+            "subscription_data": {"metadata": metadata},
         }
         if promotion_code_id:
             params["discounts"] = [{"promotion_code": promotion_code_id}]
@@ -486,11 +483,19 @@ class StripeBillingService:
             ) from exc
         return stripe_object_to_dict(customer)
 
-    def retrieve_subscription(self, *, subscription_id):
+    def retrieve_subscription(
+        self, *, subscription_id, expand_latest_invoice=False
+    ):
         try:
-            subscription = self._client().v1.subscriptions.retrieve(
-                subscription_id
-            )
+            params = {"expand": ["latest_invoice"]} if expand_latest_invoice else None
+            if params is None:
+                subscription = self._client().v1.subscriptions.retrieve(
+                    subscription_id
+                )
+            else:
+                subscription = self._client().v1.subscriptions.retrieve(
+                    subscription_id, params
+                )
         except stripe.StripeError as exc:
             logger.exception("Stripe subscription retrieval failed")
             raise StripeServiceError(

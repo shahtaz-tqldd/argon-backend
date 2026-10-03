@@ -1,5 +1,7 @@
 from datetime import timedelta
 
+from celery.schedules import crontab
+
 from app.settings.env import (
     PROJECT_DIR,
     env,
@@ -89,6 +91,7 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = env("CELERY_TIMEZONE", "UTC")
 CELERY_RESULT_EXTENDED = True
 CELERY_IMPORTS = (
+    "base.tasks",
     "base.socket.tasks",
     "accounts.tasks",
     "chat.tasks",
@@ -99,9 +102,9 @@ CELERY_BEAT_SCHEDULE = {
         "task": "base.socket.tasks.sweep_presence",
         "schedule": 15.0,
     },
-    "permanently-delete-expired-accounts-daily": {
-        "task": "accounts.tasks.permanently_delete_expired_accounts",
-        "schedule": 60 * 60 * 24,
+    "daily-platform-maintenance": {
+        "task": "base.tasks.run_daily_maintenance",
+        "schedule": crontab(hour=0, minute=15),
     },
 }
 

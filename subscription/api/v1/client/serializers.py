@@ -128,6 +128,10 @@ class SubscriptionCancellationSerializer(serializers.Serializer):
     cancel_at_period_end = serializers.BooleanField(default=True)
 
 
+class AutoRenewalSerializer(serializers.Serializer):
+    enabled = serializers.BooleanField()
+
+
 class BillingPaymentMethodClientSerializer(serializers.ModelSerializer):
     class Meta:
         model = BillingPaymentMethod
@@ -157,6 +161,7 @@ class ChatbotSubscriptionClientSerializer(serializers.ModelSerializer):
     pending_coupon = serializers.SerializerMethodField()
     coupon_redemption = serializers.SerializerMethodField()
     default_payment_method = serializers.SerializerMethodField()
+    auto_renewal_enabled = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatbotSubscription
@@ -174,6 +179,7 @@ class ChatbotSubscriptionClientSerializer(serializers.ModelSerializer):
             "current_period_end",
             "next_billing_at",
             "cancel_at_period_end",
+            "auto_renewal_enabled",
             "canceled_at",
             "ended_at",
             "pending_coupon",
@@ -207,6 +213,13 @@ class ChatbotSubscriptionClientSerializer(serializers.ModelSerializer):
         if payment_method is None:
             return None
         return BillingPaymentMethodClientSerializer(payment_method).data
+
+    def get_auto_renewal_enabled(self, obj):
+        return bool(
+            obj.provider == PaymentProvider.STRIPE
+            and obj.provider_subscription_id
+            and not obj.cancel_at_period_end
+        )
 
 
 class PaymentClientSerializer(serializers.ModelSerializer):

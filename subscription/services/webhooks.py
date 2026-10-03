@@ -180,6 +180,22 @@ class StripeWebhookProcessor:
     def __init__(self, *, stripe_service=None):
         self.stripe_service = stripe_service or StripeBillingService()
 
+    def reconcile_subscription(self, *, provider_subscription_id):
+        """Synchronize a subscription and its latest paid invoice from Stripe."""
+        stripe_subscription = self.stripe_service.retrieve_subscription(
+            subscription_id=provider_subscription_id,
+            expand_latest_invoice=True,
+        )
+        with transaction.atomic():
+            self._sync_subscription(stripe_subscription)
+            latest_invoice = stripe_subscription.get("latest_invoice")
+            if (
+                isinstance(latest_invoice, dict)
+                and latest_invoice.get("status") == "paid"
+            ):
+                return self._sync_invoice(latest_invoice, "invoice.paid")
+        return None
+
     def process(self, *, payload, signature):
         event = self.stripe_service.construct_webhook_event(
             payload=payload,
@@ -329,6 +345,13 @@ class StripeWebhookProcessor:
             and subscription.status == SubscriptionStatus.ACTIVE
         ):
             _apply_subscription_capacity(subscription)
+        if (
+            payment_status in {"paid", "no_payment_required"}
+            and provider_subscription_id
+        ):
+            return self.reconcile_subscription(
+                provider_subscription_id=provider_subscription_id
+            )
         return None
 
     def _checkout_failed(self, checkout):

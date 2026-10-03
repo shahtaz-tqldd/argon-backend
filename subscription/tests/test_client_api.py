@@ -1,8 +1,10 @@
+from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -660,6 +662,44 @@ class SubscriptionClientAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(BillingPaymentMethod.objects.exists())
+
+    @patch(
+        "subscription.api.v1.client.views.StripeBillingService.set_cancel_at_period_end"
+    )
+    def test_chatbot_admin_can_toggle_automatic_renewal(self, set_cancellation):
+        subscription = self.create_active_stripe_subscription()
+        subscription.current_period_end = timezone.now() + timedelta(days=30)
+        subscription.next_billing_at = subscription.current_period_end
+        subscription.save(
+            update_fields=[
+                "current_period_end",
+                "next_billing_at",
+                "updated_at",
+            ]
+        )
+        set_cancellation.side_effect = [
+            {"cancel_at_period_end": True},
+            {"cancel_at_period_end": False},
+        ]
+        url = f'{reverse("stripe-auto-renewal")}?chatbot={self.chatbot.slug}'
+
+        disabled = self.client.patch(url, {"enabled": False}, format="json")
+        enabled = self.client.patch(url, {"enabled": True}, format="json")
+
+        self.assertEqual(disabled.status_code, status.HTTP_200_OK)
+        self.assertFalse(disabled.data["data"]["auto_renewal_enabled"])
+        self.assertIsNone(disabled.data["data"]["next_billing_at"])
+        self.assertEqual(enabled.status_code, status.HTTP_200_OK)
+        self.assertTrue(enabled.data["data"]["auto_renewal_enabled"])
+        self.assertIsNotNone(enabled.data["data"]["next_billing_at"])
+        self.assertEqual(
+            set_cancellation.call_args_list[0].kwargs,
+            {"subscription_id": "sub_123", "cancel": True},
+        )
+        self.assertEqual(
+            set_cancellation.call_args_list[1].kwargs,
+            {"subscription_id": "sub_123", "cancel": False},
+        )
 
     def test_non_admin_chatbot_member_cannot_checkout(self):
         member = get_user_model().objects.create_user(

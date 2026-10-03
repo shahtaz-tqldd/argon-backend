@@ -105,6 +105,7 @@ class StripeBillingServiceTests(SimpleTestCase):
             params["subscription_data"]["metadata"]["argon_subscription_id"],
             str(subscription.id),
         )
+        self.assertNotIn("payment_settings", params["subscription_data"])
         self.assertEqual(options, {"idempotency_key": "checkout-key"})
 
     @patch("subscription.services.stripe.stripe.StripeClient")
@@ -126,6 +127,28 @@ class StripeBillingServiceTests(SimpleTestCase):
 
         self.assertEqual(result["status"], "expired")
         retrieve.assert_called_once_with("cs_test_123")
+
+    @patch("subscription.services.stripe.stripe.StripeClient")
+    def test_subscription_can_expand_latest_invoice_for_reconciliation(
+        self, client_class
+    ):
+        stripe_subscription = Mock()
+        stripe_subscription.to_dict.return_value = {
+            "id": "sub_123",
+            "latest_invoice": {"id": "in_123", "status": "paid"},
+        }
+        retrieve = client_class.return_value.v1.subscriptions.retrieve
+        retrieve.return_value = stripe_subscription
+
+        result = StripeBillingService().retrieve_subscription(
+            subscription_id="sub_123",
+            expand_latest_invoice=True,
+        )
+
+        self.assertEqual(result["latest_invoice"]["id"], "in_123")
+        retrieve.assert_called_once_with(
+            "sub_123", {"expand": ["latest_invoice"]}
+        )
 
     @patch("subscription.services.stripe.stripe.StripeClient")
     def test_active_subscription_plan_change_uses_inline_price_data(

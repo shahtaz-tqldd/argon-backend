@@ -15,6 +15,7 @@ from app.utils.response import APIResponse
 from chatbot.models import Chatbot
 from coupon.services import CouponNotEligibleError, CouponNotFoundError
 from subscription.api.v1.client.serializers import (
+    AutoRenewalSerializer,
     BillingPaymentMethodClientSerializer,
     ChatbotSubscriptionClientSerializer,
     DefaultPaymentMethodSerializer,
@@ -66,6 +67,33 @@ def _available_plan_queryset():
             to_attr="available_prices",
         )
     )
+
+
+def _reconcile_missing_stripe_billing(subscription):
+    if (
+        subscription is None
+        or subscription.provider != PaymentProvider.STRIPE
+        or not subscription.provider_subscription_id
+    ):
+        return subscription
+    missing_period = (
+        subscription.current_period_start is None
+        or subscription.current_period_end is None
+    )
+    missing_payment = not subscription.payments.exists()
+    if not missing_period and not missing_payment:
+        return subscription
+    try:
+        StripeWebhookProcessor().reconcile_subscription(
+            provider_subscription_id=subscription.provider_subscription_id
+        )
+        subscription.refresh_from_db()
+    except StripeServiceError:
+        logger.exception(
+            "Missing Stripe billing data could not be reconciled for subscription %s",
+            subscription.id,
+        )
+    return subscription
 
 
 class SubscriptionChatbotMixin:
@@ -241,6 +269,7 @@ class CurrentSubscriptionAPIView(SubscriptionChatbotMixin, GenericAPIView):
 
     def get(self, request, *args, **kwargs):
         subscription = get_open_subscription(self.get_chatbot())
+        subscription = _reconcile_missing_stripe_billing(subscription)
         data = self.get_serializer(subscription).data if subscription else None
         return APIResponse.success(
             data={"subscription": data},
@@ -255,8 +284,10 @@ class SubscriptionPaymentListAPIView(SubscriptionChatbotMixin, GenericAPIView):
     chatbot_admin_only = True
 
     def get(self, request, *args, **kwargs):
+        chatbot = self.get_chatbot()
+        _reconcile_missing_stripe_billing(get_open_subscription(chatbot))
         queryset = Payment.objects.filter(
-            subscription__chatbot=self.get_chatbot(),
+            subscription__chatbot=chatbot,
         ).select_related("subscription", "plan_price")
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request, view=self)
@@ -459,6 +490,70 @@ class StripeDefaultPaymentMethodAPIView(
             data=BillingPaymentMethodClientSerializer(record).data,
             message="Default payment method updated successfully.",
         )
+
+
+class StripeAutoRenewalAPIView(SubscriptionChatbotMixin, GenericAPIView):
+    permission_classes = [IsChatbotUser]
+    serializer_class = AutoRenewalSerializer
+    chatbot_admin_only = True
+
+    def patch(self, request, *args, **kwargs):
+        subscription = get_open_subscription(self.get_chatbot())
+        if (
+            subscription is None
+            or subscription.provider != PaymentProvider.STRIPE
+            or not subscription.provider_subscription_id
+        ):
+            return APIResponse.error(
+                message="This chatbot has no manageable Stripe subscription.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        enabled = serializer.validated_data["enabled"]
+        try:
+            stripe_subscription = StripeBillingService().set_cancel_at_period_end(
+                subscription_id=subscription.provider_subscription_id,
+                cancel=not enabled,
+            )
+        except StripeConfigurationError as exc:
+            return APIResponse.error(
+                message=str(exc), status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        except StripeServiceError as exc:
+            return APIResponse.error(
+                message=str(exc), status=status.HTTP_502_BAD_GATEWAY
+            )
+
+        subscription.cancel_at_period_end = bool(
+            stripe_subscription.get("cancel_at_period_end", not enabled)
+        )
+        subscription.next_billing_at = (
+            None
+            if subscription.cancel_at_period_end
+            else subscription.current_period_end
+        )
+        subscription.updated_by = request.user
+        subscription.save(
+            update_fields=[
+                "cancel_at_period_end",
+                "next_billing_at",
+                "updated_by",
+                "updated_at",
+            ]
+        )
+        return APIResponse.success(
+            data=ChatbotSubscriptionClientSerializer(subscription).data,
+            message=(
+                "Automatic renewal enabled successfully."
+                if not subscription.cancel_at_period_end
+                else "Automatic renewal disabled; access continues until period end."
+            ),
+        )
+
+    def post(self, request, *args, **kwargs):
+        return self.patch(request, *args, **kwargs)
 
 
 class SubscriptionCancellationAPIView(SubscriptionChatbotMixin, GenericAPIView):
