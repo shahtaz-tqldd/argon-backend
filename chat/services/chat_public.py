@@ -4,7 +4,12 @@ from django.db.models import Count, OuterRef, Q, Subquery
 from django.http import Http404
 
 from chat.models import ChatbotBlockedVisitor, ChatMessage, ChatSession
+from chat.services.attachments import (
+    delete_message_attachment_uploads,
+    upload_message_attachments,
+)
 from chat.services.events import publish_session_event
+from chat.services.messages import create_chat_message
 from chat.services.visitor_tokens import decode_conversation_token
 from chat.utils.choices import (
     ChatMessageSenderType,
@@ -267,43 +272,65 @@ def get_visitor_chat_session(chatbot, session_id, conversation_token):
     )
 
 
-@transaction.atomic
 def send_visitor_message(
     chat_session,
     *,
     content,
     metadata=None,
     external_id="",
+    attachments=None,
 ):
-    chat_session = ChatSession.objects.select_for_update().get(
-        pk=chat_session.pk,
-        is_test=False,
+    # Uploads run before the row lock so S3 latency never extends the
+    # transaction; anything the database rejects — including a duplicate
+    # client_message_id — is deleted again.
+    uploads = (
+        upload_message_attachments(
+            attachments,
+            chatbot_id=chat_session.chatbot_id,
+        )
+        if attachments
+        else []
     )
-    if chat_session.status not in RESUMABLE_SESSION_STATUSES:
-        raise ValidationError("Cannot send a message to an ended conversation.")
+    try:
+        with transaction.atomic():
+            chat_session = ChatSession.objects.select_for_update().get(
+                pk=chat_session.pk,
+                is_test=False,
+            )
+            if chat_session.status not in RESUMABLE_SESSION_STATUSES:
+                raise ValidationError(
+                    "Cannot send a message to an ended conversation."
+                )
 
-    if ChatbotBlockedVisitor.objects.filter(
-        chatbot_id=chat_session.chatbot_id,
-        visitor_id=chat_session.visitor_id,
-    ).exists():
-        raise ValidationError("This visitor has been blocked from sending messages.")
+            if ChatbotBlockedVisitor.objects.filter(
+                chatbot_id=chat_session.chatbot_id,
+                visitor_id=chat_session.visitor_id,
+            ).exists():
+                raise ValidationError(
+                    "This visitor has been blocked from sending messages."
+                )
 
-    if external_id:
-        existing = ChatMessage.objects.filter(
-            chat_session=chat_session,
-            external_id=external_id,
-            sender_type=ChatMessageSenderType.VISITOR,
-        ).first()
-        if existing is not None:
-            return existing, False
-
-    message = ChatMessage(
-        chat_session=chat_session,
-        sender_type=ChatMessageSenderType.VISITOR,
-        content=content,
-        metadata=metadata or {},
-        external_id=external_id,
-    )
-    message.full_clean()
-    message.save()
-    return message, True
+            duplicate = None
+            if external_id:
+                duplicate = ChatMessage.objects.filter(
+                    chat_session=chat_session,
+                    external_id=external_id,
+                    sender_type=ChatMessageSenderType.VISITOR,
+                ).first()
+            if duplicate is None:
+                message = create_chat_message(
+                    chat_session,
+                    sender_type=ChatMessageSenderType.VISITOR,
+                    content=content,
+                    metadata=metadata,
+                    external_id=external_id,
+                    attachments=uploads,
+                )
+                return message, True
+            message = duplicate
+    except Exception:
+        delete_message_attachment_uploads(uploads)
+        raise
+    # A duplicate keeps the original attachments; drop the fresh uploads.
+    delete_message_attachment_uploads(uploads)
+    return message, False

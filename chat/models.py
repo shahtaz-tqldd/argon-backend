@@ -404,8 +404,11 @@ class ChatMessage(BaseMinModel):
         # Attachments are separate rows FK'd to this message, so they can
         # only exist once this row has a pk. On update, we can genuinely
         # check for at least one attachment. On creation, there's nothing
-        # to check yet. Structured timeline events may instead carry an
-        # event_type and their complete visitor-facing payload in metadata.
+        # to check yet; services mark attachment-only messages with
+        # ``_pending_attachments`` before calling full_clean. Structured
+        # timeline events may instead carry an event_type and their
+        # complete visitor-facing payload in metadata.
+        pending_attachments = getattr(self, "_pending_attachments", None)
         if not self._state.adding:
             has_attachments = self.attachments.exists()
             if (
@@ -421,7 +424,7 @@ class ChatMessage(BaseMinModel):
                         )
                     }
                 )
-        elif not has_content and not has_event_metadata:
+        elif not has_content and not has_event_metadata and not pending_attachments:
             raise ValidationError(
                 {"content": (
                     "Message must have content, event metadata, or have attachments "

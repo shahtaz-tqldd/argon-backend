@@ -1,5 +1,9 @@
 from rest_framework import serializers
 
+from chat.api.v1.attachments import (
+    message_attachment_field,
+    validate_message_payload,
+)
 from chat.models import (
     ChatMessage,
     ChatMessageAttachment,
@@ -392,13 +396,18 @@ class ForceReturnToAISerializer(serializers.Serializer):
 
 
 class AgentMessageCreateSerializer(serializers.Serializer):
-    content = serializers.CharField(trim_whitespace=False, max_length=10000)
+    content = serializers.CharField(
+        trim_whitespace=False,
+        max_length=10000,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    attachments = message_attachment_field()
     metadata = serializers.JSONField(required=False, default=dict)
 
-    def validate_content(self, value):
-        if not value.strip():
-            raise serializers.ValidationError("Message content cannot be blank.")
-        return value
+    def validate(self, attrs):
+        return validate_message_payload(attrs)
 
     def validate_metadata(self, value):
         if not isinstance(value, dict):

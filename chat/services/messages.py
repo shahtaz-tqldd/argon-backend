@@ -4,10 +4,27 @@ from django.db import transaction
 from chat.models import (
     ChatbotBlockedVisitor,
     ChatMessage,
+    ChatMessageAttachment,
     ChatSession,
     ChatSessionTakeover,
 )
+from chat.services.attachments import (
+    delete_message_attachment_uploads,
+    upload_message_attachments,
+)
 from chat.utils.choices import ChatMessageSenderType, ChatSessionStatus
+
+
+ATTACHMENT_ROW_FIELDS = frozenset(
+    (
+        "attachment_type",
+        "file_url",
+        "file_name",
+        "mime_type",
+        "file_size",
+        "sort_order",
+    )
+)
 
 
 def serialize_message_event(message):
@@ -29,7 +46,19 @@ def serialize_message_event(message):
         "status": message.status,
         "external_id": message.external_id,
         "metadata": message.metadata,
-        "attachments": [],
+        "attachments": [
+            {
+                "id": str(attachment.id),
+                "attachment_type": attachment.attachment_type,
+                "file_url": attachment.file_url,
+                "file_name": attachment.file_name,
+                "mime_type": attachment.mime_type,
+                "file_size": attachment.file_size,
+                "duration_ms": attachment.duration_ms,
+                "sort_order": attachment.sort_order,
+            }
+            for attachment in message.attachments.all()
+        ],
         "created_at": message.created_at.isoformat(),
         "updated_at": message.updated_at.isoformat(),
     }
@@ -80,44 +109,107 @@ def create_visitor_takeover_message(
     )
 
 
-def send_agent_message(chat_session, agent, *, content, metadata=None):
-    with transaction.atomic():
-        chat_session = ChatSession.objects.select_for_update().get(
-            pk=chat_session.pk
-        )
-        if chat_session.status in {
-            ChatSessionStatus.RESOLVED,
-            ChatSessionStatus.CLOSED,
-        }:
-            raise ValidationError("Cannot reply to a resolved or closed session.")
+def create_chat_message(
+    chat_session,
+    *,
+    sender_type,
+    content,
+    metadata=None,
+    external_id="",
+    sender=None,
+    attachments=None,
+):
+    """Create a message and its attachment rows inside the caller's transaction.
 
-        active_takeover = ChatSessionTakeover.objects.filter(
-            chat_session=chat_session,
-            agent=agent,
-            agent__is_active=True,
-            agent__user__is_active=True,
-            released_at__isnull=True,
-        ).first()
-        if active_takeover is None:
-            raise ValidationError(
-                "You must be the active takeover agent before replying."
+    ``attachments`` are payloads from upload_message_attachments; their R2
+    objects must be deleted by the caller when this raises.
+    """
+
+    message = ChatMessage(
+        chat_session=chat_session,
+        sender_type=sender_type,
+        sender=sender,
+        content=content,
+        metadata=metadata or {},
+        external_id=external_id,
+    )
+    if attachments:
+        message._pending_attachments = attachments
+    message.full_clean()
+    message.save()
+    if attachments:
+        ChatMessageAttachment.objects.bulk_create(
+            ChatMessageAttachment(
+                chat_message=message,
+                **{
+                    field: value
+                    for field, value in attachment.items()
+                    if field in ATTACHMENT_ROW_FIELDS
+                },
             )
+            for attachment in attachments
+        )
+    return message
 
-        if ChatbotBlockedVisitor.objects.filter(
+
+def send_agent_message(
+    chat_session,
+    agent,
+    *,
+    content,
+    metadata=None,
+    attachments=None,
+):
+    # Uploads run before the row lock so S3 latency never extends the
+    # transaction; anything the database rejects is deleted again.
+    uploads = (
+        upload_message_attachments(
+            attachments,
             chatbot_id=chat_session.chatbot_id,
-            visitor_id=chat_session.visitor_id,
-        ).exists():
-            raise ValidationError(
-                "Cannot send a message to a blocked visitor."
-            )
-
-        message = ChatMessage(
-            chat_session=chat_session,
-            sender_type=ChatMessageSenderType.AGENT,
-            sender=agent,
-            content=content,
-            metadata=metadata or {},
         )
-        message.full_clean()
-        message.save()
+        if attachments
+        else []
+    )
+    try:
+        with transaction.atomic():
+            chat_session = ChatSession.objects.select_for_update().get(
+                pk=chat_session.pk
+            )
+            if chat_session.status in {
+                ChatSessionStatus.RESOLVED,
+                ChatSessionStatus.CLOSED,
+            }:
+                raise ValidationError("Cannot reply to a resolved or closed session.")
+
+            active_takeover = ChatSessionTakeover.objects.filter(
+                chat_session=chat_session,
+                agent=agent,
+                agent__is_active=True,
+                agent__user__is_active=True,
+                released_at__isnull=True,
+            ).first()
+            if active_takeover is None:
+                raise ValidationError(
+                    "You must be the active takeover agent before replying."
+                )
+
+            if ChatbotBlockedVisitor.objects.filter(
+                chatbot_id=chat_session.chatbot_id,
+                visitor_id=chat_session.visitor_id,
+            ).exists():
+                raise ValidationError(
+                    "Cannot send a message to a blocked visitor."
+                )
+
+            message = create_chat_message(
+                chat_session,
+                sender_type=ChatMessageSenderType.AGENT,
+                sender=agent,
+                content=content,
+                metadata=metadata,
+                attachments=uploads,
+            )
+    except Exception:
+        delete_message_attachment_uploads(uploads)
+        raise
     return message

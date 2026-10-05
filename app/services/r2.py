@@ -112,6 +112,32 @@ def upload_image(file_obj, folder=None, public_id=None, *, storage=None):
     return {"url": storage.public_url(key), "key": key, "public_id": key}
 
 
+def upload_file(file_obj, folder=None, public_id=None, *, storage=None):
+    """Upload a file to R2 unchanged and return its permanent URL/key."""
+
+    suffix = Path(getattr(file_obj, "name", "file")).suffix.lower()
+    suffix = suffix if re.fullmatch(r"\.[a-z0-9]{1,10}", suffix) else ""
+    object_name = _safe_object_name(public_id or uuid4().hex)
+    if suffix and not object_name.lower().endswith(suffix):
+        object_name = f"{object_name}{suffix}"
+
+    upload_folder = (folder or settings.R2_FILES_PREFIX).strip("/")
+    key = f"{upload_folder}/{object_name}" if upload_folder else object_name
+    content_type = (
+        getattr(file_obj, "content_type", None)
+        or mimetypes.guess_type(key)[0]
+        or "application/octet-stream"
+    )
+    storage = storage or R2Storage()
+    storage.upload(file_obj, key=key, content_type=content_type)
+    return {
+        "url": storage.public_url(key),
+        "key": key,
+        "public_id": key,
+        "content_type": content_type,
+    }
+
+
 def delete_image(public_id=None, image_url=None, *, storage=None):
     """Delete an R2 image by object key or by one of this app's public URLs."""
 

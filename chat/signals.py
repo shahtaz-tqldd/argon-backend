@@ -11,14 +11,15 @@ from chat.services.messages import serialize_message_event
 def publish_new_chat_message(sender, instance, created, **kwargs):
     if not created:
         return
-    event_data = serialize_message_event(instance)
     session_id = instance.chat_session_id
     chatbot_id = instance.chat_session.chatbot_id
+    # Serialize on commit so attachment rows created in the same
+    # transaction as the message are part of the published payload.
     transaction.on_commit(
         lambda: publish_session_event(
             session_id,
             chatbot_id,
             "message.created",
-            event_data,
+            serialize_message_event(instance),
         )
     )

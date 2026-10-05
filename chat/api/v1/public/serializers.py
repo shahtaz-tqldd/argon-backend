@@ -1,5 +1,9 @@
 from rest_framework import serializers
 
+from chat.api.v1.attachments import (
+    message_attachment_field,
+    validate_message_payload,
+)
 from chat.models import ChatMessage, ChatMessageAttachment, ChatSession
 from chat.services.visitor_tokens import issue_conversation_token
 from chat.utils.choices import ChatMessageSenderType
@@ -129,7 +133,14 @@ class VisitorMessageListQuerySerializer(VisitorSessionQuerySerializer):
 
 
 class VisitorMessageCreateSerializer(serializers.Serializer):
-    content = serializers.CharField(trim_whitespace=False, max_length=10000)
+    content = serializers.CharField(
+        trim_whitespace=False,
+        max_length=10000,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    attachments = message_attachment_field()
     client_message_id = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -137,10 +148,8 @@ class VisitorMessageCreateSerializer(serializers.Serializer):
     )
     metadata = serializers.JSONField(required=False, default=dict)
 
-    def validate_content(self, value):
-        if not value.strip():
-            raise serializers.ValidationError("Message content cannot be blank.")
-        return value
+    def validate(self, attrs):
+        return validate_message_payload(attrs)
 
     def validate_metadata(self, value):
         if not isinstance(value, dict):

@@ -4,8 +4,14 @@ from unittest.mock import Mock, patch
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, override_settings
 
-from app.services.r2 import R2Storage, delete_image, extract_key, upload_image
-from app.base.signals import (
+from app.services.r2 import (
+    R2Storage,
+    delete_image,
+    extract_key,
+    upload_file,
+    upload_image,
+)
+from base.signals import (
     delete_private_knowledge_file_with_record,
     delete_public_asset_with_record,
 )
@@ -50,6 +56,33 @@ class R2StorageTests(SimpleTestCase):
         self.assertIn("immutable", extra_args["CacheControl"])
         self.assertNotIn("ACL", extra_args)
 
+    def test_public_file_upload_keeps_content_and_returns_r2_url(self):
+        document = SimpleUploadedFile(
+            "report.pdf",
+            b"%PDF-1.4 fake body",
+            content_type="application/pdf",
+        )
+
+        result = upload_file(
+            document,
+            folder="files/chat",
+            public_id="attachment-1",
+            storage=self.storage,
+        )
+
+        self.assertEqual(result["key"], "files/chat/attachment-1.pdf")
+        self.assertEqual(result["content_type"], "application/pdf")
+        self.assertEqual(
+            result["url"],
+            "https://assets.example.com/files/chat/attachment-1.pdf",
+        )
+        self.client.upload_fileobj.assert_called_once_with(
+            document,
+            "argon-chatbot",
+            "files/chat/attachment-1.pdf",
+            ExtraArgs={"ContentType": "application/pdf"},
+        )
+
     def test_delete_accepts_only_urls_from_the_configured_public_domain(self):
         self.assertEqual(
             extract_key(
@@ -70,7 +103,7 @@ class R2StorageTests(SimpleTestCase):
             Key="images/users/avatar.png",
         )
 
-    @patch("app.base.signals.schedule_delete_image")
+    @patch("base.signals.schedule_delete_image")
     def test_record_delete_signal_schedules_its_public_asset(self, schedule_delete):
         sender = SimpleNamespace(
             _meta=SimpleNamespace(label_lower="workspace.workspace")
@@ -83,8 +116,8 @@ class R2StorageTests(SimpleTestCase):
 
         schedule_delete.assert_called_once_with(image_url=instance.logo)
 
-    @patch("app.base.signals.transaction.on_commit", side_effect=lambda callback: callback())
-    @patch("app.base.signals.R2Storage")
+    @patch("base.signals.transaction.on_commit", side_effect=lambda callback: callback())
+    @patch("base.signals.R2Storage")
     def test_record_delete_signal_removes_private_knowledge_file(
         self,
         storage_class,

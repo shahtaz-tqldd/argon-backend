@@ -278,6 +278,7 @@ class PublicVisitorMessageCreateAPIView(GenericAPIView):
                     "client_message_id",
                     "",
                 ),
+                attachments=serializer.validated_data.get("attachments"),
             )
         except DjangoValidationError as exc:
             return APIResponse.error(
