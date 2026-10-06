@@ -6,6 +6,7 @@ from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny
 
+from app.utils.http import get_client_ip
 from app.utils.response import APIResponse
 from chatbot.api.v1.public.serializers import (
     PublicChatbotSerializer,
@@ -14,6 +15,7 @@ from chatbot.api.v1.public.serializers import (
     PublicVisitorSerializer,
 )
 from chat.services.chat_public import (
+    build_public_visitor_details,
     create_public_visitor,
     get_public_visitor_details,
 )
@@ -103,6 +105,7 @@ class PublicVisitorCreateAPIView(GenericAPIView):
                 create_public_visitor(
                     chatbot,
                     visitor_id,
+                    ip_address=get_client_ip(request),
                     **serializer.validated_data,
                 )
             )
@@ -130,13 +133,13 @@ class PublicVisitorCreateAPIView(GenericAPIView):
             f"/ws/widget/chatbots/{public_key}/"
             f"conversations/{chat_session.id}/"
         )
-        visitor = get_public_visitor_details(chatbot, visitor_id)
+        visitor = build_public_visitor_details(chat_session.visitor)
         return APIResponse.success(
             data={
                 "visitor": PublicVisitorSerializer(visitor).data,
                 "session": {
                     "id": str(chat_session.id),
-                    "visitor_id": chat_session.visitor_id,
+                    "visitor_id": visitor["visitor_id"],
                     "status": chat_session.status,
                     "ai_enabled": is_ai_reply_enabled(
                         chat_session,

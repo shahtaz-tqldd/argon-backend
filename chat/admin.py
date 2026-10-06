@@ -3,22 +3,12 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
 from chat.models import (
-    ChatbotBlockedVisitor,
     ChatMessage,
     ChatMessageAttachment,
     ChatSession,
     ChatSessionTakeover,
     ChatSessionTransfer,
 )
-
-
-@admin.register(ChatbotBlockedVisitor)
-class ChatbotBlockedVisitorAdmin(admin.ModelAdmin):
-    list_display = ("visitor_id", "chatbot", "blocked_by", "created_at")
-    list_filter = ("chatbot", "created_at")
-    search_fields = ("visitor_id", "chatbot__chatbot_name", "blocked_by__user__email")
-    readonly_fields = ("created_at", "updated_at")
-    autocomplete_fields = ("chatbot", "blocked_by")
 
 
 class ChatMessageAttachmentInline(admin.TabularInline):
@@ -122,9 +112,10 @@ class ChatSessionAdmin(admin.ModelAdmin):
         ("assigned_to", admin.EmptyFieldListFilter),
         "last_activity_at",
     )
+    list_select_related = ("lead", "visitor")
     search_fields = (
         "id",
-        "visitor_id",
+        "visitor__visitor_id",
         "external_thread_id",
         "lead__collected_fields__name",
         "lead__collected_fields__email",
@@ -136,7 +127,7 @@ class ChatSessionAdmin(admin.ModelAdmin):
     )
     readonly_fields = ("last_activity_at", "created_at", "updated_at")
     date_hierarchy = "last_activity_at"
-    autocomplete_fields = ("lead", "assigned_to")
+    autocomplete_fields = ("lead", "assigned_to", "visitor")
     inlines = [ChatSessionTakeoverInline, ChatMessageInline]
 
     fieldsets = (
@@ -149,7 +140,7 @@ class ChatSessionAdmin(admin.ModelAdmin):
                     "channel",
                     "status",
                     "lead",
-                    "visitor_id",
+                    "visitor",
                     "external_thread_id",
                 ),
             },
@@ -182,7 +173,6 @@ class ChatSessionAdmin(admin.ModelAdmin):
             {
                 "classes": ("collapse",),
                 "fields": (
-                    "user_metadata",
                     "metadata",
                 ),
             },
@@ -204,11 +194,12 @@ class ChatSessionAdmin(admin.ModelAdmin):
     def visitor_or_lead(self, obj):
         if obj.lead:
             return format_html("<strong>{}</strong>", str(obj.lead))
-        if obj.visitor_id:
+        if obj.visitor:
+            visitor_id = obj.visitor.visitor_id
             truncated = (
-                (obj.visitor_id[:16] + "...")
-                if len(obj.visitor_id) > 16
-                else obj.visitor_id
+                (visitor_id[:16] + "...")
+                if len(visitor_id) > 16
+                else visitor_id
             )
             return format_html("<span style='color: #6c757d;'>{}</span>", truncated)
         return mark_safe("<span style='color: #adb5bd;'>Anonymous</span>")

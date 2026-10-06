@@ -11,16 +11,16 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from agent.helpers.global_tools import _request_human_escalation
-from chatbot.models import Chatbot, ChatbotUser
+from chatbot.models import Chatbot, ChatbotUser, ChatbotVisitor
 from chatbot.utils.choices import ChatbotPermissionTypes, ChatbotRoleTypes
 from chat.models import (
-    ChatbotBlockedVisitor,
     ChatMessage,
     ChatSession,
     ChatSessionTakeover,
     ChatSessionTransfer,
 )
 from chat.services.chat_public import send_visitor_message
+from chatbot.services.visitors import block_visitor
 from chat.utils.choices import (
     ChatMessageSenderType,
     ChatMessageStatus,
@@ -75,12 +75,16 @@ class ChatSessionClientAPITests(APITestCase):
         session = ChatSession.objects.create(
             chatbot=self.chatbot,
             lead=lead,
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="minimal-structured-visitor",
+                metadata={
+                    "name": "Metadata Name",
+                    "email": "visitor@example.com",
+                    "browser": "Firefox",
+                },
+            ),
             ai_enabled=False,
-            user_metadata={
-                "name": "Metadata Name",
-                "email": "visitor@example.com",
-                "browser": "Firefox",
-            },
             metadata={"Ref": "metadata-ref"},
         )
         ChatMessage.objects.create(
@@ -149,7 +153,11 @@ class ChatSessionClientAPITests(APITestCase):
         agent_session = ChatSession.objects.create(chatbot=self.chatbot)
         named_visitor_session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            user_metadata={"name": "Jamie"},
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="named-visitor",
+                metadata={"name": "Jamie"},
+            ),
         )
         anonymous_visitor_session = ChatSession.objects.create(chatbot=self.chatbot)
         system_session = ChatSession.objects.create(chatbot=self.chatbot)
@@ -264,18 +272,21 @@ class ChatSessionClientAPITests(APITestCase):
         )
 
     def test_session_list_returns_visitor_block_status(self):
-        blocked_session = ChatSession.objects.create(
+        blocked_visitor = ChatbotVisitor.objects.create(
             chatbot=self.chatbot,
             visitor_id="blocked-list-visitor",
         )
+        block_visitor(blocked_visitor, blocked_by=self.agent)
+        blocked_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            visitor=blocked_visitor,
+        )
         unblocked_session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id="unblocked-list-visitor",
-        )
-        ChatbotBlockedVisitor.objects.create(
-            chatbot=self.chatbot,
-            visitor_id=blocked_session.visitor_id,
-            blocked_by=self.agent,
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="unblocked-list-visitor",
+            ),
         )
 
         response = self.client.get(
@@ -538,14 +549,22 @@ class ChatSessionClientAPITests(APITestCase):
         )
         metadata_session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            user_metadata={
-                "name": "Another Customer",
-                "email": "search-marker@example.com",
-            },
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="metadata-search-visitor",
+                metadata={
+                    "name": "Another Customer",
+                    "email": "search-marker@example.com",
+                },
+            ),
         )
         ChatSession.objects.create(
             chatbot=self.chatbot,
-            user_metadata={"name": "Unrelated Customer"},
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="unrelated-search-visitor",
+                metadata={"name": "Unrelated Customer"},
+            ),
         )
 
         response = self.client.get(
@@ -654,13 +673,17 @@ class ChatSessionClientAPITests(APITestCase):
         )
 
     def test_chatbot_admin_can_block_visitor_across_sessions(self):
-        session = ChatSession.objects.create(
+        blocked_visitor = ChatbotVisitor.objects.create(
             chatbot=self.chatbot,
             visitor_id="blocked-visitor",
         )
+        session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            visitor=blocked_visitor,
+        )
         another_session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id="blocked-visitor",
+            visitor=blocked_visitor,
         )
 
         response = self.client.post(
@@ -683,13 +706,10 @@ class ChatSessionClientAPITests(APITestCase):
         self.assertFalse(response.data["data"]["already_blocked"])
         self.assertEqual(repeated_response.status_code, status.HTTP_200_OK)
         self.assertTrue(repeated_response.data["data"]["already_blocked"])
-        self.assertTrue(
-            ChatbotBlockedVisitor.objects.filter(
-                chatbot=self.chatbot,
-                visitor_id="blocked-visitor",
-                blocked_by=self.agent,
-            ).exists()
-        )
+        blocked_visitor.refresh_from_db()
+        self.assertTrue(blocked_visitor.is_blocked)
+        self.assertIsNotNone(blocked_visitor.blocked_at)
+        self.assertEqual(blocked_visitor.blocked_by, self.agent)
         for blocked_session in (session, another_session):
             with self.assertRaisesMessage(
                 ValidationError,
@@ -698,9 +718,13 @@ class ChatSessionClientAPITests(APITestCase):
                 send_visitor_message(blocked_session, content="Blocked message")
 
     def test_agent_cannot_send_message_to_blocked_visitor(self):
-        session = ChatSession.objects.create(
+        blocked_agent_message_visitor = ChatbotVisitor.objects.create(
             chatbot=self.chatbot,
             visitor_id="blocked-agent-message-visitor",
+        )
+        session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            visitor=blocked_agent_message_visitor,
             assigned_to=self.agent,
             ai_enabled=False,
         )
@@ -708,9 +732,8 @@ class ChatSessionClientAPITests(APITestCase):
             chat_session=session,
             agent=self.agent,
         )
-        ChatbotBlockedVisitor.objects.create(
-            chatbot=self.chatbot,
-            visitor_id=session.visitor_id,
+        block_visitor(
+            blocked_agent_message_visitor,
             blocked_by=self.agent,
         )
 
@@ -749,7 +772,10 @@ class ChatSessionClientAPITests(APITestCase):
         )
         session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id="visitor-for-admin-check",
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="visitor-for-admin-check",
+            ),
         )
         self.client.force_authenticate(member_user)
 
@@ -762,10 +788,13 @@ class ChatSessionClientAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertFalse(ChatbotBlockedVisitor.objects.exists())
+        self.assertFalse(
+            ChatbotVisitor.objects.filter(is_blocked=True).exists()
+        )
 
     def test_block_visitor_rejects_session_without_visitor_id(self):
         session = ChatSession.objects.create(chatbot=self.chatbot)
+        self.assertIsNone(session.visitor)
 
         response = self.client.post(
             reverse("chat-session-block-visitor"),
@@ -776,7 +805,9 @@ class ChatSessionClientAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertFalse(ChatbotBlockedVisitor.objects.exists())
+        self.assertFalse(
+            ChatbotVisitor.objects.filter(is_blocked=True).exists()
+        )
 
     def test_session_transcript_csv_contains_only_latest_350_messages(self):
         session = ChatSession.objects.create(chatbot=self.chatbot)
@@ -879,12 +910,16 @@ class ChatSessionClientAPITests(APITestCase):
         session = ChatSession.objects.create(
             chatbot=self.chatbot,
             lead=lead,
-            user_metadata={
-                "name": "Metadata Name",
-                "email": "metadata@example.com",
-                "phone": "unknown",
-                "browser": "Firefox",
-            },
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="metadata-merge-visitor",
+                metadata={
+                    "name": "Metadata Name",
+                    "email": "metadata@example.com",
+                    "phone": "unknown",
+                    "browser": "Firefox",
+                },
+            ),
         )
 
         response = self.client.get(

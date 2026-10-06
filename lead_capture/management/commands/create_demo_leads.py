@@ -214,7 +214,7 @@ class Command(BaseCommand):
     def _lead_values(*, chatbot, index, seed, randomizer):
         first_name = randomizer.choice(FIRST_NAMES)
         last_name = randomizer.choice(LAST_NAMES)
-        country_code, city, address, phone_prefix = randomizer.choice(LOCATIONS)
+        _country_code, city, address, phone_prefix = randomizer.choice(LOCATIONS)
         status = randomizer.choice(LeadStatusType.values)
         score_minimum, score_maximum = SCORE_RANGES[status]
         email_slug = f"{first_name}.{last_name}".lower()
@@ -235,11 +235,7 @@ class Command(BaseCommand):
         }
         return {
             "collected_fields": collected_fields,
-            "initial_ip_address": f"198.51.100.{((index - 1) % 254) + 1}",
-            "last_ip_address": f"203.0.113.{((index + seed - 1) % 254) + 1}",
-            "detected_country_code": country_code,
-            "detected_city": city,
             "status": status,
-            "lead_score": randomizer.randint(score_minimum, score_maximum),
+            "avg_score": randomizer.randint(score_minimum, score_maximum),
             "source": "demo",
         }

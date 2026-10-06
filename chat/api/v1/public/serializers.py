@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from chat.api.v1.attachments import (
+from chat.services.attachments import (
     message_attachment_field,
     validate_message_payload,
 )
@@ -108,6 +108,16 @@ class PublicVisitorSessionSerializer(serializers.ModelSerializer):
 class VisitorSessionCreateSerializer(serializers.Serializer):
     user_metadata = serializers.JSONField(required=False)
     metadata = serializers.JSONField(required=False)
+    detected_location = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=255,
+    )
+    detected_country = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=64,
+    )
 
     def validate_user_metadata(self, value):
         if not isinstance(value, dict):

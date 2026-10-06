@@ -5,7 +5,6 @@ from google.adk.tools import FunctionTool
 
 from chat.models import ChatSession
 from chat.services.messages import create_system_message
-from lead_capture.models import Lead
 from notification.models import NotificationRecipientType, NotificationType
 from notification.services import create_notification
 
@@ -28,6 +27,12 @@ def _clean_text(value, *, field_name, max_length):
 
 
 def _record_lead_score(chatbot_id, session_id, score, summary):
+    """Gate a lead qualification score for the current conversation turn.
+
+    No lead column is written here: the score rides along with the agent
+    turn and is persisted as a LeadSignal (with its ChatMessage reference)
+    when the reply is stored by AgentClient._persist_reply.
+    """
     if isinstance(score, bool) or not isinstance(score, int) or not 0 <= score <= 100:
         raise ValueError("score must be an integer between 0 and 100.")
     summary = _clean_text(
@@ -48,13 +53,6 @@ def _record_lead_score(chatbot_id, session_id, score, summary):
                 "recorded": False,
                 "message": "The visitor has not been captured as a lead yet.",
             }
-
-        lead = Lead.objects.select_for_update().get(
-            pk=chat_session.lead_id,
-            chatbot_id=chatbot_id,
-        )
-        lead.lead_score = score
-        lead.save(update_fields=["lead_score", "updated_at"])
 
     return {"score": score, "summary": summary, "recorded": True}
 

@@ -14,7 +14,7 @@ Content-Type: application/json
 Origin: https://customer.example
 ```
 
-Send available visitor/page context in the request body. The same `visitor_id` reuses an existing open anonymous session; include `lead_data` when the configured visitor form is submitted.
+Send available visitor/page context in the request body (`user_metadata`, `detected_location`, `detected_country`, `metadata`); the visitor IP is captured from the request. The same `visitor_id` reuses an existing open anonymous session; include `lead_data` when the configured visitor form is submitted.
 
 The response contains `data.visitor`, `data.session`, `data.conversation_token`, and `data.websocket_url`. Always use the returned WebSocket URL instead of constructing it.
 

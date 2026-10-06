@@ -8,7 +8,7 @@ from agent.helpers.global_tools import (
 from chatbot.models import Chatbot
 from chat.models import ChatMessage, ChatSession
 from chat.utils.choices import ChatMessageSenderType
-from lead_capture.models import Lead
+from lead_capture.models import Lead, LeadSignal
 from notification.models import Notification, NotificationType
 from workspace.models import Workspace
 
@@ -36,7 +36,7 @@ class ConversationToolPersistenceTests(TestCase):
             lead=self.lead,
         )
 
-    def test_record_lead_score_updates_lead_without_session_metadata(self):
+    def test_record_lead_score_gates_signal_without_mutating_lead(self):
         result = _record_lead_score(
             self.chatbot.id,
             self.session.id,
@@ -46,7 +46,8 @@ class ConversationToolPersistenceTests(TestCase):
 
         self.lead.refresh_from_db()
         self.session.refresh_from_db()
-        self.assertEqual(self.lead.lead_score, 78)
+        self.assertIsNone(self.lead.avg_score)
+        self.assertFalse(LeadSignal.objects.exists())
         self.assertEqual(self.session.metadata, {})
         self.assertEqual(
             result["summary"],
@@ -137,5 +138,4 @@ class ConversationToolPersistenceTests(TestCase):
         )
 
         self.assertFalse(result["recorded"])
-        self.lead.refresh_from_db()
-        self.assertIsNone(self.lead.lead_score)
+        self.assertFalse(LeadSignal.objects.exists())

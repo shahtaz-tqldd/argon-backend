@@ -27,7 +27,12 @@ from chat.utils.choices import (
     ChatMessageAttachmentType,
     ChatMessageSenderType,
 )
-from chatbot.models import Chatbot, ChatbotUser, ChatbotWidgetSettings
+from chatbot.models import (
+    Chatbot,
+    ChatbotUser,
+    ChatbotVisitor,
+    ChatbotWidgetSettings,
+)
 from chatbot.utils.choices import ChatbotRoleTypes
 from workspace.models import Workspace
 
@@ -207,7 +212,10 @@ class MessageAttachmentServiceTests(TestCase):
         )
         self.session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id="attachment-visitor",
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="attachment-visitor",
+            ),
             assigned_to=self.agent,
             ai_enabled=False,
         )
@@ -267,7 +275,10 @@ class MessageAttachmentServiceTests(TestCase):
         )
         session_without_takeover = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id="no-takeover-visitor",
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="no-takeover-visitor",
+            ),
             ai_enabled=False,
         )
 
@@ -391,7 +402,10 @@ class AgentMessageAttachmentAPITests(APITestCase):
         )
         self.session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id="agent-api-visitor",
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="agent-api-visitor",
+            ),
             assigned_to=self.agent,
             ai_enabled=False,
         )
@@ -529,9 +543,13 @@ class VisitorMessageAttachmentAPITests(APITestCase):
             created_by=self.user,
         )
         ChatbotWidgetSettings.objects.create(chatbot=self.chatbot)
+        self.visitor_id = "visitor-api-visitor"
         self.session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id="visitor-api-visitor",
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id=self.visitor_id,
+            ),
             ai_enabled=False,
         )
         self.public_key = self.chatbot.widget_settings.public_key
@@ -563,7 +581,7 @@ class VisitorMessageAttachmentAPITests(APITestCase):
             },
             format="multipart",
             query_params={
-                "visitor_id": self.session.visitor_id,
+                "visitor_id": self.visitor_id,
                 "session_id": self.session.id,
             },
             HTTP_AUTHORIZATION=f"Bearer {self.token}",
@@ -611,7 +629,7 @@ class VisitorMessageAttachmentAPITests(APITestCase):
             )},
             format="multipart",
             query_params={
-                "visitor_id": self.session.visitor_id,
+                "visitor_id": self.visitor_id,
                 "session_id": self.session.id,
             },
             HTTP_AUTHORIZATION=f"Bearer {self.token}",
@@ -634,7 +652,7 @@ class VisitorMessageAttachmentAPITests(APITestCase):
             {"content": ""},
             format="multipart",
             query_params={
-                "visitor_id": self.session.visitor_id,
+                "visitor_id": self.visitor_id,
                 "session_id": self.session.id,
             },
             HTTP_AUTHORIZATION=f"Bearer {self.token}",

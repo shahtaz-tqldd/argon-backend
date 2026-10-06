@@ -8,7 +8,7 @@ from rest_framework.test import APITestCase
 
 from analytics.choices import AIUsageType
 from analytics.models import AIUsage
-from chatbot.models import Chatbot, ChatbotUser
+from chatbot.models import Chatbot, ChatbotUser, ChatbotVisitor
 from chatbot.utils.choices import ChatbotRoleTypes
 from chat.models import ChatMessage, ChatSession
 from chat.utils.choices import ChatMessageSenderType
@@ -172,7 +172,10 @@ class AdminAnalyticsAPITests(APITestCase):
     def test_conversation_analytics_excludes_test_sessions(self):
         session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id="analytics-visitor",
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="analytics-visitor",
+            ),
         )
         ChatMessage.objects.create(
             chat_session=session,
@@ -195,7 +198,10 @@ class AdminAnalyticsAPITests(APITestCase):
         )
         other_session = ChatSession.objects.create(
             chatbot=self.other_chatbot,
-            visitor_id="other-analytics-visitor",
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.other_chatbot,
+                visitor_id="other-analytics-visitor",
+            ),
         )
         ChatMessage.objects.create(
             chat_session=other_session,

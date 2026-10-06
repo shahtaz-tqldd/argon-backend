@@ -1,7 +1,16 @@
 from django.contrib import admin
 from django.utils.html import format_html
 
-from lead_capture.models import Lead, LeadCaptureConfig, LeadNote
+from lead_capture.models import Lead, LeadCaptureConfig, LeadNote, LeadSignal
+
+
+class LeadSignalInline(admin.TabularInline):
+    model = LeadSignal
+    extra = 0
+    can_delete = False
+    show_change_link = True
+    fields = ("score", "summary", "message", "created_at")
+    readonly_fields = ("score", "summary", "message", "created_at")
 
 
 class LeadNoteInline(admin.TabularInline):
@@ -63,31 +72,21 @@ class LeadAdmin(admin.ModelAdmin):
         "lead_identity",
         "chatbot",
         "status",
-        "lead_score",
-        "location_display",
+        "avg_score",
         "source",
         "created_at",
     )
-    list_filter = ("status", "source", "detected_country_code", "created_at", "chatbot")
+    list_filter = ("status", "source", "created_at", "chatbot")
     search_fields = (
         "collected_fields__name",
         "collected_fields__email",
         "collected_fields__phone",
         "chatbot__chatbot_name",
         "chatbot__name",
-        "initial_ip_address",
-        "last_ip_address",
     )
-    readonly_fields = (
-        "initial_ip_address",
-        "last_ip_address",
-        "detected_country_code",
-        "detected_city",
-        "created_at",
-        "updated_at",
-    )
+    readonly_fields = ("created_at", "updated_at")
     date_hierarchy = "created_at"
-    inlines = [LeadNoteInline]
+    inlines = [LeadSignalInline, LeadNoteInline]
     fieldsets = (
         (
             "Overview",
@@ -95,7 +94,7 @@ class LeadAdmin(admin.ModelAdmin):
                 "fields": (
                     "chatbot",
                     "status",
-                    "lead_score",
+                    "avg_score",
                     "source",
                 ),
             },
@@ -104,16 +103,6 @@ class LeadAdmin(admin.ModelAdmin):
             "Collected Lead Details",
             {
                 "fields": ("collected_fields",),
-            },
-        ),
-        (
-            "Network & Geo Info",
-            {
-                "classes": ("collapse",),
-                "fields": (
-                    ("initial_ip_address", "last_ip_address"),
-                    ("detected_city", "detected_country_code"),
-                ),
             },
         ),
         (
@@ -143,10 +132,18 @@ class LeadAdmin(admin.ModelAdmin):
             )
         return primary
 
-    @admin.display(description="Location")
-    def location_display(self, obj):
-        parts = [p for p in (obj.detected_city, obj.detected_country_code) if p]
-        return ", ".join(parts) or "—"
+
+@admin.register(LeadSignal)
+class LeadSignalAdmin(admin.ModelAdmin):
+    list_display = ("lead", "score", "summary", "message", "created_at")
+    list_filter = ("score", "created_at")
+    search_fields = (
+        "summary",
+        "lead__collected_fields__name",
+        "lead__collected_fields__email",
+    )
+    autocomplete_fields = ("lead",)
+    readonly_fields = ("created_at", "updated_at")
 
 
 @admin.register(LeadNote)

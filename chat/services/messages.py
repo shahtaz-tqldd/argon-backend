@@ -2,7 +2,6 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from chat.models import (
-    ChatbotBlockedVisitor,
     ChatMessage,
     ChatMessageAttachment,
     ChatSession,
@@ -172,8 +171,10 @@ def send_agent_message(
     )
     try:
         with transaction.atomic():
-            chat_session = ChatSession.objects.select_for_update().get(
-                pk=chat_session.pk
+            chat_session = (
+                ChatSession.objects.select_for_update()
+                .select_related("visitor")
+                .get(pk=chat_session.pk)
             )
             if chat_session.status in {
                 ChatSessionStatus.RESOLVED,
@@ -193,10 +194,10 @@ def send_agent_message(
                     "You must be the active takeover agent before replying."
                 )
 
-            if ChatbotBlockedVisitor.objects.filter(
-                chatbot_id=chat_session.chatbot_id,
-                visitor_id=chat_session.visitor_id,
-            ).exists():
+            if (
+                chat_session.visitor is not None
+                and chat_session.visitor.is_blocked
+            ):
                 raise ValidationError(
                     "Cannot send a message to a blocked visitor."
                 )

@@ -3,7 +3,7 @@ from django.db import transaction
 from django.db.models import Count, OuterRef, Q, Subquery
 from django.http import Http404
 
-from chat.models import ChatbotBlockedVisitor, ChatMessage, ChatSession
+from chat.models import ChatMessage, ChatSession
 from chat.services.attachments import (
     delete_message_attachment_uploads,
     upload_message_attachments,
@@ -16,6 +16,12 @@ from chat.utils.choices import (
     ChatSessionChannel,
     ChatSessionStatus,
 )
+from chatbot.services.visitors import (
+    get_or_create_visitor,
+    get_visitor,
+    get_visitor_by_pk,
+    update_visitor_profile,
+)
 from lead_capture.models import Lead, LeadCaptureConfig
 
 
@@ -24,54 +30,52 @@ RESUMABLE_SESSION_STATUSES = (
 )
 
 
-def _get_visitor_sessions(chatbot, visitor_id):
-    direct_sessions = ChatSession.objects.filter(
+def _visitor_sessions(chatbot, visitor):
+    """All web-widget sessions of a visitor. The visitor's lead is 1:1, so
+    lead-linked sessions are exactly this visitor's sessions."""
+    return ChatSession.objects.filter(
+        visitor=visitor,
         chatbot=chatbot,
-        visitor_id=visitor_id,
         channel=ChatSessionChannel.WEB_WIDGET,
         is_test=False,
     )
-    anchor = direct_sessions.select_related("lead").first()
-    if anchor is None:
+
+
+def _get_visitor_or_404(chatbot, visitor_id):
+    visitor = get_visitor(chatbot, visitor_id)
+    if visitor is None:
         raise Http404("Visitor not found.")
-
-    lead_session = (
-        direct_sessions.filter(lead__isnull=False)
-        .select_related("lead")
-        .first()
-    )
-    lead = lead_session.lead if lead_session is not None else None
-    filters = Q(visitor_id=visitor_id)
-    if lead is not None:
-        filters |= Q(lead=lead)
-    sessions = ChatSession.objects.filter(
-        filters,
-        chatbot=chatbot,
-        channel=ChatSessionChannel.WEB_WIDGET,
-        is_test=False,
-    )
-    return anchor, lead, sessions
+    return visitor
 
 
-def get_public_visitor_details(chatbot, visitor_id):
-    anchor, lead, _sessions = _get_visitor_sessions(chatbot, visitor_id)
+def build_public_visitor_details(visitor):
+    lead = visitor.lead
     return {
-        "visitor_id": visitor_id,
+        "visitor_id": visitor.visitor_id,
         "lead_id": lead.id if lead is not None else None,
         "lead_data": lead.collected_fields if lead is not None else {},
-        "user_metadata": anchor.user_metadata or {},
+        "ip_address": visitor.ip_address,
+        "detected_location": visitor.detected_location,
+        "detected_country": visitor.detected_country,
+        "user_metadata": visitor.metadata or {},
     }
 
 
+def get_public_visitor_details(chatbot, visitor_id):
+    visitor = _get_visitor_or_404(chatbot, visitor_id)
+    return build_public_visitor_details(visitor)
+
+
 def get_public_visitor_sessions(chatbot, visitor_id):
-    _anchor, _lead, sessions = _get_visitor_sessions(chatbot, visitor_id)
+    visitor = _get_visitor_or_404(chatbot, visitor_id)
     last_message = (
         ChatMessage.objects.filter(chat_session=OuterRef("pk"))
         .exclude(metadata__contains={"visibility": "internal"})
         .order_by("-created_at", "-id")
     )
     return (
-        sessions.select_related("lead", "chatbot")
+        _visitor_sessions(chatbot, visitor)
+        .select_related("lead", "chatbot")
         .annotate(
             message_count=Count(
                 "messages",
@@ -102,45 +106,34 @@ def create_public_visitor_session(
     chatbot,
     visitor_id,
     *,
+    ip_address=None,
+    detected_location=None,
+    detected_country=None,
     user_metadata=None,
     metadata=None,
     lead=None,
 ):
-    if ChatbotBlockedVisitor.objects.filter(
-        chatbot=chatbot,
-        visitor_id=visitor_id,
-    ).exists():
+    visitor = get_or_create_visitor(chatbot, visitor_id)
+    if visitor.is_blocked:
         raise ValidationError("This visitor has been blocked.")
 
-    existing_sessions = ChatSession.objects.filter(
-        chatbot=chatbot,
-        visitor_id=visitor_id,
-        channel=ChatSessionChannel.WEB_WIDGET,
-        is_test=False,
+    update_visitor_profile(
+        visitor,
+        ip_address=ip_address,
+        detected_location=detected_location,
+        detected_country=detected_country,
+        metadata=user_metadata,
     )
-    anchor = existing_sessions.select_related("lead").first()
-    lead_session = (
-        existing_sessions.filter(lead__isnull=False)
-        .select_related("lead")
-        .first()
-    )
-    inherited_lead = (
-        lead_session.lead if lead_session is not None else None
-    )
-    inherited_user_metadata = (
-        anchor.user_metadata if anchor is not None else {}
-    )
+    if lead is not None and visitor.lead_id != lead.pk:
+        visitor.lead = lead
+        visitor.save(update_fields=["lead", "updated_at"])
+
     session = ChatSession(
         chatbot=chatbot,
         channel=ChatSessionChannel.WEB_WIDGET,
-        visitor_id=visitor_id,
-        lead=lead if lead is not None else inherited_lead,
+        visitor=visitor,
+        lead=lead if lead is not None else visitor.lead,
         ai_enabled=chatbot.ai_enabled,
-        user_metadata=(
-            user_metadata
-            if user_metadata is not None
-            else inherited_user_metadata
-        ),
         metadata=metadata or {},
     )
     session.full_clean()
@@ -166,22 +159,17 @@ def create_public_visitor(
     visitor_id,
     *,
     lead_data=None,
+    ip_address=None,
+    detected_location=None,
+    detected_country=None,
     user_metadata=None,
     metadata=None,
 ):
-    if ChatbotBlockedVisitor.objects.filter(
-        chatbot=chatbot,
-        visitor_id=visitor_id,
-    ).exists():
+    existing_visitor = get_visitor(chatbot, visitor_id)
+    if existing_visitor is not None and existing_visitor.is_blocked:
         raise ValidationError("This visitor has been blocked.")
+    visitor_created = existing_visitor is None
 
-    existing_sessions = ChatSession.objects.filter(
-        chatbot=chatbot,
-        visitor_id=visitor_id,
-        channel=ChatSessionChannel.WEB_WIDGET,
-        is_test=False,
-    )
-    visitor_created = not existing_sessions.exists()
     lead_capture_enabled = (
         lead_data is not None
         and LeadCaptureConfig.objects.filter(
@@ -191,35 +179,48 @@ def create_public_visitor(
     )
     if not lead_capture_enabled:
         active_session = (
-            existing_sessions.filter(status__in=RESUMABLE_SESSION_STATUSES)
-            .select_related("lead")
+            ChatSession.objects.filter(
+                chatbot=chatbot,
+                visitor=existing_visitor,
+                channel=ChatSessionChannel.WEB_WIDGET,
+                is_test=False,
+                status__in=RESUMABLE_SESSION_STATUSES,
+            )
+            .select_related("lead", "visitor", "visitor__lead")
             .order_by("-last_activity_at", "-created_at")
             .first()
+            if existing_visitor is not None
+            else None
         )
         if active_session is not None:
+            update_visitor_profile(
+                existing_visitor,
+                ip_address=ip_address,
+                detected_location=detected_location,
+                detected_country=detected_country,
+                metadata=user_metadata,
+            )
             return active_session, visitor_created, False
         lead = None
     else:
-        lead_session = (
-            existing_sessions.filter(lead__isnull=False)
-            .select_related("lead")
-            .first()
-        )
-        if lead_session is None:
+        if existing_visitor is not None and existing_visitor.lead_id:
+            lead = existing_visitor.lead
+            lead.collected_fields = lead_data
+        else:
             lead = Lead(
                 chatbot=chatbot,
                 collected_fields=lead_data,
                 source="web_widget",
             )
-        else:
-            lead = lead_session.lead
-            lead.collected_fields = lead_data
         lead.full_clean()
         lead.save()
 
     session = create_public_visitor_session(
         chatbot,
         visitor_id,
+        ip_address=ip_address,
+        detected_location=detected_location,
+        detected_country=detected_country,
         user_metadata=user_metadata,
         metadata=metadata,
         lead=lead,
@@ -236,10 +237,11 @@ def get_public_visitor_session(
     resumable_only=False,
 ):
     payload = decode_conversation_token(conversation_token)
+    visitor = _get_visitor_or_404(chatbot, visitor_id)
     if (
         payload["session_id"] != str(session_id)
         or payload["chatbot_id"] != str(chatbot.id)
-        or payload["visitor_id"] != visitor_id
+        or payload["visitor_id"] != str(visitor.id)
     ):
         raise PermissionDenied(
             "The conversation token does not belong to this visitor session."
@@ -248,10 +250,10 @@ def get_public_visitor_session(
     if resumable_only:
         filters["status__in"] = RESUMABLE_SESSION_STATUSES
     try:
-        return ChatSession.objects.get(
+        return ChatSession.objects.select_related("lead", "visitor").get(
             pk=session_id,
             chatbot=chatbot,
-            visitor_id=visitor_id,
+            visitor=visitor,
             channel=ChatSessionChannel.WEB_WIDGET,
             is_test=False,
             **filters,
@@ -263,9 +265,12 @@ def get_public_visitor_session(
 def get_visitor_chat_session(chatbot, session_id, conversation_token):
     """Return an open token-authenticated session for public integrations."""
     payload = decode_conversation_token(conversation_token)
+    visitor = get_visitor_by_pk(chatbot, payload["visitor_id"])
+    if visitor is None:
+        raise Http404("Conversation not found.")
     return get_public_visitor_session(
         chatbot,
-        payload["visitor_id"],
+        visitor.visitor_id,
         session_id,
         conversation_token,
         resumable_only=True,
@@ -293,19 +298,20 @@ def send_visitor_message(
     )
     try:
         with transaction.atomic():
-            chat_session = ChatSession.objects.select_for_update().get(
-                pk=chat_session.pk,
-                is_test=False,
+            chat_session = (
+                ChatSession.objects.select_for_update()
+                .select_related("visitor")
+                .get(
+                    pk=chat_session.pk,
+                    is_test=False,
+                )
             )
             if chat_session.status not in RESUMABLE_SESSION_STATUSES:
                 raise ValidationError(
                     "Cannot send a message to an ended conversation."
                 )
 
-            if ChatbotBlockedVisitor.objects.filter(
-                chatbot_id=chat_session.chatbot_id,
-                visitor_id=chat_session.visitor_id,
-            ).exists():
+            if chat_session.visitor is not None and chat_session.visitor.is_blocked:
                 raise ValidationError(
                     "This visitor has been blocked from sending messages."
                 )

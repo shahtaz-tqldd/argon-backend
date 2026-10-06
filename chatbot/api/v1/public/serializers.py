@@ -60,6 +60,16 @@ class PublicVisitorCreateSerializer(serializers.Serializer):
     lead_data = serializers.JSONField(required=False)
     user_metadata = serializers.JSONField(required=False)
     metadata = serializers.JSONField(required=False)
+    detected_location = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=255,
+    )
+    detected_country = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=64,
+    )
 
     def validate(self, attrs):
         for field_name in ("lead_data", "user_metadata", "metadata"):
@@ -75,6 +85,9 @@ class PublicVisitorSerializer(serializers.Serializer):
     visitor_id = serializers.CharField(read_only=True)
     lead_id = serializers.UUIDField(read_only=True, allow_null=True)
     lead_data = serializers.JSONField(read_only=True)
+    ip_address = serializers.CharField(read_only=True, allow_null=True)
+    detected_location = serializers.CharField(read_only=True)
+    detected_country = serializers.CharField(read_only=True)
     user_metadata = serializers.JSONField(read_only=True)
 
 

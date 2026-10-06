@@ -18,6 +18,7 @@ from chatbot.models import (
     ChatbotConfig,
     ChatbotInvitation,
     ChatbotUser,
+    ChatbotVisitor,
 )
 from appointment.models import Appointment, AppointmentBookingConfig
 from chatbot.services import create_chatbot
@@ -26,11 +27,12 @@ from chatbot.services.invitations import (
     hash_invitation_token,
 )
 from chatbot.utils.choices import ChatbotPermissionTypes, ChatbotRoleTypes
-from chat.models import ChatbotBlockedVisitor, ChatMessage, ChatSession
+from chat.models import ChatMessage, ChatSession
 from chat.services.visitor_tokens import (
     decode_conversation_token,
     issue_conversation_token,
 )
+from chatbot.services.visitors import block_visitor
 from chat.utils.choices import (
     ChatMessageSenderType,
     ChatSessionChannel,
@@ -364,7 +366,7 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(
             ChatSession.objects.filter(
                 chatbot=self.chatbot,
-                visitor_id="new-anonymous-visitor",
+                visitor__visitor_id="new-anonymous-visitor",
             ).count(),
             1,
         )
@@ -465,9 +467,13 @@ class ChatbotClientAPITests(APITestCase):
         )
 
     def test_public_visitor_message_list_returns_paginated_messages(self):
+        visitor_id = "conversation-history-visitor"
         session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id="conversation-history-visitor",
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id=visitor_id,
+            ),
             channel=ChatSessionChannel.WEB_WIDGET,
         )
         ChatMessage.objects.create(
@@ -504,7 +510,7 @@ class ChatbotClientAPITests(APITestCase):
                 kwargs={"public_key": self.chatbot.widget_settings.public_key},
             ),
             {
-                "visitor_id": session.visitor_id,
+                "visitor_id": visitor_id,
                 "session_id": session.id,
                 "conversation_token": issue_conversation_token(session),
                 "page": 1,
@@ -582,8 +588,8 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         response_data = response.data["data"]
         session = ChatSession.objects.get(pk=response_data["session"]["id"])
-        self.assertEqual(session.visitor_id, visitor_id)
-        self.assertEqual(session.user_metadata, {"locale": "en-US"})
+        self.assertEqual(session.visitor.visitor_id, visitor_id)
+        self.assertEqual(session.visitor.metadata, {"locale": "en-US"})
         self.assertEqual(
             session.metadata,
             {"page_url": "https://example.com/pricing"},
@@ -592,7 +598,7 @@ class ChatbotClientAPITests(APITestCase):
             response_data["conversation_token"]
         )
         self.assertEqual(token_payload["session_id"], str(session.id))
-        self.assertEqual(token_payload["visitor_id"], visitor_id)
+        self.assertEqual(token_payload["visitor_id"], str(session.visitor_id))
         self.assertIn(
             f"/conversations/{session.id}/?token=",
             response_data["websocket_url"],
@@ -607,22 +613,35 @@ class ChatbotClientAPITests(APITestCase):
             },
             source="web_widget",
         )
-        first_session = ChatSession.objects.create(
+        first_visitor = ChatbotVisitor.objects.create(
             chatbot=self.chatbot,
             visitor_id="linked-visitor",
+            lead=lead,
+            metadata={"locale": "en-US"},
+        )
+        first_session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            visitor=first_visitor,
             channel=ChatSessionChannel.WEB_WIDGET,
             lead=lead,
-            user_metadata={"locale": "en-US"},
         )
         second_session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id="linked-visitor-second-session",
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="linked-visitor-second-session",
+                lead=lead,
+            ),
             channel=ChatSessionChannel.WEB_WIDGET,
             lead=lead,
         )
         third_session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id="linked-visitor-third-session",
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="linked-visitor-third-session",
+                lead=lead,
+            ),
             channel=ChatSessionChannel.WEB_WIDGET,
             lead=lead,
         )
@@ -655,7 +674,7 @@ class ChatbotClientAPITests(APITestCase):
             sender_type=ChatMessageSenderType.VISITOR,
             content="I need some help.",
         )
-        visitor_id = first_session.visitor_id
+        visitor_id = first_session.visitor.visitor_id
         url_kwargs = {
             "public_key": self.chatbot.widget_settings.public_key,
             "visitor_id": visitor_id,
@@ -686,6 +705,9 @@ class ChatbotClientAPITests(APITestCase):
                     "name": "Ada Lovelace",
                     "email": "ada@example.com",
                 },
+                "ip_address": None,
+                "detected_location": "",
+                "detected_country": "",
                 "user_metadata": {"locale": "en-US"},
             },
         )
@@ -764,7 +786,10 @@ class ChatbotClientAPITests(APITestCase):
         )
         session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id="origin-checked-visitor",
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="origin-checked-visitor",
+            ),
             channel=ChatSessionChannel.WEB_WIDGET,
         )
         self.client.force_authenticate(user=None)
@@ -773,7 +798,7 @@ class ChatbotClientAPITests(APITestCase):
             kwargs={"public_key": self.chatbot.widget_settings.public_key},
         )
         query = {
-            "visitor_id": session.visitor_id,
+            "visitor_id": session.visitor.visitor_id,
             "session_id": session.id,
             "conversation_token": issue_conversation_token(session),
         }
@@ -793,7 +818,10 @@ class ChatbotClientAPITests(APITestCase):
         public_key = self.chatbot.widget_settings.public_key
         session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id="message-auth-visitor",
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="message-auth-visitor",
+            ),
             channel=ChatSessionChannel.WEB_WIDGET,
         )
         session_id = session.id
@@ -806,7 +834,7 @@ class ChatbotClientAPITests(APITestCase):
             {"content": "Hello"},
             format="json",
             query_params={
-                "visitor_id": session.visitor_id,
+                "visitor_id": session.visitor.visitor_id,
                 "session_id": session_id,
             },
         )
@@ -814,14 +842,15 @@ class ChatbotClientAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_blocked_visitor_cannot_send_message(self):
-        session = ChatSession.objects.create(
+        blocked_visitor = ChatbotVisitor.objects.create(
             chatbot=self.chatbot,
             visitor_id="blocked-public-visitor",
-            channel=ChatSessionChannel.WEB_WIDGET,
         )
-        ChatbotBlockedVisitor.objects.create(
+        block_visitor(blocked_visitor)
+        session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id=session.visitor_id,
+            visitor=blocked_visitor,
+            channel=ChatSessionChannel.WEB_WIDGET,
         )
         token = issue_conversation_token(session)
         self.client.force_authenticate(user=None)
@@ -836,7 +865,7 @@ class ChatbotClientAPITests(APITestCase):
             {"content": "This should be rejected."},
             format="json",
             query_params={
-                "visitor_id": session.visitor_id,
+                "visitor_id": blocked_visitor.visitor_id,
                 "session_id": session.id,
             },
             HTTP_AUTHORIZATION=f"Bearer {token}",
@@ -862,7 +891,10 @@ class ChatbotClientAPITests(APITestCase):
         )
         session = ChatSession.objects.create(
             chatbot=self.chatbot,
-            visitor_id="booking-visitor",
+            visitor=ChatbotVisitor.objects.create(
+                chatbot=self.chatbot,
+                visitor_id="booking-visitor",
+            ),
             channel=ChatSessionChannel.WEB_WIDGET,
         )
         token = issue_conversation_token(session)

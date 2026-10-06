@@ -7,6 +7,7 @@ from chatbot.models import (
     ChatbotConfig,
     ChatbotInvitation,
     ChatbotUser,
+    ChatbotVisitor,
     ChatbotWidgetSettings,
 )
 
@@ -46,6 +47,66 @@ class ChatbotAllowedOriginAdmin(admin.ModelAdmin):
     search_fields = ("origin", "chatbot__chatbot_name")
     autocomplete_fields = ("chatbot",)
     readonly_fields = ("id", "created_at", "updated_at")
+
+
+@admin.register(ChatbotVisitor)
+class ChatbotVisitorAdmin(admin.ModelAdmin):
+    list_display = (
+        "visitor_id",
+        "chatbot",
+        "detected_location",
+        "detected_country",
+        "ip_address",
+        "is_blocked",
+        "blocked_by",
+        "created_at",
+    )
+    list_filter = ("is_blocked", "detected_country", "created_at")
+    search_fields = ("visitor_id", "chatbot__chatbot_name")
+    autocomplete_fields = ("chatbot", "lead", "blocked_by")
+    readonly_fields = ("id", "created_at", "updated_at")
+    fieldsets = (
+        (
+            "Identity",
+            {
+                "fields": ("chatbot", "visitor_id", "lead"),
+            },
+        ),
+        (
+            "Detection",
+            {
+                "fields": (
+                    "ip_address",
+                    "detected_location",
+                    "detected_country",
+                ),
+            },
+        ),
+        (
+            "Blocking",
+            {
+                "fields": (
+                    "is_blocked",
+                    "blocked_at",
+                    "blocked_by",
+                ),
+            },
+        ),
+        (
+            "Context",
+            {
+                "classes": ("collapse",),
+                "fields": ("metadata",),
+            },
+        ),
+        (
+            "Timestamps",
+            {
+                "classes": ("collapse",),
+                "fields": ("id", "created_at", "updated_at"),
+            },
+        ),
+    )
 
 
 @admin.register(ChatbotUser)

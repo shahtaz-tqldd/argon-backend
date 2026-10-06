@@ -102,12 +102,6 @@ class Lead(BaseMinModel):
         help_text="Values collected using the chatbot's lead configuration.",
     )
 
-    # ip address
-    initial_ip_address = models.GenericIPAddressField(null=True, blank=True)
-    last_ip_address = models.GenericIPAddressField(null=True, blank=True)
-    detected_country_code = models.CharField(max_length=5, blank=True, default="")
-    detected_city = models.CharField(max_length=100, blank=True, default="")
-
     status = models.CharField(
         max_length=30,
         choices=LeadStatusType.choices,
@@ -115,8 +109,16 @@ class Lead(BaseMinModel):
         db_index=True,
     )
 
-    # Optional internal AI qualification
-    lead_score = models.PositiveSmallIntegerField(null=True, blank=True)
+    # Derived qualification — the average of this lead's LeadSignal scores.
+    # Kept denormalized so dashboards can sort/filter without joining the
+    # signal table; refreshed by record_lead_signal on every new signal.
+    avg_score = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Average score across this lead's qualification signals.",
+    )
 
     # Where this lead originally came from
     source = models.CharField(max_length=50, blank=True, default="")
@@ -135,8 +137,9 @@ class Lead(BaseMinModel):
                 name="lead_collected_fields_object",
             ),
             models.CheckConstraint(
-                condition=Q(lead_score__lte=100),
-                name="lead_score_between_0_and_100",
+                condition=Q(avg_score__isnull=True)
+                | Q(avg_score__gte=0, avg_score__lte=100),
+                name="lead_avg_score_between_0_and_100",
             ),
         ]
 
@@ -250,6 +253,68 @@ class Lead(BaseMinModel):
             str(self.id),
         )
         return f"{identity} ({self.chatbot})"
+
+
+class LeadSignal(BaseMinModel):
+    """One AI-evidenced qualification signal, bound to the reply that
+    produced it. Scores are never overwritten — the lead's avg_score is
+    the rolling average of its signals."""
+
+    lead = models.ForeignKey(
+        Lead,
+        related_name="signals",
+        on_delete=models.CASCADE,
+    )
+    message = models.ForeignKey(
+        "chat_session.ChatMessage",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="lead_signals",
+        help_text="The AI reply the score was recorded with, if any.",
+    )
+    score = models.PositiveSmallIntegerField(
+        help_text="Qualification score from 0 through 100.",
+    )
+    summary = models.CharField(
+        max_length=240,
+        help_text="One short sentence explaining the evidence for the score.",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["lead", "-created_at"],
+                name="lead_signal_time_idx",
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["message"],
+                condition=Q(message__isnull=False),
+                name="unique_lead_signal_per_message",
+            ),
+            models.CheckConstraint(
+                condition=~Q(summary=""),
+                name="lead_signal_summary_not_empty",
+            ),
+            models.CheckConstraint(
+                condition=Q(score__gte=0, score__lte=100),
+                name="lead_signal_score_between_0_and_100",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        self.summary = " ".join(self.summary.split())
+        if not self.summary:
+            raise ValidationError(
+                {"summary": "Signal summary cannot be blank."}
+            )
+
+    def __str__(self):
+        return f"{self.score} — {self.summary[:60]}"
 
 
 class LeadNote(BaseMinModel):

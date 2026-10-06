@@ -10,11 +10,14 @@ class InvalidConversationToken(Exception):
 
 
 def issue_conversation_token(chat_session):
+    # ``visitor_id`` is the ChatbotVisitor primary key, not the widget
+    # cookie string: it lets token checks compare against the session's
+    # visitor_id column directly, with no extra lookup.
     return signing.dumps(
         {
             "session_id": str(chat_session.id),
             "chatbot_id": str(chat_session.chatbot_id),
-            "visitor_id": chat_session.visitor_id,
+            "visitor_id": str(chat_session.visitor_id or ""),
         },
         salt=CONVERSATION_TOKEN_SALT,
         compress=True,

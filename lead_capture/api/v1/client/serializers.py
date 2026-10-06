@@ -94,12 +94,8 @@ class LeadSerializer(serializers.ModelSerializer):
             "id",
             "chatbot_id",
             "collected_fields",
-            "initial_ip_address",
-            "last_ip_address",
-            "detected_country_code",
-            "detected_city",
             "status",
-            "lead_score",
+            "avg_score",
             "source",
             "notes_count",
             "created_at",
@@ -114,14 +110,14 @@ class LeadUpdateSerializer(serializers.ModelSerializer):
         fields = (
             "collected_fields",
             "status",
-            "lead_score",
+            "avg_score",
             "source",
         )
 
-    def validate_lead_score(self, value):
-        if value is not None and value > 100:
+    def validate_avg_score(self, value):
+        if value is not None and not 0 <= value <= 100:
             raise serializers.ValidationError(
-                "Lead score must be between 0 and 100."
+                "Average lead score must be between 0 and 100."
             )
         return value
 

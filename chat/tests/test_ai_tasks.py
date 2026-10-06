@@ -8,12 +8,13 @@ from analytics.choices import AIUsageType
 from analytics.models import AIUsage
 from analytics.services.ai_usage import record_ai_usage
 from agent.client import AgentClient
-from chatbot.models import Chatbot
+from chatbot.models import Chatbot, ChatbotVisitor
 from chat.models import ChatMessage, ChatSession
 from chat.tasks import generate_ai_reply_task
 from chat.utils.choices import ChatMessageSenderType
 from knowledge.models import KnowledgeBase
 from knowledge.utils.choices import KnowledgeSourceTypes
+from lead_capture.models import Lead, LeadSignal
 from workspace.models import Workspace
 
 
@@ -38,9 +39,13 @@ class GenerateAIReplyTaskTests(TestCase):
             slug="ai-task-assistant",
             created_by=owner,
         )
-        self.session = ChatSession.objects.create(
+        self.visitor = ChatbotVisitor.objects.create(
             chatbot=self.chatbot,
             visitor_id="visitor-1",
+        )
+        self.session = ChatSession.objects.create(
+            chatbot=self.chatbot,
+            visitor=self.visitor,
         )
         self.visitor_message = ChatMessage.objects.create(
             chat_session=self.session,
@@ -73,7 +78,7 @@ class GenerateAIReplyTaskTests(TestCase):
         agent_client.assert_called_once_with(self.chatbot, self.session)
         agent_client.return_value.generate_reply_sync.assert_called_once_with(
             visitor_message=self.visitor_message,
-            user_id="visitor-1",
+            user_id=str(self.visitor.id),
         )
 
     @patch("chat.tasks.AgentClient")
@@ -136,7 +141,7 @@ class GenerateAIReplyTaskTests(TestCase):
         self.assertEqual(result.result, public_reply)
         agent_client.return_value.generate_booking_reply_sync.assert_called_once_with(
             appointment_id="appointment-1",
-            user_id="visitor-1",
+            user_id=str(self.visitor.id),
         )
 
     @patch("chat.tasks.AgentClient")
@@ -216,6 +221,12 @@ class GenerateAIReplyTaskTests(TestCase):
             title="Booking FAQ",
             url="https://example.com/booking",
         )
+        lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "Signal Lead"},
+        )
+        self.session.lead = lead
+        self.session.save(update_fields=["lead", "updated_at"])
         response = {
             "result": {
                 "content": "Tomorrow is available.",
@@ -274,6 +285,12 @@ class GenerateAIReplyTaskTests(TestCase):
             external_id=f"ai:{self.visitor_message.id}"
         )
         self.assertEqual(message.metadata, public_reply["metadata"])
+        signal = LeadSignal.objects.get(lead=lead)
+        self.assertEqual(signal.message_id, message.id)
+        self.assertEqual(signal.score, 80)
+        self.assertEqual(signal.summary, "Ready to book.")
+        lead.refresh_from_db()
+        self.assertEqual(lead.avg_score, Decimal("80.00"))
         usage = AIUsage.objects.get(chat_message=message)
         self.assertEqual(usage.tokens, 130)
         self.assertEqual(usage.cost, Decimal("0.00010500"))

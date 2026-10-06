@@ -1,11 +1,12 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from django.db.models import Q
 from django.utils import timezone
 from django.utils.text import slugify
 
 from app.core.models import BaseModel, BaseMinModel
-from app.utils.validators import validate_timezone_name
+from app.utils.validators import validate_json_object, validate_timezone_name
 
 from chatbot.utils.choices import (
     ChatbotActivityModuleTypes,
@@ -498,6 +499,161 @@ class ChatbotAllowedOrigin(BaseModel):
 
     def __str__(self):
         return f"{self.origin} -> {self.chatbot}"
+
+
+# CHATBOT VISITOR
+
+class ChatbotVisitor(BaseMinModel):
+    """An anonymous visitor identity scoped to one chatbot.
+
+    The web widget mints a ``visitor_id`` cookie and sends it with every
+    public request. This model is the server-side anchor for that cookie:
+    sessions, block records, and (once captured) the lead all hang off it.
+    Detection columns (IP, location, country) are kept first-class so they
+    can be indexed, filtered, and updated without parsing JSON.
+    """
+
+    chatbot = models.ForeignKey(
+        Chatbot,
+        on_delete=models.CASCADE,
+        related_name="visitors",
+    )
+    visitor_id = models.CharField(
+        max_length=255,
+        help_text="Widget cookie/fingerprint identifier supplied by the visitor.",
+    )
+
+    # Identification — set once the visitor submits a lead-capture form.
+    # OneToOne: a lead belongs to exactly one visitor, so form resubmissions
+    # update the existing lead instead of creating or merging rows.
+    lead = models.OneToOneField(
+        "lead_capture.Lead",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="visitor",
+        help_text=(
+            "Lead matched to this visitor once identified. New sessions "
+            "inherit this automatically."
+        ),
+    )
+
+    # Detected identity
+    ip_address = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+        help_text="Latest IP address the visitor was seen from.",
+    )
+    detected_location = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Detected location, for example 'Dhaka, BD'.",
+    )
+    detected_country = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="Detected country name or ISO code.",
+    )
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        validators=[validate_json_object],
+        help_text=(
+            "Visitor-side context captured before/without a Lead — "
+            "name, email, browser, locale, timezone, etc."
+        ),
+    )
+
+    # Blocking — a blocked visitor cannot start sessions or send messages.
+    is_blocked = models.BooleanField(
+        default=False,
+        help_text="Blocked visitors are rejected from all chatbot interactions.",
+    )
+    blocked_at = models.DateTimeField(null=True, blank=True)
+    blocked_by = models.ForeignKey(
+        "chatbot.ChatbotUser",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="blocked_visitors",
+        help_text="The agent who blocked this visitor, if any.",
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["chatbot", "visitor_id"],
+                name="unique_visitor_per_chatbot",
+            ),
+            models.CheckConstraint(
+                condition=~Q(visitor_id=""),
+                name="chatbot_visitor_id_not_blank",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        is_blocked=False,
+                        blocked_at__isnull=True,
+                        blocked_by__isnull=True,
+                    )
+                    | Q(is_blocked=True, blocked_at__isnull=False)
+                ),
+                name="chatbot_visitor_block_fields_consistent",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["chatbot", "lead"],
+                name="chatbot_visitor_lead_idx",
+            ),
+            models.Index(
+                fields=["chatbot", "is_blocked"],
+                name="chatbot_visitor_blocked_idx",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        self.visitor_id = self.visitor_id.strip()
+        if not self.visitor_id:
+            raise ValidationError(
+                {"visitor_id": "Visitor ID cannot be blank."}
+            )
+        if self.is_blocked and self.blocked_at is None:
+            raise ValidationError(
+                {
+                    "blocked_at": (
+                        "A blocked visitor must have a blocked_at timestamp."
+                    )
+                }
+            )
+        if not self.is_blocked and (
+            self.blocked_at is not None or self.blocked_by_id is not None
+        ):
+            raise ValidationError(
+                "blocked_at/blocked_by must be cleared when unblocking."
+            )
+        if self.lead_id and self.chatbot_id:
+            if self.lead.chatbot_id != self.chatbot_id:
+                raise ValidationError(
+                    {"lead": "The lead must belong to the visitor's chatbot."}
+                )
+        if self.blocked_by_id and self.chatbot_id:
+            if self.blocked_by.chatbot_id != self.chatbot_id:
+                raise ValidationError(
+                    {
+                        "blocked_by": (
+                            "The blocking agent must belong to the visitor's "
+                            "chatbot."
+                        )
+                    }
+                )
+
+    def __str__(self):
+        return f"{self.visitor_id} on {self.chatbot}"
 
 
 # CHATBOT USER

@@ -13,7 +13,8 @@ from app.utils.logger import logger
 from app.utils.pagination import CustomPagination
 from app.utils.permission import IsChatbotUser
 from app.utils.response import APIResponse
-from chatbot.models import Chatbot, ChatbotUser
+from chatbot.models import Chatbot, ChatbotUser, ChatbotVisitor
+from chatbot.services.visitors import block_visitor
 from chatbot.utils.choices import ChatbotPermissionTypes
 from chat.api.v1.client.serializers import (
     AgentMessageCreateSerializer,
@@ -39,7 +40,6 @@ from chat.api.v1.client.serializers import (
     TransferSessionSerializer,
 )
 from chat.models import (
-    ChatbotBlockedVisitor,
     ChatMessage,
     ChatSession,
     ChatSessionTransfer,
@@ -162,6 +162,7 @@ class ChatSessionObjectMixin(ChatSessionChatbotMixin):
                 ChatSession.objects.select_related(
                     "chatbot__workspace",
                     "lead",
+                    "visitor",
                     "assigned_to__user__profile",
                 ),
                 pk=self.get_query()["session_id"],
@@ -263,9 +264,9 @@ class ChatSessionListView(
         ).filter(
             Q(expires_at__isnull=True) | Q(expires_at__gte=timezone.now())
         )
-        blocked_visitor = ChatbotBlockedVisitor.objects.filter(
-            chatbot_id=OuterRef("chatbot_id"),
-            visitor_id=OuterRef("visitor_id"),
+        blocked_visitor = ChatbotVisitor.objects.filter(
+            pk=OuterRef("visitor_id"),
+            is_blocked=True,
         )
         queryset = (
             ChatSession.objects.filter(
@@ -275,6 +276,7 @@ class ChatSessionListView(
             .select_related(
                 "chatbot",
                 "lead",
+                "visitor",
                 "assigned_to__user",
             )
             .annotate(
@@ -351,10 +353,11 @@ class ChatSessionListView(
         if search:
             queryset = queryset.filter(
                 Q(messages__content__icontains=search)
+                | Q(visitor__visitor_id__icontains=search)
                 | Q(lead__collected_fields__name__icontains=search)
                 | Q(lead__collected_fields__email__icontains=search)
-                | Q(user_metadata__name__icontains=search)
-                | Q(user_metadata__email__icontains=search)
+                | Q(visitor__metadata__name__icontains=search)
+                | Q(visitor__metadata__email__icontains=search)
             ).distinct()
         if query.get("requires_attention"):
             queryset = queryset.filter(requires_attention=True)
@@ -658,7 +661,7 @@ class BlockVisitorView(ChatSessionObjectMixin, GenericAPIView):
         chat_session = self.get_chat_session()
         if not chat_session.visitor_id:
             return APIResponse.error(
-                errors={"visitor_id": ["This session has no visitor ID."]},
+                errors={"visitor_id": ["This session has no visitor."]},
                 message="Visitor could not be blocked.",
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -668,25 +671,24 @@ class BlockVisitorView(ChatSessionObjectMixin, GenericAPIView):
             user=request.user,
             is_active=True,
         ).first()
-        blocked_visitor, created = ChatbotBlockedVisitor.objects.get_or_create(
-            chatbot=chat_session.chatbot,
-            visitor_id=chat_session.visitor_id,
-            defaults={"blocked_by": blocking_agent},
+        newly_blocked = block_visitor(
+            chat_session.visitor,
+            blocked_by=blocking_agent,
         )
         return APIResponse.success(
             data={
-                "visitor_id": blocked_visitor.visitor_id,
+                "visitor_id": chat_session.visitor.visitor_id,
                 "blocked": True,
-                "already_blocked": not created,
+                "already_blocked": not newly_blocked,
             },
             message=(
                 "Visitor blocked successfully."
-                if created
+                if newly_blocked
                 else "Visitor is already blocked."
             ),
             status=(
                 status.HTTP_201_CREATED
-                if created
+                if newly_blocked
                 else status.HTTP_200_OK
             ),
         )

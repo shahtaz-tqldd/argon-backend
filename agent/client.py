@@ -31,6 +31,7 @@ from chat.utils.choices import ChatMessageSenderType, ChatSessionStatus
 from knowledge.models import KnowledgeBase
 from knowledge.services.storage import PrivateKnowledgeStorage
 from knowledge.utils.choices import KnowledgeSourceTypes
+from lead_capture.services.signals import record_lead_signal
 from agent.schema import (
     AgentResponseSchema,
     AgentResultSchema,
@@ -533,6 +534,17 @@ class AgentClient:
         )
         message.full_clean()
         message.save()
+        lead_score = (response.get("result") or {}).get("lead_score")
+        if lead_score and session.lead_id:
+            # The score the agent gated via record_lead_score becomes an
+            # immutable LeadSignal bound to this reply; the lead's avg_score
+            # is refreshed from its signals.
+            record_lead_signal(
+                session.lead,
+                score=lead_score["score"],
+                summary=lead_score["summary"],
+                message=message,
+            )
         if response["token"].get("total_tokens", 0):
             record_ai_usage(
                 chatbot=self.chatbot,

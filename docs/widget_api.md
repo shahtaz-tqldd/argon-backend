@@ -27,11 +27,16 @@ For an anonymous visitor, the body may be empty or may contain widget context:
 ```json
 {
   "user_metadata": {"locale": "en-US"},
+  "detected_location": "Dhaka, BD",
+  "detected_country": "BD",
   "metadata": {"page_url": "https://customer.example/pricing"}
 }
 ```
 
-If an open session already exists for the anonymous visitor, the endpoint returns
+`user_metadata`, `detected_location`, and `detected_country` enrich a
+server-side visitor profile keyed by `visitor_id`; the IP address is captured
+from the request itself. If an open session already exists for the anonymous
+visitor, the endpoint returns
 that session with HTTP `200`. Otherwise it creates a visitor session and returns
 HTTP `201`.
 
@@ -60,7 +65,8 @@ GET /api/v1/chatbots/{public_key}/visitor/details/?visitor_id={visitor_id}
 Origin: https://customer.example
 ```
 
-The response contains `visitor_id`, `lead_id`, `lead_data`, and `user_metadata`.
+The response contains `visitor_id`, `lead_id`, `lead_data`, `ip_address`,
+`detected_location`, `detected_country`, and `user_metadata`.
 
 If the chatbot has allowed-origin records, visitor create/details requests and
 the WebSocket handshake require an exact active origin match.

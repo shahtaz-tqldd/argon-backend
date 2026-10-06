@@ -1,13 +1,17 @@
 import json
+from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
 from django.test import TestCase
 
+from chat.models import ChatMessage, ChatSession
+from chat.utils.choices import ChatMessageSenderType
 from chatbot.models import Chatbot, ChatbotUser
 from chatbot.utils.choices import ChatbotRoleTypes
-from lead_capture.models import Lead, LeadCaptureConfig, LeadNote
+from lead_capture.models import Lead, LeadCaptureConfig, LeadNote, LeadSignal
+from lead_capture.services.signals import record_lead_signal
 from lead_capture.utils.choices import LeadCaptureFieldMode
 from workspace.models import Workspace
 
@@ -198,8 +202,6 @@ class LeadCaptureModelTests(TestCase):
                 "email": "  ADA@Example.COM ",
                 "organization": "Analytical Engines",
             },
-            initial_ip_address="192.0.2.10",
-            last_ip_address="2001:db8::1",
         )
 
         self.assertEqual(lead.collected_fields["email"], "ada@example.com")
@@ -208,11 +210,74 @@ class LeadCaptureModelTests(TestCase):
             "Analytical Engines",
         )
 
-    def test_lead_score_cannot_exceed_one_hundred(self):
-        lead = Lead(chatbot=self.chatbot, lead_score=101)
+    def test_avg_score_cannot_exceed_one_hundred(self):
+        lead = Lead(chatbot=self.chatbot, avg_score=100.01)
 
         with self.assertRaises(ValidationError):
             lead.full_clean()
+
+    def test_avg_score_cannot_be_negative(self):
+        lead = Lead(chatbot=self.chatbot, avg_score=-1)
+
+        with self.assertRaises(ValidationError):
+            lead.full_clean()
+
+    def test_lead_signal_score_stays_within_bounds(self):
+        lead = Lead.objects.create(chatbot=self.chatbot)
+
+        signal = LeadSignal(
+            lead=lead,
+            score=101,
+            summary="Out of range.",
+        )
+        with self.assertRaises(ValidationError):
+            signal.full_clean()
+
+        signal = LeadSignal(lead=lead, score=80, summary="")
+        with self.assertRaises(ValidationError):
+            signal.full_clean()
+
+    def test_lead_signal_is_unique_per_message(self):
+        lead = Lead.objects.create(chatbot=self.chatbot)
+        chat_session = ChatSession.objects.create(chatbot=self.chatbot)
+        message = ChatMessage.objects.create(
+            chat_session=chat_session,
+            sender_type=ChatMessageSenderType.AI,
+            content="Reply with a score.",
+            external_id="ai:signal-1",
+        )
+        LeadSignal.objects.create(
+            lead=lead,
+            message=message,
+            score=80,
+            summary="Ready to book.",
+        )
+
+        with self.assertRaises(IntegrityError):
+            LeadSignal.objects.create(
+                lead=lead,
+                message=message,
+                score=90,
+                summary="Even more ready.",
+            )
+
+    def test_record_lead_signal_refreshes_avg_score(self):
+        lead = Lead.objects.create(chatbot=self.chatbot)
+
+        first = record_lead_signal(lead, score=80, summary="Ready to book.")
+        self.assertEqual(lead.avg_score, Decimal("80.00"))
+
+        record_lead_signal(lead, score=90, summary="Asked for pricing.")
+        self.assertEqual(lead.avg_score, Decimal("85.00"))
+        self.assertEqual(
+            list(
+                LeadSignal.objects.filter(lead=lead).values_list(
+                    "score", flat=True,
+                )
+            ),
+            [90, 80],
+        )
+        self.assertIsNone(first.message_id)
 
     def test_chatbot_user_can_create_a_note_for_its_lead(self):
         lead = Lead.objects.create(chatbot=self.chatbot)

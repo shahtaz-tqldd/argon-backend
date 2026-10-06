@@ -172,8 +172,15 @@ All body fields are optional.
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `lead_data` | object | No | Values submitted through the configured lead form |
-| `user_metadata` | object | No | Visitor/browser metadata such as locale or timezone |
+| `user_metadata` | object | No | Visitor/browser metadata such as locale or timezone; merged into the visitor profile |
+| `detected_location` | string, maximum 255 characters | No | Detected location such as "Dhaka, BD" |
+| `detected_country` | string, maximum 64 characters | No | Detected country name or ISO code |
 | `metadata` | object | No | Session context such as the current page URL |
+
+The visitor's IP address is captured from the request itself. Identity fields
+live on a server-side `ChatbotVisitor` record keyed by `visitor_id`; every
+request enriches that single profile (new metadata keys override old ones,
+existing keys are preserved).
 
 Anonymous visitor example:
 
@@ -183,6 +190,8 @@ Anonymous visitor example:
     "locale": "en-US",
     "timezone": "Asia/Dhaka"
   },
+  "detected_location": "Dhaka, BD",
+  "detected_country": "BD",
   "metadata": {
     "page_url": "https://customer.example/pricing"
   }
@@ -226,6 +235,9 @@ anonymous session is reused.
         "email": "ada@example.com",
         "phone": "+1-555-0100"
       },
+      "ip_address": "203.0.113.10",
+      "detected_location": "Dhaka, BD",
+      "detected_country": "BD",
       "user_metadata": {
         "locale": "en-US"
       }
@@ -248,7 +260,7 @@ Flag meanings:
 
 | Field | Meaning |
 | --- | --- |
-| `visitor_created` | No previous web-widget session existed for this `visitor_id` |
+| `visitor_created` | No `ChatbotVisitor` profile existed for this `visitor_id` yet |
 | `session_created` | This request created a new session rather than reusing one |
 
 A form submission fails with `400` when lead capture is disabled or the form
@@ -258,7 +270,8 @@ does not satisfy the configured required fields and field types.
 
 ## 3. Get visitor details
 
-Returns the visitor profile derived from the visitor sessions and linked lead.
+Returns the `ChatbotVisitor` profile: detected identity columns and the
+metadata accumulated across sessions, plus the linked lead (if captured).
 
 ### Endpoint
 
@@ -292,6 +305,9 @@ None.
       "name": "Ada Lovelace",
       "email": "ada@example.com"
     },
+    "ip_address": "203.0.113.10",
+    "detected_location": "Dhaka, BD",
+    "detected_country": "BD",
     "user_metadata": {
       "locale": "en-US"
     }
@@ -299,8 +315,9 @@ None.
 }
 ```
 
-For an anonymous visitor, `lead_id` is `null` and `lead_data` is an empty
-object.
+For an anonymous visitor, `lead_id` is `null`, `lead_data` is an empty
+object, and `ip_address` is `null` until the visitor has been seen with a
+known address.
 
 ---
 
@@ -377,14 +394,20 @@ POST /api/v1/chatbots/{public_key}/sessions/create/?visitor_id={visitor_id}
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `user_metadata` | object | No | Metadata to store on the new session |
+| `user_metadata` | object | No | Visitor metadata merged into the visitor profile |
+| `detected_location` | string, maximum 255 characters | No | Detected location such as "Dhaka, BD" |
+| `detected_country` | string, maximum 64 characters | No | Detected country name or ISO code |
 | `metadata` | object | No | Session context |
+
+The visitor's IP address is captured from the request itself.
 
 ```json
 {
   "user_metadata": {
     "locale": "en-US"
   },
+  "detected_location": "Dhaka, BD",
+  "detected_country": "BD",
   "metadata": {
     "page_url": "https://customer.example/help"
   }

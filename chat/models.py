@@ -92,14 +92,17 @@ class ChatSession(BaseMinModel):
     ai_enabled = models.BooleanField(default=True)
 
     # Session User/Lead
-    visitor_id = models.CharField(
-        max_length=255,
+    visitor = models.ForeignKey(
+        "chatbot.ChatbotVisitor",
+        null=True,
         blank=True,
-        default="",
-        db_index=True,
+        on_delete=models.SET_NULL,
+        related_name="chat_sessions",
+        db_index=False,
         help_text=(
-            "Anonymous fingerprint/cookie ID used to correlate sessions from "
-            "the same unidentified visitor. Ignored once `lead` is set."
+            "Anonymous visitor identity correlating sessions from the same "
+            "widget cookie. Ignored once `lead` is set. Null for channel "
+            "sessions identified by external_thread_id and for test sessions."
         ),
     )
     lead = models.ForeignKey(
@@ -111,16 +114,6 @@ class ChatSession(BaseMinModel):
         help_text=(
             "Set once the visitor is identified (e.g. via a lead-capture form "
             "or matched contact info). Null means the session is anonymous."
-        ),
-    )
-
-    user_metadata = models.JSONField(
-        default=dict,
-        blank=True,
-        validators=[validate_json_object],
-        help_text=(
-            "Visitor-side context captured before/without a Lead — IP, "
-            "detected location, name, email, browser, etc."
         ),
     )
 
@@ -167,7 +160,7 @@ class ChatSession(BaseMinModel):
                 name="chat_session_agent_idx",
             ),
             models.Index(
-                fields=["chatbot", "visitor_id"],
+                fields=["visitor", "-last_activity_at"],
                 name="chat_session_visitor_idx",
             ),
         ]
@@ -182,7 +175,7 @@ class ChatSession(BaseMinModel):
                         is_test=True,
                         lead__isnull=True,
                         requires_attention=False,
-                        visitor_id="",
+                        visitor__isnull=True,
                     )
                 ),
                 name="test_session_has_no_live_ownership",
@@ -260,56 +253,17 @@ class ChatSession(BaseMinModel):
         if self.lead_id and self.chatbot_id:
             if self.lead.chatbot_id != self.chatbot_id:
                 raise ValidationError(
-                    {"lead": "The lead must belong to this session's chatbot."}
+                    {"lead": "The lead must belong to the session's chatbot."}
+                )
+        if self.visitor_id and self.chatbot_id:
+            if self.visitor.chatbot_id != self.chatbot_id:
+                raise ValidationError(
+                    {"visitor": "The visitor must belong to the session's chatbot."}
                 )
 
     def __str__(self):
         identity = self.lead_id or self.visitor_id or "anonymous visitor"
         return f"{identity} with {self.chatbot}"
-
-
-class ChatbotBlockedVisitor(BaseMinModel):
-    """A visitor identity prevented from messaging a specific chatbot."""
-
-    chatbot = models.ForeignKey(
-        "chatbot.Chatbot",
-        on_delete=models.CASCADE,
-        related_name="blocked_visitors",
-    )
-    visitor_id = models.CharField(max_length=255)
-    blocked_by = models.ForeignKey(
-        "chatbot.ChatbotUser",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="blocked_chat_visitors",
-    )
-
-    class Meta:
-        ordering = ["-created_at", "-id"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["chatbot", "visitor_id"],
-                name="unique_blocked_visitor_per_chatbot",
-            ),
-            models.CheckConstraint(
-                condition=~Q(visitor_id=""),
-                name="blocked_visitor_id_not_blank",
-            ),
-        ]
-
-    def clean(self):
-        super().clean()
-        self.visitor_id = self.visitor_id.strip()
-        if not self.visitor_id:
-            raise ValidationError({"visitor_id": "Visitor ID cannot be blank."})
-        if self.blocked_by_id and self.blocked_by.chatbot_id != self.chatbot_id:
-            raise ValidationError(
-                {"blocked_by": "The blocking agent must belong to this chatbot."}
-            )
-
-    def __str__(self):
-        return f"{self.visitor_id} blocked from {self.chatbot}"
 
 
 class ChatMessage(BaseMinModel):

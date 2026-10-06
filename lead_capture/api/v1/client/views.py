@@ -265,10 +265,10 @@ class LeadStatsAPIView(LeadCaptureChatbotMixin, GenericAPIView):
             total_leads=Count("id"),
             hot_leads=Count(
                 "id",
-                filter=Q(lead_score__gt=self.hot_lead_score_threshold),
+                filter=Q(avg_score__gt=self.hot_lead_score_threshold),
             ),
-            scored_leads=Count("lead_score"),
-            average_lead_score=Avg("lead_score"),
+            scored_leads=Count("avg_score"),
+            average_lead_score=Avg("avg_score"),
         )
         total_leads = summary["total_leads"]
 

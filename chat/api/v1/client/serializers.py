@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from chat.api.v1.attachments import (
+from chat.services.attachments import (
     message_attachment_field,
     validate_message_payload,
 )
@@ -217,10 +217,21 @@ class ChatMessageSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class ChatbotVisitorSerializer(serializers.Serializer):
+    """Visitor identity columns tracked on the ChatbotVisitor record."""
+
+    visitor_id = serializers.CharField(read_only=True)
+    ip_address = serializers.CharField(read_only=True, allow_null=True)
+    detected_location = serializers.CharField(read_only=True)
+    detected_country = serializers.CharField(read_only=True)
+
+
 class ChatSessionSerializer(serializers.ModelSerializer):
     chatbot = ChatSessionChatbotSerializer(read_only=True)
     lead_id = serializers.UUIDField(read_only=True)
     assigned_to = ChatbotAgentSerializer(read_only=True)
+    visitor = ChatbotVisitorSerializer(read_only=True)
+    visitor_id = serializers.SerializerMethodField()
     user_metadata = serializers.SerializerMethodField()
     message_count = serializers.IntegerField(read_only=True, required=False)
 
@@ -233,6 +244,7 @@ class ChatSessionSerializer(serializers.ModelSerializer):
             "status",
             "lead_id",
             "assigned_to",
+            "visitor",
             "visitor_id",
             "last_activity_at",
             "last_visitor_activity_at",
@@ -251,10 +263,14 @@ class ChatSessionSerializer(serializers.ModelSerializer):
         )
         read_only_fields = fields
 
+    def get_visitor_id(self, obj):
+        return obj.visitor.visitor_id if obj.visitor_id else ""
+
     def get_user_metadata(self, obj):
+        visitor_metadata = obj.visitor.metadata if obj.visitor else {}
         user_metadata = (
-            dict(obj.user_metadata)
-            if isinstance(obj.user_metadata, dict)
+            dict(visitor_metadata)
+            if isinstance(visitor_metadata, dict)
             else {}
         )
         lead_fields = (
@@ -304,16 +320,21 @@ class ChatSessionListSerializer(serializers.ModelSerializer):
     def get_user_data(self, obj):
         lead = obj.lead
         lead_fields = lead.collected_fields if lead else {}
-        user_metadata = obj.user_metadata or {}
+        visitor = obj.visitor
+        visitor_metadata = (
+            visitor.metadata
+            if visitor and isinstance(visitor.metadata, dict)
+            else {}
+        )
         return {
             "name": self._first_value(
                 lead_fields.get("name"),
-                user_metadata.get("name"),
+                visitor_metadata.get("name"),
             ),
             "detected_country": self._first_value(
-                lead.detected_country_code if lead else "",
-                user_metadata.get("detected_country"),
-                user_metadata.get("detected_country_code"),
+                visitor.detected_country if visitor else "",
+                visitor_metadata.get("detected_country"),
+                visitor_metadata.get("detected_country_code"),
             ),
         }
 

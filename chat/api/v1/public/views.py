@@ -6,6 +6,7 @@ from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny
 
+from app.utils.http import get_client_ip
 from app.utils.logger import logger
 from app.utils.pagination import CustomPagination
 from app.utils.response import APIResponse
@@ -88,6 +89,7 @@ class PublicVisitorSessionCreateAPIView(GenericAPIView):
             chat_session = create_public_visitor_session(
                 chatbot,
                 query_serializer.validated_data["visitor_id"],
+                ip_address=get_client_ip(request),
                 **serializer.validated_data,
             )
         except DjangoValidationError as exc:
@@ -114,7 +116,7 @@ class PublicVisitorSessionCreateAPIView(GenericAPIView):
             data={
                 "session": {
                     "id": str(chat_session.id),
-                    "visitor_id": chat_session.visitor_id,
+                    "visitor_id": chat_session.visitor.visitor_id,
                     "status": chat_session.status,
                     "ai_enabled": is_ai_reply_enabled(
                         chat_session,

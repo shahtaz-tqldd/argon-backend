@@ -16,7 +16,7 @@ class VisitorConversationTokenTests(SimpleTestCase):
         self.session = SimpleNamespace(
             id=uuid4(),
             chatbot_id=uuid4(),
-            visitor_id="visitor-123",
+            visitor_id=uuid4(),
         )
 
     def test_issued_token_is_bound_to_session_chatbot_and_visitor(self):
@@ -26,7 +26,7 @@ class VisitorConversationTokenTests(SimpleTestCase):
 
         self.assertEqual(payload["session_id"], str(self.session.id))
         self.assertEqual(payload["chatbot_id"], str(self.session.chatbot_id))
-        self.assertEqual(payload["visitor_id"], self.session.visitor_id)
+        self.assertEqual(payload["visitor_id"], str(self.session.visitor_id))
 
     def test_tampered_token_is_rejected(self):
         token = issue_conversation_token(self.session)
