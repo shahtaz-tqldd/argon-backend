@@ -1,5 +1,6 @@
 import json
 from decimal import Decimal
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -11,7 +12,7 @@ from chat.utils.choices import ChatMessageSenderType
 from chatbot.models import Chatbot, ChatbotUser
 from chatbot.utils.choices import ChatbotRoleTypes
 from lead_capture.models import Lead, LeadCaptureConfig, LeadNote, LeadSignal
-from lead_capture.services.signals import record_lead_signal
+from lead_capture.services.signals import record_lead_signal, refresh_lead_avg_score
 from lead_capture.utils.choices import LeadCaptureFieldMode
 from workspace.models import Workspace
 
@@ -278,6 +279,23 @@ class LeadCaptureModelTests(TestCase):
             [90, 80],
         )
         self.assertIsNone(first.message_id)
+
+    def test_refresh_lead_avg_score_normalizes_float_average(self):
+        lead = Lead.objects.create(chatbot=self.chatbot)
+        LeadSignal.objects.create(lead=lead, score=80, summary="Ready to book.")
+
+        # Avg() over an integer field resolves to FloatField, so some
+        # backends/drivers hand back a float instead of a Decimal.
+        with mock.patch.object(
+            type(lead.signals),
+            "aggregate",
+            return_value={"average": 85.0},
+        ):
+            result = refresh_lead_avg_score(lead)
+
+        self.assertEqual(result, Decimal("85.00"))
+        lead.refresh_from_db()
+        self.assertEqual(lead.avg_score, Decimal("85.00"))
 
     def test_chatbot_user_can_create_a_note_for_its_lead(self):
         lead = Lead.objects.create(chatbot=self.chatbot)

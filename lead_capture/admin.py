@@ -1,7 +1,13 @@
 from django.contrib import admin
 from django.utils.html import format_html
 
-from lead_capture.models import Lead, LeadCaptureConfig, LeadNote, LeadSignal
+from lead_capture.models import (
+    Lead,
+    LeadAIInsight,
+    LeadCaptureConfig,
+    LeadNote,
+    LeadSignal,
+)
 
 
 class LeadSignalInline(admin.TabularInline):
@@ -144,6 +150,35 @@ class LeadSignalAdmin(admin.ModelAdmin):
     )
     autocomplete_fields = ("lead",)
     readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(LeadAIInsight)
+class LeadAIInsightAdmin(admin.ModelAdmin):
+    list_display = (
+        "chatbot",
+        "week_start",
+        "week_end",
+        "visitor_message_count",
+        "session_count",
+        "created_at",
+    )
+    list_filter = ("week_start",)
+    search_fields = ("chatbot__chatbot_name", "chatbot__slug")
+    readonly_fields = (
+        "chatbot",
+        "week_start",
+        "week_end",
+        "session_count",
+        "visitor_message_count",
+        "summary",
+        "topics",
+        "frequently_asked_questions",
+        "common_intents",
+        "areas_of_improvement",
+        "metadata",
+        "created_at",
+        "updated_at",
+    )
 
 
 @admin.register(LeadNote)

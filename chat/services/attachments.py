@@ -1,12 +1,10 @@
 import mimetypes
 from pathlib import Path
-from uuid import uuid4
+from urllib.parse import unquote, urlparse
 
 from django.conf import settings
 from rest_framework import serializers
 
-from app.services.r2 import R2Storage, upload_file, upload_image
-from app.utils.logger import logger
 from chat.utils.choices import ChatMessageAttachmentType
 
 
@@ -36,87 +34,63 @@ def classify_attachment_type(mime_type):
     return ChatMessageAttachmentType.OTHER
 
 
-def upload_message_attachments(files, *, chatbot_id=None, storage=None):
-    """Upload request files to R2 and return ChatMessageAttachment payloads.
+class MessageAttachmentInputSerializer(serializers.Serializer):
+    """A pre-uploaded file referenced by URL.
 
-    Images are optimized through upload_image; every other file is stored
-    unchanged. The returned dicts carry the ChatMessageAttachment field
-    values plus an ``object_key`` used to delete orphaned uploads when the
-    message row is never created.
+    Files are uploaded through the base file API first; message creation
+    only stores the attachment metadata.
     """
 
-    storage = storage or R2Storage()
-    attachments = []
-    for sort_order, uploaded_file in enumerate(files):
-        original_name = Path(getattr(uploaded_file, "name", "") or "attachment").name
-        mime_type = (
-            getattr(uploaded_file, "content_type", None)
-            or mimetypes.guess_type(original_name)[0]
-            or ""
-        ).lower()
-        attachment_type = classify_attachment_type(mime_type)
-        public_id = uuid4().hex
-        if attachment_type == ChatMessageAttachmentType.IMAGE:
-            upload = upload_image(
-                uploaded_file,
-                folder=_chat_folder(settings.R2_IMAGES_PREFIX, chatbot_id),
-                public_id=public_id,
-                storage=storage,
+    file_url = serializers.URLField(max_length=2048)
+    file_name = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=255,
+    )
+    mime_type = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=100,
+    )
+    file_size = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=0,
+    )
+    duration_ms = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=0,
+    )
+    attachment_type = serializers.ChoiceField(
+        choices=ChatMessageAttachmentType.choices,
+        required=False,
+    )
+
+    def validate(self, attrs):
+        mime_type = (attrs.get("mime_type") or "").lower()
+        if not mime_type:
+            mime_type = (
+                mimetypes.guess_type(urlparse(attrs["file_url"]).path)[0]
+                or ""
             )
-            stored_mime_type = mimetypes.guess_type(upload["key"])[0] or mime_type
-        else:
-            upload = upload_file(
-                uploaded_file,
-                folder=_chat_folder(settings.R2_FILES_PREFIX, chatbot_id),
-                public_id=public_id,
-                storage=storage,
-            )
-            stored_mime_type = upload["content_type"] or mime_type
-        attachments.append(
-            {
-                "attachment_type": attachment_type,
-                "file_url": upload["url"],
-                "file_name": original_name[:255],
-                "mime_type": stored_mime_type[:100],
-                "file_size": getattr(uploaded_file, "size", None),
-                "sort_order": sort_order,
-                "object_key": upload["key"],
-            }
-        )
-    return attachments
+            if mime_type:
+                attrs["mime_type"] = mime_type
 
+        if not attrs.get("attachment_type"):
+            attrs["attachment_type"] = classify_attachment_type(mime_type)
 
-def delete_message_attachment_uploads(attachments, *, storage=None):
-    """Remove R2 objects for attachment payloads that got no message row."""
+        if not attrs.get("file_name"):
+            attrs["file_name"] = Path(
+                unquote(urlparse(attrs["file_url"]).path)
+            ).name[:255]
 
-    if not attachments:
-        return
-    storage = storage or R2Storage()
-    for attachment in attachments:
-        object_key = attachment.get("object_key")
-        if not object_key:
-            continue
-        try:
-            storage.delete(object_key)
-        except Exception:
-            logger.exception(
-                "Could not delete orphaned chat attachment %s",
-                object_key,
-            )
-
-
-def _chat_folder(prefix, chatbot_id):
-    folder = f"{(prefix or '').strip('/')}/chat"
-    if chatbot_id:
-        folder = f"{folder}/{chatbot_id}"
-    return folder.strip("/")
-
-
+        return attrs
 
 
 def message_attachment_field():
     return serializers.ListField(
-        child=serializers.FileField(),
+        child=MessageAttachmentInputSerializer(),
         required=False,
         default=list,
         max_length=settings.CHAT_ATTACHMENT_MAX_COUNT,
@@ -133,15 +107,15 @@ def validate_message_payload(attrs):
             {"content": ["Message content cannot be blank without an attachment."]}
         )
     max_bytes = settings.CHAT_ATTACHMENT_MAX_FILE_SIZE_MB * 1024 * 1024
-    if any(
-        getattr(attachment, "size", 0) > max_bytes for attachment in attachments
-    ):
-        raise serializers.ValidationError(
-            {
-                "attachments": [
-                    "Each attachment cannot exceed "
-                    f"{settings.CHAT_ATTACHMENT_MAX_FILE_SIZE_MB} MB."
-                ]
-            }
-        )
+    for sort_order, attachment in enumerate(attachments):
+        attachment["sort_order"] = sort_order
+        if (attachment.get("file_size") or 0) > max_bytes:
+            raise serializers.ValidationError(
+                {
+                    "attachments": [
+                        "Each attachment cannot exceed "
+                        f"{settings.CHAT_ATTACHMENT_MAX_FILE_SIZE_MB} MB."
+                    ]
+                }
+            )
     return attrs

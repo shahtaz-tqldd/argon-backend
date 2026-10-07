@@ -27,7 +27,6 @@ def dashboard_access(user_id):
     }
     return (
         groups,
-        {str(item) for item in workspace_ids},
         {
             str(chatbot_id): str(membership_id)
             for chatbot_id, membership_id in chatbot_memberships.items()

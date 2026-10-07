@@ -1,4 +1,4 @@
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
@@ -11,7 +11,7 @@ from redis.exceptions import RedisError
 from base.socket.events import NOTIFICATION_CREATED
 from base.socket.services.access import dashboard_access, session_access
 from base.socket.services.groups import chat_session_dashboard_group
-from base.socket.services.presence import heartbeat
+from base.socket.services.presence import heartbeat, remove_presence
 from app.utils.logger import logger
 from chat.models import ChatSession
 from chat.services.messages import send_agent_message
@@ -21,6 +21,8 @@ class ChatbotAdminConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         self.group_names = set()
         self.session_ids = set()
+        self.connection_id = uuid4().hex
+        self.presence_registered = False
         user = self.scope["user"]
         if not user.is_authenticated or not user.is_active:
             await self.close(code=4401)
@@ -38,7 +40,17 @@ class ChatbotAdminConsumer(AsyncJsonWebsocketConsumer):
     async def disconnect(self, close_code):
         for group in getattr(self, "group_names", set()):
             await self.channel_layer.group_discard(group, self.channel_name)
-        # Another tab may still be alive. Expiry is based on the last heartbeat.
+        # Hybrid presence: forget this connection now. Lua keeps the member online
+        # while another tab/device still holds a connection; the heartbeat sweep
+        # remains the fallback if this cleanup fails or never runs.
+        if getattr(self, "presence_registered", False):
+            try:
+                await sync_to_async(remove_presence, thread_sensitive=False)(
+                    getattr(self, "chatbot_memberships", {}),
+                    self.connection_id,
+                )
+            except RedisError:
+                logger.exception("Dashboard presence disconnect cleanup failed")
 
     async def refresh_access(self):
         if not await database_sync_to_async(
@@ -48,7 +60,6 @@ class ChatbotAdminConsumer(AsyncJsonWebsocketConsumer):
             return False
         (
             groups,
-            self.workspace_ids,
             self.chatbot_memberships,
         ) = await database_sync_to_async(dashboard_access)(self.scope["user"].id)
         for session_id in self.session_ids.copy():
@@ -68,14 +79,15 @@ class ChatbotAdminConsumer(AsyncJsonWebsocketConsumer):
         try:
             snapshots = await sync_to_async(heartbeat, thread_sensitive=False)(
                 self.scope["user"].id,
-                self.workspace_ids,
                 self.chatbot_memberships,
+                self.connection_id,
             )
         except RedisError:
             logger.exception("Dashboard presence unavailable")
             await self.send_error("Presence is temporarily unavailable.")
             await self.close(code=1013)
             return False
+        self.presence_registered = True
         for snapshot in snapshots:
             await self.send_json(snapshot)
         return True

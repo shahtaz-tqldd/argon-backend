@@ -5,6 +5,7 @@ from django.db.models import Q
 from django.utils.dateparse import parse_date
 
 from app.core.models import BaseMinModel, BaseModel
+from app.utils.validators import validate_json_object
 from lead_capture.utils.choices import LeadCaptureFieldMode, LeadStatusType
 from lead_capture.utils.validators import (
     MAX_CAPTURE_FIELDS,
@@ -253,6 +254,111 @@ class Lead(BaseMinModel):
             str(self.id),
         )
         return f"{identity} ({self.chatbot})"
+
+
+class LeadAIInsight(BaseMinModel):
+    """Weekly AI-generated insight built from a chatbot's visitor messages.
+
+    One row per chatbot per week (Monday-anchored), produced by the weekly
+    lead-insights Celery task. Re-running the task for a week overwrites
+    the same row via update_or_create.
+    """
+
+    chatbot = models.ForeignKey(
+        "chatbot.Chatbot",
+        on_delete=models.CASCADE,
+        related_name="ai_insights",
+    )
+    week_start = models.DateField(help_text="Monday of the analyzed week.")
+    week_end = models.DateField(help_text="Sunday of the analyzed week.")
+
+    session_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Distinct sessions the analyzed messages came from.",
+    )
+    visitor_message_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Visitor messages in the window (before any AI cap).",
+    )
+
+    # Structured AI output.
+    summary = models.TextField(
+        blank=True,
+        default="",
+        help_text="Short narrative of what happened with visitors this week.",
+    )
+    topics = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            "Products/services/subjects visitors asked about, as "
+            "{topic, mentions, note} objects."
+        ),
+    )
+    frequently_asked_questions = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Recurring visitor questions as {question, times_asked} objects.",
+    )
+    common_intents = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            "Visitor intents (pricing, demo, support, ...) as "
+            "{intent, mentions} objects."
+        ),
+    )
+    areas_of_improvement = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Actionable suggestions derived from visitor questions.",
+    )
+
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        validators=[validate_json_object],
+        help_text=(
+            "Generation details: model, analyzed message count, caps, and "
+            "token usage."
+        ),
+    )
+
+    class Meta:
+        ordering = ["-week_start"]
+        indexes = [
+            models.Index(
+                fields=["chatbot", "-week_start"],
+                name="lead_ai_insight_week_idx",
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["chatbot", "week_start"],
+                name="unique_weekly_lead_ai_insight_per_chatbot",
+            ),
+            models.CheckConstraint(
+                condition=json_type_expression("topics", "array"),
+                name="lead_ai_insight_topics_array",
+            ),
+            models.CheckConstraint(
+                condition=json_type_expression(
+                    "frequently_asked_questions", "array"
+                ),
+                name="lead_ai_insight_faqs_array",
+            ),
+            models.CheckConstraint(
+                condition=json_type_expression("common_intents", "array"),
+                name="lead_ai_insight_intents_array",
+            ),
+            models.CheckConstraint(
+                condition=json_type_expression("areas_of_improvement", "array"),
+                name="lead_ai_insight_improvements_array",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.chatbot} — week of {self.week_start}"
 
 
 class LeadSignal(BaseMinModel):

@@ -7,10 +7,6 @@ from chat.models import (
     ChatSession,
     ChatSessionTakeover,
 )
-from chat.services.attachments import (
-    delete_message_attachment_uploads,
-    upload_message_attachments,
-)
 from chat.utils.choices import ChatMessageSenderType, ChatSessionStatus
 
 
@@ -21,6 +17,7 @@ ATTACHMENT_ROW_FIELDS = frozenset(
         "file_name",
         "mime_type",
         "file_size",
+        "duration_ms",
         "sort_order",
     )
 )
@@ -120,8 +117,8 @@ def create_chat_message(
 ):
     """Create a message and its attachment rows inside the caller's transaction.
 
-    ``attachments`` are payloads from upload_message_attachments; their R2
-    objects must be deleted by the caller when this raises.
+    ``attachments`` are validated attachment payloads that reference files
+    uploaded beforehand through the file API.
     """
 
     message = ChatMessage(
@@ -159,58 +156,44 @@ def send_agent_message(
     metadata=None,
     attachments=None,
 ):
-    # Uploads run before the row lock so S3 latency never extends the
-    # transaction; anything the database rejects is deleted again.
-    uploads = (
-        upload_message_attachments(
-            attachments,
-            chatbot_id=chat_session.chatbot_id,
+    with transaction.atomic():
+        chat_session = (
+            ChatSession.objects.select_for_update()
+            .select_related("visitor")
+            .get(pk=chat_session.pk)
         )
-        if attachments
-        else []
-    )
-    try:
-        with transaction.atomic():
-            chat_session = (
-                ChatSession.objects.select_for_update()
-                .select_related("visitor")
-                .get(pk=chat_session.pk)
+        if chat_session.status in {
+            ChatSessionStatus.RESOLVED,
+            ChatSessionStatus.CLOSED,
+        }:
+            raise ValidationError("Cannot reply to a resolved or closed session.")
+
+        active_takeover = ChatSessionTakeover.objects.filter(
+            chat_session=chat_session,
+            agent=agent,
+            agent__is_active=True,
+            agent__user__is_active=True,
+            released_at__isnull=True,
+        ).first()
+        if active_takeover is None:
+            raise ValidationError(
+                "You must be the active takeover agent before replying."
             )
-            if chat_session.status in {
-                ChatSessionStatus.RESOLVED,
-                ChatSessionStatus.CLOSED,
-            }:
-                raise ValidationError("Cannot reply to a resolved or closed session.")
 
-            active_takeover = ChatSessionTakeover.objects.filter(
-                chat_session=chat_session,
-                agent=agent,
-                agent__is_active=True,
-                agent__user__is_active=True,
-                released_at__isnull=True,
-            ).first()
-            if active_takeover is None:
-                raise ValidationError(
-                    "You must be the active takeover agent before replying."
-                )
-
-            if (
-                chat_session.visitor is not None
-                and chat_session.visitor.is_blocked
-            ):
-                raise ValidationError(
-                    "Cannot send a message to a blocked visitor."
-                )
-
-            message = create_chat_message(
-                chat_session,
-                sender_type=ChatMessageSenderType.AGENT,
-                sender=agent,
-                content=content,
-                metadata=metadata,
-                attachments=uploads,
+        if (
+            chat_session.visitor is not None
+            and chat_session.visitor.is_blocked
+        ):
+            raise ValidationError(
+                "Cannot send a message to a blocked visitor."
             )
-    except Exception:
-        delete_message_attachment_uploads(uploads)
-        raise
+
+        message = create_chat_message(
+            chat_session,
+            sender_type=ChatMessageSenderType.AGENT,
+            sender=agent,
+            content=content,
+            metadata=metadata,
+            attachments=attachments,
+        )
     return message

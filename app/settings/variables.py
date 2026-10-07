@@ -96,15 +96,22 @@ CELERY_IMPORTS = (
     "accounts.tasks",
     "chat.tasks",
     "knowledge.tasks",
+    "lead_capture.tasks",
 )
+# Presence sweep cadence; the remaining presence settings live below the Channels block.
+PRESENCE_SWEEP_SECONDS = env_int("PRESENCE_SWEEP_SECONDS", 60)
 CELERY_BEAT_SCHEDULE = {
     "expire-dashboard-presence": {
         "task": "base.socket.tasks.sweep_presence",
-        "schedule": 15.0,
+        "schedule": PRESENCE_SWEEP_SECONDS,
     },
     "daily-platform-maintenance": {
         "task": "base.tasks.run_daily_maintenance",
         "schedule": crontab(hour=0, minute=15),
+    },
+    "weekly-lead-ai-insights": {
+        "task": "lead_capture.tasks.generate_weekly_lead_ai_insights",
+        "schedule": crontab(day_of_week=1, hour=9, minute=30),
     },
 }
 
@@ -128,10 +135,12 @@ else:
     }
 
 # Presence remains Redis-backed even when Channels uses an in-memory test layer.
+# Hybrid model: clean disconnects are instant; crashed/sleeping clients resolve
+# within roughly timeout + sweep interval.
 PRESENCE_REDIS_URL = env("PRESENCE_REDIS_URL", CHANNEL_REDIS_URL)
 PRESENCE_REDIS_PREFIX = env("PRESENCE_REDIS_PREFIX", "presence")
-PRESENCE_HEARTBEAT_SECONDS = 25
-PRESENCE_TIMEOUT_SECONDS = 75
+PRESENCE_HEARTBEAT_SECONDS = env_int("PRESENCE_HEARTBEAT_SECONDS", 10)
+PRESENCE_TIMEOUT_SECONDS = env_int("PRESENCE_TIMEOUT_SECONDS", 20)
 
 # ADK
 ADK_DB_URL = env("ADK_DB_URL")
@@ -146,6 +155,7 @@ GEMINI_EMBEDDING_DIMENSIONS = env_int("GEMINI_EMBEDDING_DIMENSIONS", 1536)
 GEMINI_EMBEDDING_REQUEST_DELAY_SECONDS = env_float("GEMINI_EMBEDDING_REQUEST_DELAY_SECONDS", 13.0)
 GEMINI_CHAT_MODEL = env("GEMINI_CHAT_MODEL", "gemini-2.5-flash")
 GEMINI_CHAT_MAX_OUTPUT_TOKENS = env_int("GEMINI_CHAT_MAX_OUTPUT_TOKENS", 1024)
+GEMINI_INSIGHTS_MAX_OUTPUT_TOKENS = env_int("GEMINI_INSIGHTS_MAX_OUTPUT_TOKENS", 4096)
 GEMINI_INPUT_COST_PER_MILLION = env_float("GEMINI_INPUT_COST_PER_MILLION", 0.30)
 GEMINI_OUTPUT_COST_PER_MILLION = env_float("GEMINI_OUTPUT_COST_PER_MILLION", 2.50)
 
@@ -175,6 +185,9 @@ R2_IMAGE_CACHE_CONTROL = env(
     "public, max-age=31536000, immutable",
 )
 R2_PRESIGNED_URL_TTL = env_int("R2_PRESIGNED_URL_TTL", 900)
+
+# BASE APP FILE UPLOADS
+BASE_FILE_MAX_SIZE_MB = env_int("BASE_FILE_MAX_SIZE_MB", 10)
 
 # CHAT MESSAGE ATTACHMENTS
 CHAT_ATTACHMENT_MAX_COUNT = env_int("CHAT_ATTACHMENT_MAX_COUNT", 5)

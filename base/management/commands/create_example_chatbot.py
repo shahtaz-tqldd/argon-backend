@@ -31,8 +31,8 @@ class Command(BaseCommand):
         "the requested subscription plan."
     )
 
-    # python manage.py create_chatbot --chatbot-name "Support Bot"
-    # python manage.py create_chatbot --owner-email owner@example.com \
+    # python manage.py create_example_chatbot --chatbot-name "Support Bot"
+    # python manage.py create_example_chatbot --owner-email owner@example.com \
     #     --chatbot-name "Support Bot" --business-name "Acme" --plan growth
 
     def add_arguments(self, parser):

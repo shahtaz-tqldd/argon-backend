@@ -21,10 +21,9 @@ class SocketAccessTests(SimpleTestCase):
         chatbots.filter.return_value.values_list.return_value = [
             (chatbot_id, membership_id)
         ]
-        groups, workspace_ids, chatbot_memberships = dashboard_access(user_id)
+        groups, chatbot_memberships = dashboard_access(user_id)
         self.assertIn(workspace_dashboard_group(workspace_id), groups)
         self.assertIn(chatbot_dashboard_group(chatbot_id), groups)
-        self.assertEqual(workspace_ids, {str(workspace_id)})
         self.assertEqual(
             chatbot_memberships,
             {str(chatbot_id): str(membership_id)},
@@ -51,9 +50,8 @@ class SocketAccessTests(SimpleTestCase):
             (chatbot_id, membership_id),
         ]
 
-        groups, workspace_ids, chatbot_memberships = dashboard_access(user_id)
+        groups, chatbot_memberships = dashboard_access(user_id)
 
-        self.assertEqual(workspace_ids, set())
         self.assertIn(chatbot_dashboard_group(chatbot_id), groups)
         self.assertEqual(
             chatbot_memberships,

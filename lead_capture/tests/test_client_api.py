@@ -11,9 +11,12 @@ from openpyxl import load_workbook
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from chatbot.models import Chatbot, ChatbotConfig, ChatbotUser
+from chat.models import ChatMessage, ChatSession
+from chat.utils.choices import ChatMessageSenderType
+from chatbot.models import Chatbot, ChatbotConfig, ChatbotUser, ChatbotVisitor
 from chatbot.utils.choices import ChatbotRoleTypes
-from lead_capture.models import Lead, LeadCaptureConfig, LeadNote
+from lead_capture.models import Lead, LeadAIInsight, LeadCaptureConfig, LeadNote, LeadSignal
+from lead_capture.services.signals import record_lead_signal
 from subscription.choices import (
     BillingInterval,
     PaymentProvider,
@@ -156,93 +159,47 @@ class LeadCaptureClientAPITests(APITestCase):
         self.assertEqual(len(response.data["data"]), 2)
         self.assertIn("notes_count", response.data["data"][0])
 
-    def test_lead_stats_returns_totals_and_breakdowns_for_chatbot(self):
-        Lead.objects.bulk_create(
-            [
-                Lead(
-                    chatbot=self.chatbot,
-                    status="new",
-                    lead_score=75,
-                    source="widget",
-                ),
-                Lead(
-                    chatbot=self.chatbot,
-                    status="qualified",
-                    lead_score=76,
-                    source="widget",
-                ),
-                Lead(
-                    chatbot=self.chatbot,
-                    status="converted",
-                    lead_score=100,
-                    source="campaign",
-                ),
-                Lead(
-                    chatbot=self.chatbot,
-                    status="new",
-                    lead_score=None,
-                    source="",
-                ),
-            ]
+    def test_lead_details_include_visitor(self):
+        lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={
+                "name": "Visited Lead",
+                "email": "visited-lead@example.com",
+            },
         )
-        other_chatbot = Chatbot.objects.create(
-            workspace=self.workspace,
-            chatbot_name="Other Lead Bot",
-            created_by=self.user,
-        )
-        Lead.objects.create(
-            chatbot=other_chatbot,
-            lead_score=99,
-            source="other",
+        visitor = ChatbotVisitor.objects.create(
+            chatbot=self.chatbot,
+            visitor_id="detail-visitor-1",
+            lead=lead,
+            ip_address="203.0.113.9",
+            detected_location="Dhaka, BD",
+            detected_country="BD",
+            metadata={"browser": "Chrome 129"},
         )
 
-        response = self.client.get(self.url("lead-stats"))
+        response = self.client.get(self.url("lead-detail", lead=lead))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        data = response.data["data"]
-        self.assertEqual(data["total_leads"], 4)
-        self.assertEqual(data["hot_leads"], 2)
-        self.assertEqual(data["hot_lead_percentage"], 50.0)
-        self.assertEqual(data["scored_leads"], 3)
-        self.assertEqual(data["unscored_leads"], 1)
-        self.assertEqual(data["average_lead_score"], 83.67)
-        self.assertEqual(
-            data["leads_by_channel"],
-            [
-                {"channel": "widget", "count": 2, "percentage": 50.0},
-                {"channel": "unknown", "count": 1, "percentage": 25.0},
-                {"channel": "campaign", "count": 1, "percentage": 25.0},
-            ],
-        )
-        self.assertEqual(
-            {
-                item["status"]: item["count"]
-                for item in data["leads_by_status"]
-            },
-            {
-                "new": 2,
-                "qualified": 1,
-                "contacted": 0,
-                "converted": 1,
-                "disqualified": 0,
+        visitor_data = response.data["data"]["visitor"]
+        self.assertEqual(visitor_data["id"], str(visitor.id))
+        self.assertEqual(visitor_data["visitor_id"], "detail-visitor-1")
+        self.assertEqual(visitor_data["detected_location"], "Dhaka, BD")
+        self.assertEqual(visitor_data["detected_country"], "BD")
+        self.assertEqual(visitor_data["metadata"], {"browser": "Chrome 129"})
+
+    def test_lead_details_without_visitor_serializes_null(self):
+        lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={
+                "name": "Orphan Lead",
+                "email": "orphan-lead@example.com",
             },
         )
 
-    def test_lead_stats_returns_defined_empty_values(self):
-        response = self.client.get(self.url("lead-stats"))
+        response = self.client.get(self.url("lead-detail", lead=lead))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        data = response.data["data"]
-        self.assertEqual(data["total_leads"], 0)
-        self.assertEqual(data["hot_leads"], 0)
-        self.assertEqual(data["hot_lead_percentage"], 0.0)
-        self.assertEqual(data["scored_leads"], 0)
-        self.assertEqual(data["unscored_leads"], 0)
-        self.assertIsNone(data["average_lead_score"])
-        self.assertEqual(data["leads_by_channel"], [])
-        self.assertTrue(
-            all(item["count"] == 0 for item in data["leads_by_status"])
-        )
+        self.assertIsNone(response.data["data"]["visitor"])
 
     def test_all_leads_can_be_exported_as_csv_without_a_date_range(self):
         Lead.objects.create(
@@ -413,6 +370,296 @@ class LeadCaptureClientAPITests(APITestCase):
         self.assertEqual(lead.collected_fields["email"], "updated@example.com")
         self.assertEqual(lead.status, "contacted")
         self.assertEqual(lead.lead_score, 75)
+
+    def test_lead_signal_history_is_paginated(self):
+        lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={
+                "name": "Signal Lead",
+                "email": "signal-lead@example.com",
+            },
+        )
+        other_lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={
+                "name": "Other Lead",
+                "email": "other-lead@example.com",
+            },
+        )
+        chat_session = ChatSession.objects.create(chatbot=self.chatbot)
+        message = ChatMessage.objects.create(
+            chat_session=chat_session,
+            sender_type=ChatMessageSenderType.AI,
+            content="Reply with a score.",
+        )
+        record_lead_signal(lead, score=70, summary="Early interest.")
+        record_lead_signal(lead, score=85, summary="Asked for pricing.")
+        record_lead_signal(lead, score=95, summary="Requested a demo.", message=message)
+        record_lead_signal(other_lead, score=10, summary="Other lead signal.")
+
+        response = self.client.get(
+            f'{self.url("lead-signal-list", lead=lead)}&page_size=2'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 3)
+        self.assertEqual(response.data["meta"]["num_pages"], 2)
+        self.assertEqual(len(response.data["data"]), 2)
+        self.assertEqual(
+            [item["score"] for item in response.data["data"]],
+            [95, 85],
+        )
+        self.assertEqual(
+            response.data["data"][0]["message_id"], str(message.id)
+        )
+        self.assertIsNone(response.data["data"][1]["message_id"])
+
+    def test_lead_signal_history_requires_lead_scope(self):
+        url = (
+            f'{reverse("lead-signal-list")}'
+            f'?chatbot_slug={self.chatbot.slug}'
+            "&lead_id=00000000-0000-0000-0000-000000000000"
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_lead_signal_list_returns_signals_with_messages(self):
+        session = ChatSession.objects.create(chatbot=self.chatbot)
+        message = ChatMessage.objects.create(
+            chat_session=session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="Please book me a demo for our team.",
+        )
+        lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "Signal Lead", "email": "signal@example.com"},
+        )
+        record_lead_signal(lead, score=90, summary="Asked for pricing.")
+        record_lead_signal(
+            lead,
+            score=95,
+            summary="Requested a demo.",
+            message=message,
+        )
+        old_signal_lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "Old Signal", "email": "old-signal@example.com"},
+        )
+        old_signal = record_lead_signal(
+            old_signal_lead, score=60, summary="Mild interest."
+        )
+        LeadSignal.objects.filter(pk=old_signal.pk).update(
+            created_at=timezone.now() - timedelta(days=5),
+        )
+
+        response = self.client.get(
+            f'{self.url("lead-signal-leads")}&page_size=2'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 3)
+        self.assertEqual(len(response.data["data"]), 2)
+        self.assertEqual(response.data["data"][0]["score"], 95)
+        self.assertEqual(response.data["data"][0]["lead_id"], str(lead.id))
+        self.assertEqual(
+            response.data["data"][0]["message"]["content"],
+            "Please book me a demo for our team.",
+        )
+        self.assertEqual(
+            response.data["data"][0]["message"]["chat_session_id"],
+            str(session.id),
+        )
+        self.assertIsNone(response.data["data"][1]["message"])
+
+        today = timezone.localdate().isoformat()
+        response = self.client.get(
+            f'{self.url("lead-signal-leads")}&page_size=10'
+            f"&start_date={today}&end_date={today}"
+        )
+        self.assertEqual(response.data["meta"]["count"], 2)
+
+    def test_lead_signal_stats_separate_scores_with_optional_date_range(self):
+        Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "Hot", "email": "hot@example.com"},
+            avg_score=Decimal("90.00"),
+        )
+        Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "Medium", "email": "medium@example.com"},
+            avg_score=Decimal("60.00"),
+        )
+        Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "Low", "email": "low@example.com"},
+            avg_score=Decimal("30.00"),
+        )
+        Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "Unscored", "email": "unscored@example.com"},
+        )
+        old_hot_lead = Lead.objects.create(
+            chatbot=self.chatbot,
+            collected_fields={"name": "Old Hot", "email": "old-hot@example.com"},
+            avg_score=Decimal("95.00"),
+        )
+        Lead.objects.filter(pk=old_hot_lead.pk).update(
+            created_at=timezone.now() - timedelta(days=5),
+        )
+
+        response = self.client.get(self.url("lead-signal-stats"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["data"]
+        self.assertEqual(data["total_leads"], 5)
+        self.assertEqual(data["hot_leads"], 2)
+        self.assertEqual(data["medium_leads"], 1)
+        self.assertEqual(data["low_leads"], 1)
+        self.assertEqual(data["unscored_leads"], 1)
+        self.assertEqual(data["average_lead_score"], 68.75)
+
+        today = timezone.localdate().isoformat()
+        response = self.client.get(
+            f'{self.url("lead-signal-stats")}'
+            f"&start_date={today}&end_date={today}"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["data"]
+        self.assertEqual(data["total_leads"], 4)
+        self.assertEqual(data["hot_leads"], 1)
+        self.assertEqual(data["medium_leads"], 1)
+        self.assertEqual(data["low_leads"], 1)
+        self.assertEqual(data["average_lead_score"], 60.0)
+
+    def test_lead_signal_apis_validate_date_order(self):
+        today = timezone.localdate().isoformat()
+        response = self.client.get(
+            f'{self.url("lead-signal-stats")}'
+            f"&start_date={today}&end_date=2020-01-01"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_lead_growth_defaults_to_fifteen_daily_buckets(self):
+        def make_lead(name, email):
+            return Lead.objects.create(
+                chatbot=self.chatbot,
+                collected_fields={"name": name, "email": email},
+            )
+
+        today_lead_1 = make_lead("Today One", "today-one@example.com")
+        today_lead_2 = make_lead("Today Two", "today-two@example.com")
+        old_lead = make_lead("Sixteen Days", "sixteen-days@example.com")
+        Lead.objects.filter(pk=old_lead.pk).update(
+            created_at=timezone.now() - timedelta(days=16),
+        )
+
+        response = self.client.get(self.url("lead-growth"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["data"]
+        today = timezone.localdate().isoformat()
+        self.assertEqual(data["interval"], "day")
+        self.assertEqual(data["end_date"], today)
+        self.assertEqual(data["total_leads"], 2)
+        self.assertEqual(len(data["growth"]), 15)
+        self.assertEqual(data["growth"][-1]["date"], today)
+        self.assertEqual(data["growth"][-1]["count"], 2)
+        self.assertEqual(data["growth"][-1]["cumulative_total"], 2)
+        self.assertTrue(
+            all(item["count"] == 0 for item in data["growth"][:-1])
+        )
+
+    def test_lead_growth_groups_monthly_within_a_date_range(self):
+        def make_lead(name, created_at):
+            lead = Lead.objects.create(
+                chatbot=self.chatbot,
+                collected_fields={"name": name, "email": f"{name}@example.com"},
+            )
+            Lead.objects.filter(pk=lead.pk).update(created_at=created_at)
+            return lead
+
+        today = timezone.localdate()
+        make_lead("Forty Days", timezone.now() - timedelta(days=40))
+        make_lead("Ten Days", timezone.now() - timedelta(days=10))
+        make_lead("Today", timezone.now())
+        start = today - timedelta(days=60)
+
+        response = self.client.get(
+            f'{self.url("lead-growth")}&interval=month'
+            f"&start_date={start.isoformat()}&end_date={today.isoformat()}"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["data"]
+        self.assertEqual(data["interval"], "month")
+        self.assertEqual(data["total_leads"], 3)
+        expected_months = (
+            (start.year * 12 + start.month,
+             today.year * 12 + today.month + 1)
+        )
+        self.assertEqual(len(data["growth"]), expected_months[1] - expected_months[0])
+        counts_by_date = {item["date"]: item["count"] for item in data["growth"]}
+        forty_days_month = (today - timedelta(days=40)).replace(day=1).isoformat()
+        ten_days_month = (today - timedelta(days=10)).replace(day=1).isoformat()
+        today_month = today.replace(day=1).isoformat()
+        self.assertEqual(counts_by_date[forty_days_month], 1)
+        self.assertEqual(counts_by_date[ten_days_month], 1)
+        self.assertEqual(counts_by_date[today_month], 1)
+        self.assertEqual(data["growth"][-1]["cumulative_total"], 3)
+
+    def test_lead_growth_validates_interval_and_date_order(self):
+        response = self.client.get(
+            f'{self.url("lead-growth")}&interval=year'
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        today = timezone.localdate().isoformat()
+        response = self.client.get(
+            f'{self.url("lead-growth")}'
+            f"&start_date={today}&end_date=2020-01-01"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_lead_ai_insights_are_paginated_newest_week_first(self):
+        today = timezone.localdate()
+        this_monday = today - timedelta(days=today.weekday())
+        for weeks_ago in range(1, 4):
+            week_start = this_monday - timedelta(days=7 * weeks_ago)
+            LeadAIInsight.objects.create(
+                chatbot=self.chatbot,
+                week_start=week_start,
+                week_end=week_start + timedelta(days=6),
+                session_count=weeks_ago,
+                visitor_message_count=10 * weeks_ago,
+                summary=f"Demo summary for week {weeks_ago}.",
+                topics=[{"topic": "Pricing", "mentions": 3, "note": ""}],
+                frequently_asked_questions=[
+                    {"question": "How much?", "times_asked": 2}
+                ],
+                common_intents=[{"intent": "pricing", "mentions": 4}],
+                areas_of_improvement=["Add pricing docs."],
+                metadata={"model": "demo"},
+            )
+
+        response = self.client.get(
+            f'{self.url("lead-ai-insight-list")}&page_size=2'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 3)
+        self.assertEqual(len(response.data["data"]), 2)
+        first = response.data["data"][0]
+        self.assertEqual(first["chatbot_id"], str(self.chatbot.id))
+        self.assertEqual(
+            first["week_start"],
+            (this_monday - timedelta(days=7)).isoformat(),
+        )
+        self.assertIn("summary", first)
+        self.assertIn("topics", first)
+        self.assertIn("frequently_asked_questions", first)
+        self.assertIn("common_intents", first)
+        self.assertIn("areas_of_improvement", first)
 
     def test_notes_can_be_created_fetched_updated_listed_and_deleted(self):
         lead = Lead.objects.create(

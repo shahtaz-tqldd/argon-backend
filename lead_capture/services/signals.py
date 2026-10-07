@@ -16,7 +16,11 @@ def refresh_lead_avg_score(lead):
     """Recompute and persist lead.avg_score from its signals."""
     average = lead.signals.aggregate(average=Avg("score"))["average"]
     lead.avg_score = (
-        average.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        # Avg() resolves to FloatField for integer sources, but Decimal is
+        # required for quantize(); normalize either type.
+        Decimal(str(average)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
         if average is not None
         else None
     )

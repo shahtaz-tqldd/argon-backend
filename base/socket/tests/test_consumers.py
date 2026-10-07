@@ -9,6 +9,7 @@ from asgiref.testing import ApplicationCommunicator
 from channels.layers import get_channel_layer
 from django.contrib.auth.models import AnonymousUser
 from django.test import SimpleTestCase, override_settings
+from redis.exceptions import RedisError
 
 from base.socket.consumers.chatbot_admin import ChatbotAdminConsumer
 from base.socket.consumers.widget import ChatbotWidgetConsumer
@@ -72,7 +73,7 @@ class ChatbotAdminConsumerTests(SimpleTestCase):
             "type": "notification.created", "data": {"id": "notification-id"},
         })
 
-    @patch("base.socket.consumers.dashboard.send_agent_message")
+    @patch("base.socket.consumers.chatbot_admin.send_agent_message")
     def test_send_reuses_domain_service_and_returns_acceptance(self, send):
         send.return_value = SimpleNamespace(id=uuid4())
         async_to_sync(self.consumer.receive_json)({
@@ -86,12 +87,33 @@ class ChatbotAdminConsumerTests(SimpleTestCase):
         async_to_sync(self.consumer.disconnect)(1000)
         self.consumer.channel_layer.group_discard.assert_awaited_once()
 
-    @patch("base.socket.consumers.dashboard.dashboard_access")
-    @patch("base.socket.consumers.dashboard.get_user_model")
+    def test_disconnect_removes_only_own_registered_connection(self):
+        self.consumer.presence_registered = True
+        self.consumer.chatbot_memberships = {"chatbot-a": "membership-a"}
+        self.consumer.connection_id = "conn-a"
+        with patch("base.socket.consumers.chatbot_admin.remove_presence") as remove:
+            async_to_sync(self.consumer.disconnect)(1000)
+        remove.assert_called_once_with(
+            {"chatbot-a": "membership-a"},
+            "conn-a",
+        )
+
+    def test_disconnect_presence_cleanup_failure_is_swallowed(self):
+        self.consumer.presence_registered = True
+        self.consumer.chatbot_memberships = {}
+        self.consumer.connection_id = "conn-a"
+        with patch(
+            "base.socket.consumers.chatbot_admin.remove_presence",
+            side_effect=RedisError,
+        ):
+            async_to_sync(self.consumer.disconnect)(1000)  # Sweep remains the fallback.
+
+    @patch("base.socket.consumers.chatbot_admin.dashboard_access")
+    @patch("base.socket.consumers.chatbot_admin.get_user_model")
     def test_refresh_discards_revoked_groups_and_session_subscriptions(self, user_model, access):
         self.consumer.scope["user"].pk = self.consumer.scope["user"].id
         user_model.return_value.objects.filter.return_value.exists.return_value = True
-        access.return_value = ({"notifications.global"}, set(), {})
+        access.return_value = ({"notifications.global"}, {})
         self.consumer.group_names = {"notifications.global", "notifications.workspace.revoked"}
         self.consumer.session_ids = {self.session_id}
         self.consumer.get_session_access.return_value = None
@@ -129,7 +151,6 @@ class DashboardDeliveryTests(SimpleTestCase):
 
         async def refresh(consumer):
             consumer.group_names = {group}
-            consumer.workspace_ids = set()
             await consumer.channel_layer.group_add(group, consumer.channel_name)
             return True
 
