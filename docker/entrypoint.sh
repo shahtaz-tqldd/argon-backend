@@ -20,7 +20,7 @@ if [[ "${DJANGO_WAIT_FOR_MIGRATIONS:-0}" == "1" ]]; then
 fi
 
 if [[ "${DJANGO_CREATE_SUPERUSER:-1}" == "1" ]]; then
-  python manage.py create_initial_superuser
+  python manage.py create_superuser
 fi
 
 if [[ "${DJANGO_COLLECTSTATIC:-0}" == "1" ]]; then

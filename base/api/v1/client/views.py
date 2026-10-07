@@ -96,7 +96,16 @@ class RetrieveFileAPIView(GenericAPIView):
             url=serializer.validated_data.get("url"),
         )
         try:
-            url = R2Storage().private_url(key)
+            download_file_name = None
+            if serializer.validated_data.get("download"):
+                download_file_name = (
+                    serializer.validated_data.get("file_name")
+                    or Path(key).name
+                )
+            url = R2Storage().private_url(
+                key,
+                download_file_name=download_file_name,
+            )
         except ImproperlyConfigured:
             return APIResponse.error(
                 message="File storage is not configured.",
@@ -111,7 +120,7 @@ class RetrieveFileAPIView(GenericAPIView):
 class UploadFileAPIView(GenericAPIView):
     """Upload a file to storage and return its permanent URL and key."""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
     serializer_class = FileUploadSerializer
 
     def post(self, request, *args, **kwargs):

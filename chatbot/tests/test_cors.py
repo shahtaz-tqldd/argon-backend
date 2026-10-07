@@ -54,6 +54,13 @@ class PublicWidgetCORSAPITests(SimpleTestCase):
             f"?session_id={session_id}"
         )
 
+    def test_base_file_upload_api_enables_widget_cors(self):
+        self.assert_widget_cors_enabled("/api/v1/base/file/upload/")
+
+    def test_base_file_retrieve_api_does_not_enable_widget_cors(self):
+        request = self.request_factory.get("/api/v1/base/file/")
+        self.assertFalse(allow_public_widget_api(None, request))
+
     def test_unrelated_chatbot_api_does_not_enable_widget_cors(self):
         request = self.request_factory.get(
             f"/api/v1/chatbots/{self.public_key}/private/"

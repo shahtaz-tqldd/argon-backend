@@ -13,7 +13,7 @@ from chatbot.services.capacity import chatbot_has_feature
 from subscription.choices import PlanFeature
 
 
-MAX_LEAD_SUMMARY_LENGTH = 240
+MAX_LEAD_INTENT_LENGTH = 240
 MAX_ESCALATION_REASON_LENGTH = 500
 
 
@@ -26,7 +26,7 @@ def _clean_text(value, *, field_name, max_length):
     return text
 
 
-def _record_lead_score(chatbot_id, session_id, score, summary):
+def _record_lead_score(chatbot_id, session_id, score, intent):
     """Gate a lead qualification score for the current conversation turn.
 
     No lead column is written here: the score rides along with the agent
@@ -35,10 +35,11 @@ def _record_lead_score(chatbot_id, session_id, score, summary):
     """
     if isinstance(score, bool) or not isinstance(score, int) or not 0 <= score <= 100:
         raise ValueError("score must be an integer between 0 and 100.")
-    summary = _clean_text(
-        summary,
-        field_name="summary",
-        max_length=MAX_LEAD_SUMMARY_LENGTH,
+
+    intent = _clean_text(
+        intent,
+        field_name="intent",
+        max_length=MAX_LEAD_INTENT_LENGTH,
     )
 
     with transaction.atomic():
@@ -49,12 +50,12 @@ def _record_lead_score(chatbot_id, session_id, score, summary):
         if chat_session.lead_id is None:
             return {
                 "score": score,
-                "summary": summary,
+                "intent": intent,
                 "recorded": False,
                 "message": "The visitor has not been captured as a lead yet.",
             }
 
-    return {"score": score, "summary": summary, "recorded": True}
+    return {"score": score, "intent": intent, "recorded": True}
 
 
 def _request_human_escalation(
@@ -126,26 +127,28 @@ def create_global_tools(chatbot, session):
     if session.is_test:
         return []
 
-    async def record_lead_score(score: int, summary: str) -> dict:
-        """Record a qualified lead score and a very short evidence-based reason.
+    async def record_lead_score(score: int, intent: str) -> dict:
+        """Record meaningful new lead qualification evidence.
 
-        Call only after the visitor shows a meaningful buying signal, such as a
-        concrete need, timeline, budget, booking intent, or requested next step.
+        Call only when the visitor provides materially new evidence that changes
+        their qualification, such as a concrete need, timeline, budget, purchase
+        interest, booking intent, or requested next step.
 
         Args:
             score: Qualification score from 0 through 100.
-            summary: One short sentence explaining the evidence for the score.
+            intent: A short, meaningful label describing the visitor's intent or qualification signal.
         """
+
         return await sync_to_async(_record_lead_score, thread_sensitive=True)(
             chatbot.id,
             session.id,
             score,
-            summary,
+            intent,
         )
 
     tools = []
 
-    if chatbot_has_feature(chatbot, PlanFeature.LEAD_CAPTURE):
+    if chatbot_has_feature(chatbot, PlanFeature.LEAD_INSIGHTS):
         tools.append(FunctionTool(record_lead_score))
 
     if getattr(chatbot, "human_handoff_enabled", True):

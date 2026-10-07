@@ -68,12 +68,19 @@ class R2Storage:
         self.client.download_fileobj(self.bucket, key, file_obj)
         file_obj.seek(0)
 
-    def private_url(self, key):
+    def private_url(self, key, download_file_name=None):
         if not key:
             return None
+        params = {"Bucket": self.bucket, "Key": key}
+        if download_file_name:
+            safe_name = _safe_disposition_filename(download_file_name)
+            if safe_name:
+                params["ResponseContentDisposition"] = (
+                    f'attachment; filename="{safe_name}"'
+                )
         return self.client.generate_presigned_url(
             "get_object",
-            Params={"Bucket": self.bucket, "Key": key},
+            Params=params,
             ExpiresIn=settings.R2_PRESIGNED_URL_TTL,
         )
 
@@ -180,6 +187,15 @@ def extract_key(file_url):
 
     key = url_path[len(base_path) :].lstrip("/")
     return unquote(key) or None
+
+
+def _safe_disposition_filename(value):
+    cleaned = "".join(
+        character
+        for character in str(value)
+        if character.isprintable() and character not in '"\\'
+    ).strip()
+    return cleaned[:255]
 
 
 def _safe_object_name(value):

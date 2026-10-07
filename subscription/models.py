@@ -10,6 +10,7 @@ from django.utils.text import slugify
 from app.core.models import BaseMinModel, BaseModel
 from subscription.choices import (
     BillingInterval,
+    EnterprisePlanRequestStatus,
     PaymentProvider,
     PaymentStatus,
     PaymentType,
@@ -186,6 +187,110 @@ class PlanPrice(BaseModel):
     def save(self, *args, **kwargs):
         self.currency = self.currency.strip().upper()
         super().save(*args, **kwargs)
+
+
+class EnterprisePlanRequest(BaseModel):
+    """A user-submitted request for a custom/enterprise subscription.
+
+    The request stores what the user asked for; the review fields store what
+    the superadmin actually granted. Approving a request materializes a
+    private CUSTOM plan plus an active manual subscription whose snapshot is
+    the versioned contract handed to entitlement code.
+    """
+
+    chatbot = models.ForeignKey(
+        "chatbot.Chatbot",
+        on_delete=models.CASCADE,
+        related_name="enterprise_plan_requests",
+    )
+
+    requested_features = ArrayField(
+        base_field=models.CharField(
+            max_length=40, choices=PlanFeature.choices
+        ),
+        default=list,
+        blank=True,
+    )
+    requested_ai_message_limit = models.PositiveIntegerField(
+        null=True, blank=True
+    )
+    requested_file_size_limit_mb = models.PositiveIntegerField(
+        null=True, blank=True
+    )
+    requested_knowledge_chunk_limit = models.PositiveIntegerField(
+        null=True, blank=True
+    )
+    requested_daily_traffic = models.PositiveIntegerField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+
+    status = models.CharField(
+        max_length=20,
+        choices=EnterprisePlanRequestStatus.choices,
+        default=EnterprisePlanRequestStatus.PENDING,
+        db_index=True,
+    )
+
+    approved_features = ArrayField(
+        base_field=models.CharField(
+            max_length=40, choices=PlanFeature.choices
+        ),
+        default=list,
+        blank=True,
+    )
+    approved_ai_message_limit = models.PositiveIntegerField(
+        null=True, blank=True
+    )
+    approved_file_size_limit_mb = models.PositiveIntegerField(
+        null=True, blank=True
+    )
+    approved_knowledge_chunk_limit = models.PositiveIntegerField(
+        null=True, blank=True
+    )
+    expires_at = models.DateTimeField(null=True, blank=True)
+    subscription = models.ForeignKey(
+        "subscription.ChatbotSubscription",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_enterprise_plan_requests",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["status", "-created_at"],
+                name="sub_epr_status_created_idx",
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["chatbot"],
+                condition=Q(
+                    status=EnterprisePlanRequestStatus.PENDING
+                ),
+                name="sub_epr_one_pending_per_chatbot",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.chatbot} - {self.get_status_display()}"
+
+    def clean(self):
+        super().clean()
+        for field in ("requested_features", "approved_features"):
+            features = getattr(self, field) or []
+            if len(features) != len(set(features)):
+                raise ValidationError({field: "Features must be unique."})
 
 
 class ChatbotSubscription(BaseModel):

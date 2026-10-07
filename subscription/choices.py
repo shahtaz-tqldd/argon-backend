@@ -5,9 +5,9 @@ class PlanFeature(models.TextChoices):
     KNOWLEDGE_BASE = "knowledge_base", "Knowledge base"
     HUMAN_HANDOFF = "human_handoff", "Human handoff"
     LEAD_CAPTURE = "lead_capture", "Lead capture"
+    LEAD_INSIGHTS = "lead_insights", "Lead insights"
     APPOINTMENT_BOOKING = "appointment_booking", "Appointment booking"
-    QUOTATION_GENERATION = "quotation_generation", "Quotation generation"
-    ORDER_TAKING = "order_taking", "Order taking"
+    AI_RECOMMENDATIONS = "ai_recommendations", "AI recommendations"
 
 
 class PlanType(models.TextChoices):
@@ -41,6 +41,12 @@ class SubscriptionStatus(models.TextChoices):
     PAUSED = "paused", "Paused"
     CANCELED = "canceled", "Canceled"
     UNPAID = "unpaid", "Unpaid"
+
+
+class EnterprisePlanRequestStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    APPROVED = "approved", "Approved"
+    REJECTED = "rejected", "Rejected"
 
 
 class PaymentStatus(models.TextChoices):

@@ -95,7 +95,7 @@ SESSION_BLUEPRINTS = (
             "Visitor asked to discuss annual billing with a human agent."
         ),
         "signal_score": 55,
-        "signal_summary": (
+        "signal_intent": (
             "Visitor is comparing plans and asked about annual billing."
         ),
         "script": (
@@ -143,7 +143,7 @@ SESSION_BLUEPRINTS = (
         "agent_role": "active",
         "requires_attention": False,
         "signal_score": 72,
-        "signal_summary": (
+        "signal_intent": (
             "Visitor confirmed a {team_size} team and an active Slack and "
             "HubSpot stack."
         ),
@@ -194,7 +194,7 @@ SESSION_BLUEPRINTS = (
         "agent_role": "resolved",
         "requires_attention": False,
         "signal_score": 85,
-        "signal_summary": (
+        "signal_intent": (
             "Visitor booked a product demo while evaluating vendors this "
             "quarter."
         ),
@@ -242,7 +242,7 @@ SESSION_BLUEPRINTS = (
         "agent_role": "closed",
         "requires_attention": False,
         "signal_score": 45,
-        "signal_summary": (
+        "signal_intent": (
             "Visitor reported a blocking widget issue but remains an "
             "active user."
         ),
@@ -292,7 +292,7 @@ SESSION_BLUEPRINTS = (
         "agent_role": "none",
         "requires_attention": False,
         "signal_score": 92,
-        "signal_summary": (
+        "signal_intent": (
             "Enterprise visitor with a 300-seat requirement, SSO needs, "
             "and a Q1 rollout timeline."
         ),
@@ -616,7 +616,7 @@ class Command(BaseCommand):
         record_lead_signal(
             lead,
             score=blueprint["signal_score"],
-            summary=blueprint["signal_summary"].format(**context),
+            intent=blueprint["signal_intent"].format(**context),
             message=signal_message,
         )
         return session, is_new

@@ -219,7 +219,7 @@ class LeadSignalSerializer(serializers.ModelSerializer):
             "lead_id",
             "message_id",
             "score",
-            "summary",
+            "intent",
             "created_at",
             "updated_at",
         )
@@ -251,7 +251,7 @@ class LeadSignalDetailSerializer(serializers.ModelSerializer):
             "id",
             "lead_id",
             "score",
-            "summary",
+            "intent",
             "message",
             "created_at",
             "updated_at",

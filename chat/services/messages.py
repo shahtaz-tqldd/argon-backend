@@ -158,7 +158,7 @@ def send_agent_message(
 ):
     with transaction.atomic():
         chat_session = (
-            ChatSession.objects.select_for_update()
+            ChatSession.objects.select_for_update(of=("self",))
             .select_related("visitor")
             .get(pk=chat_session.pk)
         )

@@ -15,8 +15,8 @@ class LeadSignalInline(admin.TabularInline):
     extra = 0
     can_delete = False
     show_change_link = True
-    fields = ("score", "summary", "message", "created_at")
-    readonly_fields = ("score", "summary", "message", "created_at")
+    fields = ("score", "intent", "message", "created_at")
+    readonly_fields = ("score", "intent", "message", "created_at")
 
 
 class LeadNoteInline(admin.TabularInline):
@@ -141,10 +141,10 @@ class LeadAdmin(admin.ModelAdmin):
 
 @admin.register(LeadSignal)
 class LeadSignalAdmin(admin.ModelAdmin):
-    list_display = ("lead", "score", "summary", "message", "created_at")
+    list_display = ("lead", "score", "intent", "message", "created_at")
     list_filter = ("score", "created_at")
     search_fields = (
-        "summary",
+        "intent",
         "lead__collected_fields__name",
         "lead__collected_fields__email",
     )

@@ -3,6 +3,7 @@ from django.contrib import admin
 from subscription.models import (
     BillingPaymentMethod,
     ChatbotSubscription,
+    EnterprisePlanRequest,
     Payment,
     PaymentWebhookEvent,
     PlanPrice,
@@ -109,6 +110,35 @@ class ChatbotSubscriptionAdmin(admin.ModelAdmin):
         if obj is not None:
             readonly_fields.append("plan_price")
         return readonly_fields
+
+
+@admin.register(EnterprisePlanRequest)
+class EnterprisePlanRequestAdmin(admin.ModelAdmin):
+    list_display = (
+        "chatbot",
+        "status",
+        "requested_daily_traffic",
+        "expires_at",
+        "subscription",
+        "reviewed_by",
+        "reviewed_at",
+        "created_at",
+    )
+    list_filter = ("status",)
+    search_fields = (
+        "chatbot__chatbot_name",
+        "chatbot__workspace__name",
+        "reviewed_by__email",
+        "notes",
+    )
+    autocomplete_fields = ("chatbot", "subscription", "reviewed_by")
+    readonly_fields = ("id", "created_at", "updated_at")
+    list_select_related = (
+        "chatbot",
+        "chatbot__workspace",
+        "reviewed_by",
+        "subscription",
+    )
 
 
 @admin.register(Payment)

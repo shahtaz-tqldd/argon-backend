@@ -50,7 +50,7 @@ class ConversationToolPersistenceTests(TestCase):
         self.assertFalse(LeadSignal.objects.exists())
         self.assertEqual(self.session.metadata, {})
         self.assertEqual(
-            result["summary"],
+            result["intent"],
             "Has a concrete need and wants to buy this month.",
         )
         self.assertTrue(result["recorded"])

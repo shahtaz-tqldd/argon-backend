@@ -393,7 +393,12 @@ class SubscriptionClientAPITests(APITestCase):
         response = self.client.get(reverse("subscription-plan-list"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        price = response.data["data"][0]["prices"][0]
+        plan_data = next(
+            item
+            for item in response.data["data"]
+            if item["id"] == str(self.plan.id)
+        )
+        price = plan_data["prices"][0]
         self.assertNotIn("provider_price_id", price)
         self.assertEqual(price["amount"], "19.00")
 

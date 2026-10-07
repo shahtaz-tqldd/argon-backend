@@ -1,5 +1,7 @@
+from django.utils import timezone
 from rest_framework import serializers
 
+from subscription.choices import EnterprisePlanRequestStatus, PlanFeature
 from subscription.models import SubscriptionPlan
 
 
@@ -63,3 +65,69 @@ class SubscriptionPlanSerializer(serializers.ModelSerializer):
                 }
             )
         return attrs
+
+
+class EnterprisePlanRequestFilterSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=EnterprisePlanRequestStatus.choices,
+        required=False,
+    )
+    chatbot = serializers.SlugField(required=False)
+
+
+class EnterprisePlanRequestApproveSerializer(serializers.Serializer):
+    features = serializers.ListField(
+        child=serializers.ChoiceField(choices=PlanFeature.choices),
+        required=False,
+        default=list,
+        allow_empty=True,
+    )
+    ai_message_limit = serializers.IntegerField(
+        required=False, allow_null=True, default=None, min_value=1
+    )
+    file_size_limit_mb = serializers.IntegerField(
+        required=False, allow_null=True, default=None, min_value=1
+    )
+    knowledge_chunk_limit = serializers.IntegerField(
+        required=False, allow_null=True, default=None, min_value=1
+    )
+    expires_at = serializers.DateTimeField(required=True)
+    review_notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        trim_whitespace=False,
+    )
+
+    def validate_features(self, value):
+        if len(value) != len(set(value)):
+            raise serializers.ValidationError("Features must be unique.")
+        return value
+
+    def validate_expires_at(self, value):
+        if value <= timezone.now():
+            raise serializers.ValidationError(
+                "The expiry date must be in the future."
+            )
+        return value
+
+
+class EnterprisePlanRequestSubscriptionSummarySerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    current_period_end = serializers.DateTimeField(read_only=True)
+    ai_message_limit = serializers.SerializerMethodField()
+    file_size_limit_mb = serializers.SerializerMethodField()
+    knowledge_chunk_limit = serializers.SerializerMethodField()
+    features = serializers.SerializerMethodField()
+
+    def get_ai_message_limit(self, obj):
+        return obj.get_ai_message_limit()
+
+    def get_file_size_limit_mb(self, obj):
+        return obj.get_file_size_limit_mb()
+
+    def get_knowledge_chunk_limit(self, obj):
+        return obj.get_knowledge_chunk_limit()
+
+    def get_features(self, obj):
+        return obj.get_features()

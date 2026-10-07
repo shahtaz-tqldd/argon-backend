@@ -5,7 +5,8 @@ from django.dispatch import receiver
 
 
 PUBLIC_WIDGET_API_PATTERN = re.compile(
-    r"^/api/v1/chatbots/[A-Za-z0-9_-]{40,64}/(?:"
+    r"^/api/v1/(?:"
+    r"chatbots/[A-Za-z0-9_-]{40,64}/(?:"
     r"config/|"
     r"visitor/(?:details|create)/|"
     r"conversations/(?:[0-9a-fA-F-]{36}/(?:messages|appointments)/)?|"
@@ -13,7 +14,9 @@ PUBLIC_WIDGET_API_PATTERN = re.compile(
     r"sessions/(?:list|create)/|"
     r"messages/(?:list|create)/|"
     r"book-appointment/"
-    r")?$"
+    r")?"
+    r"|base/file/upload/"
+    r")$"
 )
 
 

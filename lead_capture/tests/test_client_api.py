@@ -392,10 +392,10 @@ class LeadCaptureClientAPITests(APITestCase):
             sender_type=ChatMessageSenderType.AI,
             content="Reply with a score.",
         )
-        record_lead_signal(lead, score=70, summary="Early interest.")
-        record_lead_signal(lead, score=85, summary="Asked for pricing.")
-        record_lead_signal(lead, score=95, summary="Requested a demo.", message=message)
-        record_lead_signal(other_lead, score=10, summary="Other lead signal.")
+        record_lead_signal(lead, score=70, intent="Early interest.")
+        record_lead_signal(lead, score=85, intent="Asked for pricing.")
+        record_lead_signal(lead, score=95, intent="Requested a demo.", message=message)
+        record_lead_signal(other_lead, score=10, intent="Other lead signal.")
 
         response = self.client.get(
             f'{self.url("lead-signal-list", lead=lead)}&page_size=2'
@@ -434,11 +434,11 @@ class LeadCaptureClientAPITests(APITestCase):
             chatbot=self.chatbot,
             collected_fields={"name": "Signal Lead", "email": "signal@example.com"},
         )
-        record_lead_signal(lead, score=90, summary="Asked for pricing.")
+        record_lead_signal(lead, score=90, intent="Asked for pricing.")
         record_lead_signal(
             lead,
             score=95,
-            summary="Requested a demo.",
+            intent="Requested a demo.",
             message=message,
         )
         old_signal_lead = Lead.objects.create(
@@ -446,7 +446,7 @@ class LeadCaptureClientAPITests(APITestCase):
             collected_fields={"name": "Old Signal", "email": "old-signal@example.com"},
         )
         old_signal = record_lead_signal(
-            old_signal_lead, score=60, summary="Mild interest."
+            old_signal_lead, score=60, intent="Mild interest."
         )
         LeadSignal.objects.filter(pk=old_signal.pk).update(
             created_at=timezone.now() - timedelta(days=5),

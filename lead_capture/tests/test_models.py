@@ -229,12 +229,12 @@ class LeadCaptureModelTests(TestCase):
         signal = LeadSignal(
             lead=lead,
             score=101,
-            summary="Out of range.",
+            intent="Out of range.",
         )
         with self.assertRaises(ValidationError):
             signal.full_clean()
 
-        signal = LeadSignal(lead=lead, score=80, summary="")
+        signal = LeadSignal(lead=lead, score=80, intent="")
         with self.assertRaises(ValidationError):
             signal.full_clean()
 
@@ -251,7 +251,7 @@ class LeadCaptureModelTests(TestCase):
             lead=lead,
             message=message,
             score=80,
-            summary="Ready to book.",
+            intent="Ready to book.",
         )
 
         with self.assertRaises(IntegrityError):
@@ -259,16 +259,16 @@ class LeadCaptureModelTests(TestCase):
                 lead=lead,
                 message=message,
                 score=90,
-                summary="Even more ready.",
+                intent="Even more ready.",
             )
 
     def test_record_lead_signal_refreshes_avg_score(self):
         lead = Lead.objects.create(chatbot=self.chatbot)
 
-        first = record_lead_signal(lead, score=80, summary="Ready to book.")
+        first = record_lead_signal(lead, score=80, intent="Ready to book.")
         self.assertEqual(lead.avg_score, Decimal("80.00"))
 
-        record_lead_signal(lead, score=90, summary="Asked for pricing.")
+        record_lead_signal(lead, score=90, intent="Asked for pricing.")
         self.assertEqual(lead.avg_score, Decimal("85.00"))
         self.assertEqual(
             list(
@@ -282,7 +282,7 @@ class LeadCaptureModelTests(TestCase):
 
     def test_refresh_lead_avg_score_normalizes_float_average(self):
         lead = Lead.objects.create(chatbot=self.chatbot)
-        LeadSignal.objects.create(lead=lead, score=80, summary="Ready to book.")
+        LeadSignal.objects.create(lead=lead, score=80, intent="Ready to book.")
 
         # Avg() over an integer field resolves to FloatField, so some
         # backends/drivers hand back a float instead of a Decimal.

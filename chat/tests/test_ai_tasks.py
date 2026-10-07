@@ -232,7 +232,7 @@ class GenerateAIReplyTaskTests(TestCase):
                 "content": "Tomorrow is available.",
                 "source_ids": [str(source.id)],
                 "agreed_date": "2026-09-11",
-                "lead_score": {"score": 80, "summary": "Ready to book."},
+                "lead_score": {"score": 80, "intent": "Ready to book."},
                 "escalation": {"escalation_reason": "Requested a person."},
             },
             "token": {
@@ -271,7 +271,7 @@ class GenerateAIReplyTaskTests(TestCase):
                         {"start_time": "9.00 AM", "end_time": "9.30 AM"},
                     ],
                 },
-                "lead_analytics": {"score": 80, "summary": "Ready to book."},
+                "lead_analytics": {"score": 80, "intent": "Ready to book."},
                 "escalation": {"reason": "Requested a person."},
                 "sources": [{
                     "id": str(source.id),
@@ -288,7 +288,7 @@ class GenerateAIReplyTaskTests(TestCase):
         signal = LeadSignal.objects.get(lead=lead)
         self.assertEqual(signal.message_id, message.id)
         self.assertEqual(signal.score, 80)
-        self.assertEqual(signal.summary, "Ready to book.")
+        self.assertEqual(signal.intent, "Ready to book.")
         lead.refresh_from_db()
         self.assertEqual(lead.avg_score, Decimal("80.00"))
         usage = AIUsage.objects.get(chat_message=message)

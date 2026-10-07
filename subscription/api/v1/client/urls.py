@@ -10,6 +10,7 @@ urlpatterns = [
     path("current/", views.CurrentSubscriptionAPIView.as_view(), name="current-subscription"),
     path("activate-free/", views.FreeSubscriptionAPIView.as_view(), name="subscription-activate-free"),
     path("cancellation/", views.SubscriptionCancellationAPIView.as_view(), name="subscription-cancellation"),
+    path("enterprise/requests/", views.EnterprisePlanRequestCreateAPIView.as_view(), name="enterprise-plan-request-create"),
     
     path("billing-portal/", views.StripeBillingPortalAPIView.as_view(), name="stripe-billing-portal"),
     path("payment-methods/", views.StripePaymentMethodListAPIView.as_view(), name="stripe-payment-method-list"),

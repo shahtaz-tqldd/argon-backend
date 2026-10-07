@@ -17,14 +17,20 @@ STANDARD_FEATURES = [
     PlanFeature.KNOWLEDGE_BASE,
 ]
 
-PLUS_FEATURES = [
+ALPHA_FEATURES = [
     *STANDARD_FEATURES,
     PlanFeature.LEAD_CAPTURE
 ]
 
-PRO_FEATURES = [
-    *PLUS_FEATURES,
+BETA_FEATURES = [
+    *ALPHA_FEATURES,
+    PlanFeature.LEAD_INSIGHTS,
     PlanFeature.APPOINTMENT_BOOKING
+]
+
+GAMMA_FEATURES = [
+    *BETA_FEATURES,
+    PlanFeature.AI_RECOMMENDATIONS
 ]
 
 PLAN_CONFIGURATIONS = (
@@ -39,10 +45,15 @@ PLAN_CONFIGURATIONS = (
         "is_free": True,
         "requires_sales_contact": False,
         "sort_order": 0,
-        "price": {
-            "provider": PaymentProvider.MANUAL,
-            "amount": Decimal("0.00"),
-        },
+        "ai_message_overage_enabled": False,
+        "ai_message_overage_unit_price": None,
+        "prices": [
+            {
+                "provider": PaymentProvider.MANUAL,
+                "billing_interval": BillingInterval.MONTHLY,
+                "amount": Decimal("0.00"),
+            },
+        ],
     },
     {
         "name": "Starter",
@@ -51,14 +62,24 @@ PLAN_CONFIGURATIONS = (
         "ai_message_limit": 1000,
         "file_size_limit_mb": 25,
         "knowledge_chunk_limit": 625,
-        "features": PLUS_FEATURES,
+        "features": ALPHA_FEATURES,
         "is_free": False,
         "requires_sales_contact": False,
         "sort_order": 10,
-        "price": {
-            "provider": PaymentProvider.STRIPE,
-            "amount": Decimal("59.00"),
-        },
+        "ai_message_overage_enabled": True,
+        "ai_message_overage_unit_price": Decimal("0.030"),
+        "prices": [
+            {
+                "provider": PaymentProvider.STRIPE,
+                "billing_interval": BillingInterval.MONTHLY,
+                "amount": Decimal("59.00"),
+            },
+            {
+                "provider": PaymentProvider.STRIPE,
+                "billing_interval": BillingInterval.ANNUAL,
+                "amount": Decimal("590.00"),
+            },
+        ],
     },
     {
         "name": "Growth",
@@ -67,14 +88,24 @@ PLAN_CONFIGURATIONS = (
         "ai_message_limit": 2500,
         "file_size_limit_mb": 50,
         "knowledge_chunk_limit": 1250,
-        "features": PRO_FEATURES,
+        "features": BETA_FEATURES,
         "is_free": False,
         "requires_sales_contact": False,
         "sort_order": 20,
-        "price": {
-            "provider": PaymentProvider.STRIPE,
-            "amount": Decimal("119.00"),
-        },
+        "ai_message_overage_enabled": True,
+        "ai_message_overage_unit_price": Decimal("0.025"),
+        "prices": [
+            {
+                "provider": PaymentProvider.STRIPE,
+                "billing_interval": BillingInterval.MONTHLY,
+                "amount": Decimal("119.00"),
+            },
+            {
+                "provider": PaymentProvider.STRIPE,
+                "billing_interval": BillingInterval.ANNUAL,
+                "amount": Decimal("1190.00"),
+            },
+        ],
     },
     {
         "name": "Premium",
@@ -83,14 +114,24 @@ PLAN_CONFIGURATIONS = (
         "ai_message_limit": 5000,
         "file_size_limit_mb": 100,
         "knowledge_chunk_limit": 2500,
-        "features": PRO_FEATURES,
+        "features": GAMMA_FEATURES,
         "is_free": False,
         "requires_sales_contact": False,
         "sort_order": 30,
-        "price": {
-            "provider": PaymentProvider.STRIPE,
-            "amount": Decimal("229.00"),
-        },
+        "ai_message_overage_enabled": True,
+        "ai_message_overage_unit_price": Decimal("0.020"),
+        "prices": [
+            {
+                "provider": PaymentProvider.STRIPE,
+                "billing_interval": BillingInterval.MONTHLY,
+                "amount": Decimal("229.00"),
+            },
+            {
+                "provider": PaymentProvider.STRIPE,
+                "billing_interval": BillingInterval.ANNUAL,
+                "amount": Decimal("2290.00"),
+            },
+        ],
     },
     {
         "name": "Enterprise",
@@ -99,17 +140,19 @@ PLAN_CONFIGURATIONS = (
         "ai_message_limit": None,
         "file_size_limit_mb": None,
         "knowledge_chunk_limit": None,
-        "features": PRO_FEATURES,
+        "features": GAMMA_FEATURES,
         "is_free": False,
         "requires_sales_contact": True,
         "sort_order": 40,
-        "price": None,
+        "ai_message_overage_enabled": False,
+        "ai_message_overage_unit_price": None,
+        "prices": None,
     },
 )
 
 
 class Command(BaseCommand):
-    help = "Create or update the default subscription plans and monthly prices."
+    help = "Create or update the default subscription plans and prices."
 
     # python manage.py create_subscription_plan
 
@@ -127,18 +170,23 @@ class Command(BaseCommand):
             else:
                 updated_plans += 1
 
-            price_configuration = configuration["price"]
-            if price_configuration is None:
+            price_configurations = configuration["prices"]
+            if price_configurations is None:
                 PlanPrice.objects.filter(plan=plan, is_active=True).update(
                     is_active=False,
                 )
                 continue
 
-            price_created = self._save_price(plan, price_configuration)
-            if price_created:
-                created_prices += 1
-            else:
-                updated_prices += 1
+            for price_configuration in price_configurations:
+                price_created = self._save_price(
+                    plan,
+                    price_configuration,
+                    configuration["ai_message_overage_unit_price"],
+                )
+                if price_created:
+                    created_prices += 1
+                else:
+                    updated_prices += 1
 
         self.stdout.write(
             self.style.SUCCESS(
@@ -178,13 +226,13 @@ class Command(BaseCommand):
             "is_free",
             "requires_sales_contact",
             "sort_order",
+            "ai_message_overage_enabled",
         ):
             value = configuration[field]
             if field == "features":
                 value = list(value)
             setattr(plan, field, value)
 
-        plan.ai_message_overage_enabled = False
         plan.is_public = True
         plan.is_active = True
         plan.full_clean()
@@ -192,13 +240,13 @@ class Command(BaseCommand):
         return plan, created
 
     @staticmethod
-    def _save_price(plan, configuration):
+    def _save_price(plan, configuration, ai_message_overage_unit_price):
         price = (
             PlanPrice.objects.select_for_update()
             .filter(
                 plan=plan,
                 provider=configuration["provider"],
-                billing_interval=BillingInterval.MONTHLY,
+                billing_interval=configuration["billing_interval"],
                 currency="USD",
             )
             .first()
@@ -208,12 +256,12 @@ class Command(BaseCommand):
             price = PlanPrice(
                 plan=plan,
                 provider=configuration["provider"],
-                billing_interval=BillingInterval.MONTHLY,
+                billing_interval=configuration["billing_interval"],
                 currency="USD",
             )
 
         price.amount = configuration["amount"]
-        price.ai_message_overage_unit_price = None
+        price.ai_message_overage_unit_price = ai_message_overage_unit_price
         price.is_active = True
         price.full_clean()
         price.save()

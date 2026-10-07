@@ -29,13 +29,13 @@ def refresh_lead_avg_score(lead):
 
 
 @transaction.atomic
-def record_lead_signal(lead, *, score, summary, message=None):
+def record_lead_signal(lead, *, score, intent, message=None):
     """Append one qualification signal and refresh the lead's avg_score."""
     signal = LeadSignal(
         lead=lead,
         message=message,
         score=score,
-        summary=summary,
+        intent=intent,
     )
     signal.full_clean()
     signal.save()

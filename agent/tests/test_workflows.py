@@ -95,8 +95,8 @@ class ClientTests(IsolatedAsyncioTestCase):
             is_active=True, knowledge_base_enabled=True,
             human_handoff_enabled=True, appointment_booking_enabled=True,
             capacity=SimpleNamespace(
-                active_features=[PlanFeature.LEAD_CAPTURE],
-                has_feature=lambda feature: feature == PlanFeature.LEAD_CAPTURE,
+                active_features=[PlanFeature.LEAD_INSIGHTS],
+                has_feature=lambda feature: feature == PlanFeature.LEAD_INSIGHTS,
             ),
         )
         self.conversation = SimpleNamespace(id="session-1", chatbot_id="bot-1", is_test=False, messages=Mock())
@@ -477,14 +477,14 @@ class ClientTests(IsolatedAsyncioTestCase):
             call(
                 "record_lead_score",
                 score=82,
-                summary="Needs implementation this month and requested a booking.",
+                intent="Needs implementation this month and requested a booking.",
             ),
             answer("I can help you schedule that."),
             say("I can help you schedule that."),
         )
         payload = {
             "score": 82,
-            "summary": "Needs implementation this month and requested a booking.",
+            "intent": "Needs implementation this month and requested a booking.",
             "recorded": True,
         }
         with patch("agent.helpers.global_tools._record_lead_score", return_value=payload) as record:

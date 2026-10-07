@@ -25,6 +25,12 @@ class FileRetrieveSerializer(serializers.Serializer):
         allow_blank=True,
         max_length=2048,
     )
+    download = serializers.BooleanField(required=False)
+    file_name = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=255,
+    )
 
     def validate(self, attrs):
         if bool(attrs.get("key")) == bool(attrs.get("url")):

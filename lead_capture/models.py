@@ -382,9 +382,9 @@ class LeadSignal(BaseMinModel):
     score = models.PositiveSmallIntegerField(
         help_text="Qualification score from 0 through 100.",
     )
-    summary = models.CharField(
+    intent = models.CharField(
         max_length=240,
-        help_text="One short sentence explaining the evidence for the score.",
+        help_text="One short sentence describing the visitor's intent behind the score.",
     )
 
     class Meta:
@@ -402,8 +402,8 @@ class LeadSignal(BaseMinModel):
                 name="unique_lead_signal_per_message",
             ),
             models.CheckConstraint(
-                condition=~Q(summary=""),
-                name="lead_signal_summary_not_empty",
+                condition=~Q(intent=""),
+                name="lead_signal_intent_not_empty",
             ),
             models.CheckConstraint(
                 condition=Q(score__gte=0, score__lte=100),
@@ -413,14 +413,14 @@ class LeadSignal(BaseMinModel):
 
     def clean(self):
         super().clean()
-        self.summary = " ".join(self.summary.split())
-        if not self.summary:
+        self.intent = " ".join(self.intent.split())
+        if not self.intent:
             raise ValidationError(
-                {"summary": "Signal summary cannot be blank."}
+                {"intent": "Signal intent cannot be blank."}
             )
 
     def __str__(self):
-        return f"{self.score} — {self.summary[:60]}"
+        return f"{self.score} — {self.intent[:60]}"
 
 
 class LeadNote(BaseMinModel):

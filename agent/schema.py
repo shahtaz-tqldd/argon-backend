@@ -52,7 +52,7 @@ class KnowledgeBaseAgentOutputSchema(SpecialistResponseSchema):
 
 class LeadScoreSchema(BaseModel):
     score: int = Field(ge=0, le=100, strict=True)
-    summary: str = Field(min_length=1, max_length=240)
+    intent: str = Field(min_length=1, max_length=240)
     recorded: bool = False
 
 

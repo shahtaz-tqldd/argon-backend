@@ -2,10 +2,11 @@ from rest_framework import serializers
 
 from coupon.api.v1.client.serializers import CouponRedemptionClientSerializer
 from coupon.models import Coupon
-from subscription.choices import BillingInterval, PaymentProvider
+from subscription.choices import BillingInterval, PaymentProvider, PlanFeature
 from subscription.models import (
     BillingPaymentMethod,
     ChatbotSubscription,
+    EnterprisePlanRequest,
     Payment,
     PlanPrice,
     SubscriptionPlan,
@@ -122,6 +123,85 @@ class FreeSubscriptionSerializer(serializers.Serializer):
             plan__requires_sales_contact=False,
         ).select_related("plan"),
     )
+
+
+class EnterprisePlanRequestCreateSerializer(serializers.Serializer):
+    requested_features = serializers.ListField(
+        child=serializers.ChoiceField(choices=PlanFeature.choices),
+        required=False,
+        default=list,
+        allow_empty=True,
+    )
+    requested_ai_message_limit = serializers.IntegerField(
+        required=False, allow_null=True, default=None, min_value=1
+    )
+    requested_file_size_limit_mb = serializers.IntegerField(
+        required=False, allow_null=True, default=None, min_value=1
+    )
+    requested_knowledge_chunk_limit = serializers.IntegerField(
+        required=False, allow_null=True, default=None, min_value=1
+    )
+    requested_daily_traffic = serializers.IntegerField(
+        required=False, allow_null=True, default=None, min_value=1
+    )
+    notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        trim_whitespace=False,
+    )
+
+    def validate_requested_features(self, value):
+        if len(value) != len(set(value)):
+            raise serializers.ValidationError("Features must be unique.")
+        return value
+
+
+class EnterprisePlanRequestSerializer(serializers.ModelSerializer):
+    chatbot_slug = serializers.CharField(
+        source="chatbot.slug", read_only=True
+    )
+    chatbot_name = serializers.CharField(
+        source="chatbot.chatbot_name", read_only=True
+    )
+    workspace_name = serializers.CharField(
+        source="chatbot.workspace.name", read_only=True
+    )
+    reviewed_by = serializers.SerializerMethodField()
+    subscription_id = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EnterprisePlanRequest
+        fields = (
+            "id",
+            "chatbot_slug",
+            "chatbot_name",
+            "workspace_name",
+            "status",
+            "requested_features",
+            "requested_ai_message_limit",
+            "requested_file_size_limit_mb",
+            "requested_knowledge_chunk_limit",
+            "requested_daily_traffic",
+            "notes",
+            "approved_features",
+            "approved_ai_message_limit",
+            "approved_file_size_limit_mb",
+            "approved_knowledge_chunk_limit",
+            "expires_at",
+            "subscription_id",
+            "reviewed_by",
+            "reviewed_at",
+            "review_notes",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+    def get_reviewed_by(self, obj):
+        return obj.reviewed_by.email if obj.reviewed_by else None
+
+    def get_subscription_id(self, obj):
+        return str(obj.subscription_id) if obj.subscription_id else None
 
 
 class SubscriptionCancellationSerializer(serializers.Serializer):

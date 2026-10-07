@@ -475,7 +475,7 @@ class AgentClient:
         if lead_score:
             metadata["lead_analytics"] = {
                 "score": lead_score["score"],
-                "summary": lead_score["summary"],
+                "intent": lead_score["intent"],
             }
 
         escalation = result.get("escalation")
@@ -542,7 +542,7 @@ class AgentClient:
             record_lead_signal(
                 session.lead,
                 score=lead_score["score"],
-                summary=lead_score["summary"],
+                intent=lead_score["intent"],
                 message=message,
             )
         if response["token"].get("total_tokens", 0):

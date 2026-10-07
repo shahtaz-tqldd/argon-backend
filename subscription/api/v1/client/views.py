@@ -19,6 +19,8 @@ from subscription.api.v1.client.serializers import (
     BillingPaymentMethodClientSerializer,
     ChatbotSubscriptionClientSerializer,
     DefaultPaymentMethodSerializer,
+    EnterprisePlanRequestCreateSerializer,
+    EnterprisePlanRequestSerializer,
     FreeSubscriptionSerializer,
     PaymentClientSerializer,
     StripeCheckoutSerializer,
@@ -45,6 +47,10 @@ from subscription.services.subscriptions import (
     activate_free_subscription,
     get_open_subscription,
     start_stripe_checkout,
+)
+from subscription.services.enterprise_plans import (
+    DuplicatePendingRequestError,
+    create_enterprise_plan_request,
 )
 from subscription.services.webhooks import StripeWebhookProcessor
 
@@ -260,6 +266,37 @@ class FreeSubscriptionAPIView(SubscriptionChatbotMixin, GenericAPIView):
             data=ChatbotSubscriptionClientSerializer(subscription).data,
             message="Free subscription activated successfully.",
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class EnterprisePlanRequestCreateAPIView(
+    SubscriptionChatbotMixin, GenericAPIView
+):
+    """Submit a custom/enterprise subscription request for a chatbot."""
+
+    permission_classes = [IsChatbotUser]
+    serializer_class = EnterprisePlanRequestCreateSerializer
+    chatbot_admin_only = True
+
+    def post(self, request, *args, **kwargs):
+        chatbot = self.get_chatbot()
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            plan_request = create_enterprise_plan_request(
+                chatbot=chatbot,
+                user=request.user,
+                **serializer.validated_data,
+            )
+        except DuplicatePendingRequestError as exc:
+            return APIResponse.error(
+                message=str(exc),
+                status=status.HTTP_409_CONFLICT,
+            )
+        return APIResponse.success(
+            data=EnterprisePlanRequestSerializer(plan_request).data,
+            message="Enterprise plan request submitted successfully.",
+            status=status.HTTP_201_CREATED,
         )
 
 

@@ -189,7 +189,7 @@ If a superuser already exists, automatic creation is skipped. It can also be run
 
 ```bash
 docker compose -p argon --env-file .env -f docker/compose.dev.yml exec wsgi \
-  python manage.py create_initial_superuser
+  python manage.py create_superuser
 ```
 
 ## Common Development Commands
