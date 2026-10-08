@@ -32,10 +32,7 @@ from chatbot.utils.permissions import (
     default_chatbot_user_permissions,
     normalize_chatbot_permission_codes,
 )
-from chatbot.utils.validation import (
-    normalize_widget_origin,
-    validate_unique_chatbot_name,
-)
+from chatbot.utils.validation import normalize_widget_origin
 from subscription.choices import PlanFeature
 from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
 from workspace.models import Workspace, WorkspaceUser
@@ -254,16 +251,6 @@ class ChatbotBaseSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"chatbot_name": "This field is required."}
                 )
-            try:
-                validate_unique_chatbot_name(
-                    workspace=workspace,
-                    chatbot_name=chatbot_name,
-                    chatbot_id=self.instance.pk if self.instance else None,
-                )
-            except DjangoValidationError as exc:
-                raise serializers.ValidationError(
-                    {"chatbot_name": exc.messages[0]}
-                ) from exc
             attrs["chatbot_name"] = chatbot_name
         return attrs
 

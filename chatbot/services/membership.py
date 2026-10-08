@@ -11,11 +11,6 @@ from chatbot.models import (
     build_default_chatbot_welcome_message,
 )
 from chatbot.utils.choices import ChatbotRoleTypes, ChatbotStatusTypes
-from chatbot.utils.validation import validate_unique_chatbot_name
-from subscription.services.subscriptions import (
-    activate_free_subscription,
-    get_default_free_plan_price,
-)
 from workspace.models import WorkspaceUser
 
 
@@ -61,16 +56,11 @@ def create_chatbot(
     chatbot_name = chatbot_name.strip()
     if not chatbot_name:
         raise ValidationError("Chatbot name is required.")
-    validate_unique_chatbot_name(
-        workspace=workspace,
-        chatbot_name=chatbot_name,
-    )
     if welcome_message is None:
         welcome_message = build_default_chatbot_welcome_message(
             chatbot_name,
             business_name,
         )
-    default_free_plan_price = get_default_free_plan_price()
 
     chatbot = Chatbot.objects.create(
         workspace=workspace,
@@ -101,11 +91,6 @@ def create_chatbot(
         chatbot=chatbot,
         user=created_by,
         role=ChatbotRoleTypes.ADMIN,
-    )
-    activate_free_subscription(
-        chatbot=chatbot,
-        plan_price=default_free_plan_price,
-        user=created_by,
     )
     return chatbot
 

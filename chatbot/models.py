@@ -137,13 +137,6 @@ class Chatbot(BaseModel):
 
     class Meta:
         ordering = ["workspace__name", "chatbot_name"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["workspace", "chatbot_name"],
-                name="unique_chatbot_name_per_workspace",
-            ),
-        ]
-
         indexes = [
             models.Index(
                 fields=["workspace", "is_deleted"],

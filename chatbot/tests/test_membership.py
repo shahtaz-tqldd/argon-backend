@@ -13,7 +13,6 @@ from chatbot.models import (
 )
 from chatbot.services import assign_user_to_chatbot, create_chatbot
 from chatbot.utils.choices import ChatbotRoleTypes
-from subscription.choices import PlanFeature, SubscriptionStatus
 from subscription.models import ChatbotSubscription
 from workspace.services import add_workspace_user, ensure_personal_workspace
 
@@ -107,18 +106,34 @@ class ChatbotMembershipTests(TestCase):
             DEFAULT_CHATBOT_ESCALATION_RULE,
         )
         self.assertEqual(chatbot.never_answer, DEFAULT_CHATBOT_NEVER_ANSWER)
-        subscription = ChatbotSubscription.objects.get(
-            chatbot=chatbot,
-            status=SubscriptionStatus.ACTIVE,
+        # Creating a chatbot no longer activates a subscription; the user
+        # picks a plan from the pricing page afterwards.
+        self.assertFalse(
+            ChatbotSubscription.objects.filter(chatbot=chatbot).exists()
         )
-        self.assertTrue(subscription.is_free_plan())
-        capacity = ChatbotConfig.objects.get(chatbot=chatbot)
-        self.assertEqual(capacity.ai_message_limit, 100)
-        self.assertEqual(capacity.file_size_limit_bytes, 10 * 1024 * 1024)
-        self.assertEqual(capacity.knowledge_chunk_limit, 30)
+        self.assertFalse(
+            ChatbotConfig.objects.filter(chatbot=chatbot).exists()
+        )
+
+    def test_same_name_chatbots_can_coexist(self):
+        first = create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Support Bot",
+            created_by=self.owner,
+        )
+        second = create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Support Bot",
+            created_by=self.owner,
+        )
+
+        self.assertNotEqual(first.slug, second.slug)
         self.assertEqual(
-            capacity.active_features,
-            [PlanFeature.HUMAN_HANDOFF, PlanFeature.KNOWLEDGE_BASE],
+            Chatbot.objects.filter(
+                workspace=self.workspace,
+                chatbot_name="Support Bot",
+            ).count(),
+            2,
         )
 
     def test_workspace_member_can_assign_another_workspace_member(self):
@@ -151,20 +166,31 @@ class ChatbotMembershipTests(TestCase):
                 assigned_by=self.owner,
             )
 
-    def _set_team_members_limit(self, chatbot, limit):
-        subscription = ChatbotSubscription.objects.get(
-            chatbot=chatbot,
-            status=SubscriptionStatus.ACTIVE,
+    def _subscribe_with_team_members_limit(self, chatbot, limit):
+        from decimal import Decimal
+
+        from subscription.choices import BillingInterval, PaymentProvider
+        from subscription.models import PlanPrice, SubscriptionPlan
+        from subscription.services.subscriptions import (
+            activate_free_subscription,
         )
-        snapshot = dict(subscription.snapshot)
-        snapshot["limits"] = {
-            **snapshot["limits"],
-            "team_members_limit": limit,
-        }
-        # Snapshots are immutable from application code; tests adjust the
-        # stored contract directly to exercise different plan limits.
-        ChatbotSubscription.objects.filter(pk=subscription.pk).update(
-            snapshot=snapshot,
+
+        plan = SubscriptionPlan.objects.create(
+            name=f"Free {chatbot.slug}",
+            is_free=True,
+            team_members_limit=limit,
+        )
+        price = PlanPrice.objects.create(
+            plan=plan,
+            provider=PaymentProvider.MANUAL,
+            billing_interval=BillingInterval.MONTHLY,
+            currency="USD",
+            amount=Decimal("0.00"),
+        )
+        activate_free_subscription(
+            chatbot=chatbot,
+            plan_price=price,
+            user=self.owner,
         )
 
     def test_assignment_blocked_when_team_members_limit_reached(self):
@@ -173,7 +199,7 @@ class ChatbotMembershipTests(TestCase):
             chatbot_name="Support Bot",
             created_by=self.owner,
         )
-        self._set_team_members_limit(chatbot, 1)
+        self._subscribe_with_team_members_limit(chatbot, 1)
 
         with self.assertRaises(ValidationError):
             assign_user_to_chatbot(
@@ -194,7 +220,7 @@ class ChatbotMembershipTests(TestCase):
             chatbot_name="Support Bot",
             created_by=self.owner,
         )
-        self._set_team_members_limit(chatbot, 2)
+        self._subscribe_with_team_members_limit(chatbot, 2)
 
         membership = assign_user_to_chatbot(
             chatbot=chatbot,
@@ -217,7 +243,7 @@ class ChatbotMembershipTests(TestCase):
             chatbot_name="Support Bot",
             created_by=self.owner,
         )
-        self._set_team_members_limit(chatbot, 2)
+        self._subscribe_with_team_members_limit(chatbot, 2)
         assign_user_to_chatbot(
             chatbot=chatbot,
             user=self.other_member,
@@ -227,7 +253,7 @@ class ChatbotMembershipTests(TestCase):
             chatbot=chatbot,
             user=self.other_member,
         ).update(is_active=False)
-        self._set_team_members_limit(chatbot, 1)
+        self._subscribe_with_team_members_limit(chatbot, 1)
 
         with self.assertRaises(ValidationError):
             assign_user_to_chatbot(
@@ -242,7 +268,7 @@ class ChatbotMembershipTests(TestCase):
             chatbot_name="Support Bot",
             created_by=self.owner,
         )
-        self._set_team_members_limit(chatbot, None)
+        self._subscribe_with_team_members_limit(chatbot, None)
         assign_user_to_chatbot(
             chatbot=chatbot,
             user=self.member,
