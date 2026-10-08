@@ -6,7 +6,7 @@ from appointment.models import AppointmentBookingConfig
 from chatbot.models import ChatbotConfig
 from chatbot.services.resolution import resolve_chatbot_reference
 from lead_capture.models import LeadCaptureConfig
-from subscription.choices import PlanFeature, SubscriptionStatus
+from subscription.utils.choices import PlanFeature, SubscriptionStatus
 from subscription.models import ChatbotSubscription
 
 

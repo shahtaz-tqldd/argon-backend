@@ -2,6 +2,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models import Q
+from django.db.models.functions import Lower
 from django.utils import timezone
 from django.utils.text import slugify
 
@@ -145,6 +146,17 @@ class Chatbot(BaseModel):
             models.Index(
                 fields=["workspace", "status"],
                 name="chatbot_workspace_status_idx",
+            ),
+        ]
+        constraints = [
+            # The same name may not be reused inside one workspace (ignoring
+            # case and soft-deleted chatbots), but identical names across
+            # different workspaces are fine.
+            models.UniqueConstraint(
+                Lower("chatbot_name"),
+                "workspace",
+                condition=Q(is_deleted=False),
+                name="unique_active_chatbot_name_per_workspace",
             ),
         ]
 
@@ -345,7 +357,7 @@ class ChatbotConfig(BaseMinModel):
         The contract already snapshots plan details on ChatbotSubscription.
         Billing dates remain live so renewals and cancellations are reflected.
         """
-        from subscription.choices import RenewalMode
+        from subscription.utils.choices import RenewalMode
 
         subscription = self.active_subscription()
         if subscription is None:

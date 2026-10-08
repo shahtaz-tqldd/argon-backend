@@ -8,7 +8,7 @@ from rest_framework.test import APITestCase
 from chatbot.models import ChatbotActivityLog, ChatbotUser
 from chatbot.services import record_chatbot_activity
 from chatbot.services.membership import create_chatbot
-from workspace.services import add_workspace_user, ensure_personal_workspace
+from workspace.services import ensure_personal_workspace
 
 
 User = get_user_model()
@@ -31,11 +31,6 @@ class ChatbotActivityLogTests(APITestCase):
             password="StrongPass123!",
         )
         self.workspace = ensure_personal_workspace(self.owner)
-        add_workspace_user(
-            workspace=self.workspace,
-            user=self.member,
-            added_by=self.owner,
-        )
         self.chatbot = create_chatbot(
             workspace=self.workspace,
             chatbot_name="Support Bot",

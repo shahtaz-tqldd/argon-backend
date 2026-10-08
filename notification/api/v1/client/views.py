@@ -9,9 +9,9 @@ from app.utils.pagination import CustomPagination
 from app.utils.response import APIResponse
 from notification.models import (
     Notification,
-    NotificationRead,
-    NotificationRecipientType,
+    NotificationRead
 )
+from notification.utils.choices import NotificationRecipientType
 from notification.api.v1.client.serializers import NotificationSerializer
 
 
@@ -65,8 +65,7 @@ class NotificationQuerysetMixin:
                 )
                 | Q(
                     recipient_type=NotificationRecipientType.WORKSPACE,
-                    workspace__memberships__user=self.request.user,
-                    workspace__memberships__is_active=True,
+                    workspace__owner=self.request.user,
                 )
                 | Q(
                     recipient_type=NotificationRecipientType.CHATBOT,

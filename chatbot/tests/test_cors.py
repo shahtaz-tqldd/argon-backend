@@ -2,7 +2,7 @@ from corsheaders.middleware import CorsMiddleware
 from django.http import HttpResponse
 from django.test import RequestFactory, SimpleTestCase, override_settings
 
-from chatbot.cors import allow_public_widget_api
+from chatbot.services.cors import allow_public_widget_api
 
 
 class PublicWidgetCORSAPITests(SimpleTestCase):

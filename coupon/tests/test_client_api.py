@@ -10,14 +10,14 @@ from rest_framework.test import APITestCase
 from chatbot.models import Chatbot, ChatbotUser
 from chatbot.utils.choices import ChatbotRoleTypes
 from coupon.models import Coupon, CouponRedemption, Discount
-from subscription.choices import (
+from subscription.utils.choices import (
     BillingInterval,
     PaymentProvider,
     RenewalMode,
     SubscriptionStatus,
 )
 from subscription.models import ChatbotSubscription, PlanPrice, SubscriptionPlan
-from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
+from workspace.models import Workspace
 
 
 class CouponClientAPITests(APITestCase):
@@ -29,13 +29,6 @@ class CouponClientAPITests(APITestCase):
         self.workspace = Workspace.objects.create(
             name="Example Workspace",
             owner=self.user,
-            created_by=self.user,
-            updated_by=self.user,
-        )
-        WorkspaceUser.objects.create(
-            workspace=self.workspace,
-            user=self.user,
-            role=WorkspaceRole.ADMIN,
             created_by=self.user,
             updated_by=self.user,
         )

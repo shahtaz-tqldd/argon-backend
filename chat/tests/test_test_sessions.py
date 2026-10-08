@@ -12,14 +12,14 @@ from chatbot.utils.choices import ChatbotRoleTypes
 from chat.models import ChatMessage, ChatSession
 from chat.utils.choices import ChatMessageSenderType
 from notification.models import Notification
-from subscription.choices import (
+from subscription.utils.choices import (
     BillingInterval,
     PaymentProvider,
     RenewalMode,
     SubscriptionStatus,
 )
 from subscription.models import ChatbotSubscription, PlanPrice, SubscriptionPlan
-from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
+from workspace.models import Workspace
 
 
 User = get_user_model()
@@ -35,11 +35,6 @@ class TestChatSessionAPITests(APITestCase):
             name="Test Chat Workspace",
             slug="test-chat-workspace",
             owner=self.owner,
-        )
-        WorkspaceUser.objects.create(
-            workspace=self.workspace,
-            user=self.owner,
-            role=WorkspaceRole.ADMIN,
         )
         self.chatbot = Chatbot.objects.create(
             workspace=self.workspace,
@@ -274,11 +269,6 @@ class TestChatSessionAPITests(APITestCase):
         member_user = User.objects.create_user(
             email="test-chat-member@example.com",
             password="StrongPass123!",
-        )
-        WorkspaceUser.objects.create(
-            workspace=self.workspace,
-            user=member_user,
-            role=WorkspaceRole.MEMBER,
         )
         ChatbotUser.objects.create(
             chatbot=self.chatbot,

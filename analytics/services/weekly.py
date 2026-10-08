@@ -7,7 +7,7 @@ from accounts.models import User
 from analytics.models import AIUsage
 from chat.models import ChatSession
 from chatbot.models import Chatbot
-from subscription.choices import PaymentStatus
+from subscription.utils.choices import PaymentStatus
 from subscription.models import Payment
 from workspace.models import Workspace
 

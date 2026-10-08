@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from chatbot.models import Chatbot
-from subscription.choices import (
+from subscription.utils.choices import (
     BillingInterval,
     PaymentProvider,
     RenewalMode,

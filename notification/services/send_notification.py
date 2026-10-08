@@ -1,15 +1,14 @@
 from django.db import transaction
 
 from notification.api.v1.client.serializers import NotificationSerializer
-from notification.models import (
-    Notification,
-    NotificationRecipientType,
-    NotificationType,
-)
+from notification.models import Notification
+from notification.utils.choices import NotificationRecipientType, NotificationType
 
 from base.socket.services.groups import (
-    notification_group, global_dashboard_group, user_dashboard_group,
-    workspace_dashboard_group, chatbot_dashboard_group, chat_session_dashboard_group,
+    notification_group, 
+    global_dashboard_group, 
+    user_dashboard_group,
+    chatbot_dashboard_group,
 )
 from base.socket.services.broadcaster import broadcast
 
@@ -155,8 +154,6 @@ def emit_notification(notification):
         group_name = global_dashboard_group()
     elif notification.recipient_type == NotificationRecipientType.USER:
         group_name = user_dashboard_group(notification.recipient_id)
-    elif notification.recipient_type == NotificationRecipientType.WORKSPACE:
-        group_name = workspace_dashboard_group(notification.workspace_id)
     elif notification.recipient_type == NotificationRecipientType.CHATBOT:
         group_name = chatbot_dashboard_group(notification.chatbot_id)
     else:

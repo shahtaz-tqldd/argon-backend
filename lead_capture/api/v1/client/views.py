@@ -13,7 +13,7 @@ from app.utils.pagination import CustomPagination
 from app.utils.permission import IsChatbotUser
 from app.utils.response import APIResponse
 from chatbot.models import Chatbot, ChatbotConfig, ChatbotUser
-from chatbot.services.capacity import get_chatbot_capacity
+from chatbot.services.chatbot_config import get_chatbot_capacity
 from chatbot.services import record_chatbot_activity
 from chatbot.services.activity_logs import activity_serializer_snapshot, activity_update_metadata
 from chatbot.utils.choices import ChatbotPermissionTypes
@@ -41,7 +41,7 @@ from lead_capture.models import (
     LeadSignal,
 )
 from lead_capture.services.exports import build_lead_export
-from subscription.choices import PlanFeature
+from subscription.utils.choices import PlanFeature
 
 
 class PaginatedLeadMixin:

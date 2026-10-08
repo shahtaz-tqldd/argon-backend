@@ -1,4 +1,4 @@
-from chatbot.services.capacity import (
+from chatbot.services.chatbot_config import (
     apply_active_subscription_to_chatbot_capacity,
     get_chatbot_capacity,
     update_chatbot_capacity,
@@ -14,11 +14,6 @@ from chatbot.services.invitations import (
     get_valid_chatbot_invitation,
     issue_chatbot_invitation,
 )
-from chatbot.services.subscription import (
-    ActiveChatbotSubscriptionNotFound,
-    ChatbotSubscriptionEntitlements,
-    get_chatbot_subscription_entitlements,
-)
 
 __all__ = [
     "record_activity_log",
@@ -32,7 +27,4 @@ __all__ = [
     "accept_chatbot_invitation",
     "get_valid_chatbot_invitation",
     "issue_chatbot_invitation",
-    "ActiveChatbotSubscriptionNotFound",
-    "ChatbotSubscriptionEntitlements",
-    "get_chatbot_subscription_entitlements",
 ]

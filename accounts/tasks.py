@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 from django.core.mail import EmailMultiAlternatives
 from django.utils import timezone
 
-from accounts.choices import AccountStatus
+from accounts.utils.choices import AccountStatus
 
 User = get_user_model()
 

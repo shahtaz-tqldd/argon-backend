@@ -4,9 +4,9 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from coupon.choices import DiscountDuration, DiscountType
+from coupon.utils.choices import DiscountType
 from coupon.models import Coupon, CouponRedemption
-from subscription.choices import PaymentStatus
+from subscription.utils.choices import PaymentStatus
 from subscription.models import ChatbotSubscription
 
 CENT = Decimal("0.01")

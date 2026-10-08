@@ -14,7 +14,7 @@ from chatbot.models import (
 from chatbot.services import assign_user_to_chatbot, create_chatbot
 from chatbot.utils.choices import ChatbotRoleTypes
 from subscription.models import ChatbotSubscription
-from workspace.services import add_workspace_user, ensure_personal_workspace
+from workspace.services import ensure_personal_workspace
 
 User = get_user_model()
 
@@ -33,21 +33,7 @@ class ChatbotMembershipTests(TestCase):
             email="other-member@example.com",
             password="StrongPass123!",
         )
-        self.outsider = User.objects.create_user(
-            email="outsider@example.com",
-            password="StrongPass123!",
-        )
         self.workspace = ensure_personal_workspace(self.owner)
-        add_workspace_user(
-            workspace=self.workspace,
-            user=self.member,
-            added_by=self.owner,
-        )
-        add_workspace_user(
-            workspace=self.workspace,
-            user=self.other_member,
-            added_by=self.owner,
-        )
 
     def test_chatbot_model_applies_default_conversation_messages(self):
         chatbot = Chatbot.objects.create(
@@ -115,28 +101,103 @@ class ChatbotMembershipTests(TestCase):
             ChatbotConfig.objects.filter(chatbot=chatbot).exists()
         )
 
-    def test_same_name_chatbots_can_coexist(self):
+    def test_same_name_in_same_workspace_is_rejected(self):
+        create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Support Bot",
+            created_by=self.owner,
+        )
+
+        with self.assertRaises(ValidationError) as exc:
+            create_chatbot(
+                workspace=self.workspace,
+                chatbot_name="Support Bot",
+                created_by=self.owner,
+            )
+        self.assertIn(
+            "already exists in this workspace",
+            str(exc.exception),
+        )
+        self.assertEqual(
+            Chatbot.objects.filter(
+                workspace=self.workspace,
+                chatbot_name="Support Bot",
+            ).count(),
+            1,
+        )
+
+    def test_same_name_matching_different_case_is_rejected(self):
+        create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Support Bot",
+            created_by=self.owner,
+        )
+
+        with self.assertRaises(ValidationError):
+            create_chatbot(
+                workspace=self.workspace,
+                chatbot_name="SUPPORT BOT",
+                created_by=self.owner,
+            )
+
+    def test_same_name_in_different_workspaces_can_coexist(self):
+        other_owner = User.objects.create_user(
+            email="other-owner@example.com",
+            password="StrongPass123!",
+        )
+        other_workspace = ensure_personal_workspace(other_owner)
+
         first = create_chatbot(
             workspace=self.workspace,
             chatbot_name="Support Bot",
             created_by=self.owner,
         )
         second = create_chatbot(
+            workspace=other_workspace,
+            chatbot_name="Support Bot",
+            created_by=other_owner,
+        )
+
+        self.assertNotEqual(first.slug, second.slug)
+        self.assertEqual(
+            Chatbot.objects.filter(chatbot_name="Support Bot").count(),
+            2,
+        )
+
+    def test_soft_deleted_chatbot_frees_its_name_in_the_workspace(self):
+        first = create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Support Bot",
+            created_by=self.owner,
+        )
+        first.is_deleted = True
+        first.save(update_fields=["is_deleted", "updated_at"])
+
+        second = create_chatbot(
             workspace=self.workspace,
             chatbot_name="Support Bot",
             created_by=self.owner,
         )
 
-        self.assertNotEqual(first.slug, second.slug)
-        self.assertEqual(
-            Chatbot.objects.filter(
-                workspace=self.workspace,
-                chatbot_name="Support Bot",
-            ).count(),
-            2,
-        )
+        self.assertNotEqual(first.pk, second.pk)
 
-    def test_workspace_member_can_assign_another_workspace_member(self):
+    def test_database_blocks_same_active_name_in_one_workspace(self):
+        from django.db import IntegrityError, transaction
+
+        create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Support Bot",
+            created_by=self.owner,
+        )
+        duplicate = Chatbot(
+            workspace=self.workspace,
+            chatbot_name="support bot",
+            created_by=self.owner,
+        )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            duplicate.save()
+
+    def test_owner_can_assign_any_active_user(self):
         chatbot = create_chatbot(
             workspace=self.workspace,
             chatbot_name="Support Bot",
@@ -146,13 +207,13 @@ class ChatbotMembershipTests(TestCase):
         membership = assign_user_to_chatbot(
             chatbot=chatbot,
             user=self.other_member,
-            assigned_by=self.member,
+            assigned_by=self.owner,
         )
 
         self.assertEqual(membership.user, self.other_member)
         self.assertTrue(membership.is_active)
 
-    def test_outsider_cannot_be_assigned_to_chatbot(self):
+    def test_non_owner_cannot_assign_users(self):
         chatbot = create_chatbot(
             workspace=self.workspace,
             chatbot_name="Support Bot",
@@ -162,14 +223,14 @@ class ChatbotMembershipTests(TestCase):
         with self.assertRaises(PermissionDenied):
             assign_user_to_chatbot(
                 chatbot=chatbot,
-                user=self.outsider,
-                assigned_by=self.owner,
+                user=self.other_member,
+                assigned_by=self.member,
             )
 
     def _subscribe_with_team_members_limit(self, chatbot, limit):
         from decimal import Decimal
 
-        from subscription.choices import BillingInterval, PaymentProvider
+        from subscription.utils.choices import BillingInterval, PaymentProvider
         from subscription.models import PlanPrice, SubscriptionPlan
         from subscription.services.subscriptions import (
             activate_free_subscription,

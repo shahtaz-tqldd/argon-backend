@@ -1,7 +1,7 @@
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase
 
-from analytics.validators import validate_ai_usage_metadata
+from analytics.utils.validators import validate_ai_usage_metadata
 
 
 class AIUsageMetadataValidatorTests(SimpleTestCase):

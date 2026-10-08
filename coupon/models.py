@@ -8,7 +8,7 @@ from django.db.models.functions import Lower
 from django.utils import timezone
 
 from app.core.models import BaseModel
-from coupon.choices import DiscountDuration, DiscountType
+from coupon.utils.choices import DiscountDuration, DiscountType
 
 
 class Discount(BaseModel):

@@ -3,7 +3,7 @@ from unittest.mock import patch
 from django.test import TestCase
 
 from accounts.api.v1.client.serializers import GoogleLoginSerializer
-from accounts.choices import AccountProvider
+from accounts.utils.choices import AccountProvider
 from accounts.models import User
 
 

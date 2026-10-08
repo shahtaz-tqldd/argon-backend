@@ -2,7 +2,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from app.utils.logger import logger
-from subscription.choices import (
+from subscription.utils.choices import (
     PaymentProvider,
     RenewalMode,
     SubscriptionStatus,

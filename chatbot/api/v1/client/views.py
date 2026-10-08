@@ -4,7 +4,7 @@ from copy import deepcopy
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Prefetch, Q
+from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
@@ -212,14 +212,8 @@ class ChatbotListView(PaginatedListMixin, GenericAPIView):
         if shared_with_me:
             queryset = (
                 queryset.filter(
-                    Q(
-                        workspace__memberships__user=self.request.user,
-                        workspace__memberships__is_active=True,
-                    )
-                    | Q(
-                        memberships__user=self.request.user,
-                        memberships__is_active=True,
-                    ),
+                    memberships__user=self.request.user,
+                    memberships__is_active=True,
                 )
                 .exclude(created_by=self.request.user)
                 .distinct()

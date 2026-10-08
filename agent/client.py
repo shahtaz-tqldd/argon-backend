@@ -24,14 +24,14 @@ from agent.sub_agents.appointment.tools import (
     verified_booking,
 )
 from agent.sub_agents.knowledge.tools import RETRIEVED_SOURCE_IDS_KEY
-from analytics.choices import AIUsageType
+from analytics.utils.choices import AIUsageType
 from analytics.services.ai_usage import record_ai_usage
 from chat.models import ChatMessage, ChatSession
 from chat.utils.choices import ChatMessageSenderType, ChatSessionStatus
 from knowledge.models import KnowledgeBase
 from knowledge.services.storage import PrivateKnowledgeStorage
 from knowledge.utils.choices import KnowledgeSourceTypes
-from lead_capture.services.signals import record_lead_signal
+from lead_capture.services.lead_signal import record_lead_signal
 from agent.schema import (
     AgentResponseSchema,
     AgentResultSchema,
@@ -59,7 +59,15 @@ class AgentClient:
     COMPACTION_INTERVAL = 3
     COMPACTION_OVERLAP = 1
 
-    def __init__(self, chatbot, session, *, session_service=None):
+    def __init__(
+        self,
+        chatbot,
+        session,
+        *,
+        session_service=None,
+        has_attachments=False,
+        attachment_types=None,
+    ):
         if str(session.chatbot_id) != str(chatbot.id):
             raise ValueError("The conversation does not belong to this chatbot.")
 
@@ -85,7 +93,11 @@ class AgentClient:
         # GlobalInstructionPlugin executes its callback from ADK's async model
         # pipeline. Build the instruction here, while still on Django's sync
         # request path, because feature checks may load related ORM objects.
-        rendered_global_instruction = global_instruction(chatbot)
+        rendered_global_instruction = global_instruction(
+            chatbot,
+            has_attachments=has_attachments,
+            attachment_types=attachment_types,
+        )
         self.app = App(
             name=self.app_name,
             root_agent=self.chat_agent,
@@ -553,8 +565,7 @@ class AgentClient:
                 usage_type=AIUsageType.CHAT,
                 cost=response["cost"],
                 token_usage=response["token"],
-                model=settings.GEMINI_CHAT_MODEL,
-                metadata=response.get("usage_metadata"),
+                model=settings.GEMINI_CHAT_MODEL
             )
         return public_reply
 
@@ -613,10 +624,6 @@ class AgentClient:
                     user_id,
                     confirmation=confirmation,
                 )
-                response["usage_metadata"] = {
-                    "event": "appointment_confirmation",
-                    "appointment_id": str(appointment_id),
-                }
             except Exception:
                 logger.exception(
                     "Could not generate confirmation for appointment %s",

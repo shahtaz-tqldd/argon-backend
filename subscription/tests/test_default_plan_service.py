@@ -2,7 +2,7 @@ from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase
 
-from subscription.choices import BillingInterval, PaymentProvider
+from subscription.utils.choices import BillingInterval, PaymentProvider
 from subscription.models import PlanPrice
 from subscription.services.subscriptions import (
     DefaultFreePlanNotConfigured,

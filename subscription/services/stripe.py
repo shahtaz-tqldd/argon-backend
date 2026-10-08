@@ -6,8 +6,8 @@ from time import time
 import stripe
 from django.conf import settings
 
-from coupon.choices import DiscountDuration, DiscountType
-from subscription.choices import BillingInterval
+from coupon.utils.choices import DiscountDuration, DiscountType
+from subscription.utils.choices import BillingInterval
 
 
 STRIPE_ZERO_DECIMAL_CURRENCIES = {

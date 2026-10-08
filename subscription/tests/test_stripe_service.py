@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from django.test import SimpleTestCase, override_settings
 
-from subscription.choices import BillingInterval
+from subscription.utils.choices import BillingInterval
 from subscription.services.stripe import (
     StripeBillingService,
     StripeConfigurationError,

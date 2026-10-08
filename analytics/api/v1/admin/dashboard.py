@@ -9,7 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from accounts.models import User
 from analytics.api.v1.admin.serializers import AnalyticsFilterSerializer
-from analytics.choices import AIUsageType
+from analytics.utils.choices import AIUsageType
 from analytics.models import AIUsage
 from app.utils.permission import IsSuperAdmin
 from app.utils.response import APIResponse
@@ -125,8 +125,7 @@ def _scoped_users(filters):
         ).distinct()
     elif workspace:
         queryset = queryset.filter(
-            Q(owned_workspaces=workspace)
-            | Q(workspace_memberships__workspace=workspace)
+            owned_workspaces=workspace,
         ).distinct()
     return _filter_date_range(queryset, filters)
 

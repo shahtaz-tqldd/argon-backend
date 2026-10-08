@@ -10,7 +10,7 @@ from django.db.models import (
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
-from coupon.choices import DiscountDuration
+from coupon.utils.choices import DiscountDuration
 from coupon.models import CouponRedemption
 from coupon.services.coupons import compute_discounted_amounts
 from subscription.models import ChatbotSubscription

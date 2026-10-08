@@ -18,7 +18,7 @@ from coupon.services import (
     validate_coupon,
 )
 from subscription.api.v1.client.views import SubscriptionChatbotMixin
-from subscription.choices import SubscriptionStatus
+from subscription.utils.choices import SubscriptionStatus
 from subscription.services.subscriptions import get_open_subscription
 
 

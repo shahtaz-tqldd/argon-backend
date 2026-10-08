@@ -5,31 +5,25 @@ from uuid import uuid4
 from django.test import SimpleTestCase
 
 from base.socket.services.access import dashboard_access, session_access
-from base.socket.services.groups import workspace_dashboard_group, chatbot_dashboard_group
+from base.socket.services.groups import chatbot_dashboard_group
 from chatbot.utils.choices import ChatbotPermissionTypes
 
 
 class SocketAccessTests(SimpleTestCase):
     @patch("base.socket.services.access.ChatbotUser.objects")
-    @patch("base.socket.services.access.WorkspaceUser.objects")
-    def test_dashboard_groups_include_active_workspace_and_chatbot_memberships(
-        self, workspaces, chatbots,
+    def test_dashboard_groups_include_active_chatbot_memberships(
+        self, chatbots,
     ):
-        user_id, workspace_id, chatbot_id = uuid4(), uuid4(), uuid4()
-        workspaces.filter.return_value.values_list.return_value = [workspace_id]
+        user_id, chatbot_id = uuid4(), uuid4()
         membership_id = uuid4()
         chatbots.filter.return_value.values_list.return_value = [
             (chatbot_id, membership_id)
         ]
         groups, chatbot_memberships = dashboard_access(user_id)
-        self.assertIn(workspace_dashboard_group(workspace_id), groups)
         self.assertIn(chatbot_dashboard_group(chatbot_id), groups)
         self.assertEqual(
             chatbot_memberships,
             {str(chatbot_id): str(membership_id)},
-        )
-        workspaces.filter.assert_called_once_with(
-            user_id=user_id, user__is_active=True, is_active=True, workspace__is_active=True,
         )
         chatbots.filter.assert_called_once_with(
             user_id=user_id, user__is_active=True, is_active=True,
@@ -40,12 +34,10 @@ class SocketAccessTests(SimpleTestCase):
         )
 
     @patch("base.socket.services.access.ChatbotUser.objects")
-    @patch("base.socket.services.access.WorkspaceUser.objects")
     def test_chatbot_only_member_gets_chatbot_group_and_presence_scope(
-        self, workspaces, chatbots,
+        self, chatbots,
     ):
         user_id, chatbot_id, membership_id = uuid4(), uuid4(), uuid4()
-        workspaces.filter.return_value.values_list.return_value = []
         chatbots.filter.return_value.values_list.return_value = [
             (chatbot_id, membership_id),
         ]

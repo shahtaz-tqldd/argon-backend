@@ -8,7 +8,7 @@ from django.db.models import Q
 from django.utils.text import slugify
 
 from app.core.models import BaseMinModel, BaseModel
-from subscription.choices import (
+from subscription.utils.choices import (
     BillingInterval,
     EnterprisePlanRequestStatus,
     PaymentProvider,
@@ -20,7 +20,7 @@ from subscription.choices import (
     SubscriptionStatus,
     WebhookProcessingStatus,
 )
-from subscription.validators import validate_subscription_snapshot
+from subscription.utils.validators import validate_subscription_snapshot
 
 
 class SubscriptionPlan(BaseModel):

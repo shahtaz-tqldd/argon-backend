@@ -1,16 +1,18 @@
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test import TestCase
 from django.utils import timezone
 
-from analytics.choices import AIUsageType
+from analytics.utils.choices import AIUsageType
 from analytics.models import AIUsage
 from chat.models import ChatMessage, ChatSession
 from chat.utils.choices import ChatMessageSenderType
-from chatbot.models import Chatbot
+from chatbot.models import Chatbot, ChatbotConfig
 from lead_capture.models import LeadAIInsight
 from lead_capture.services.insights import (
     WeeklyLeadInsight,
@@ -21,6 +23,14 @@ from lead_capture.services.insights import (
     generate_weekly_lead_insight,
     last_week_window,
 )
+from subscription.utils.choices import (
+    BillingInterval,
+    PaymentProvider,
+    PlanFeature,
+    RenewalMode,
+    SubscriptionStatus,
+)
+from subscription.models import ChatbotSubscription, PlanPrice, SubscriptionPlan
 from workspace.models import Workspace
 
 
@@ -122,7 +132,6 @@ class WeeklyLeadInsightTests(TestCase):
             topics=[
                 InsightTopic(
                     topic="Integrations",
-                    mentions=4,
                     note="Slack and HubSync came up repeatedly.",
                 )
             ],
@@ -133,12 +142,9 @@ class WeeklyLeadInsightTests(TestCase):
                 )
             ],
             common_intents=[
-                InsightIntent(intent="pricing", mentions=5),
-                InsightIntent(intent="integrations", mentions=4),
-            ],
-            areas_of_improvement=[
-                "Document the Slack setup steps in the knowledge base."
-            ],
+                InsightIntent(intent="pricing"),
+                InsightIntent(intent="integrations"),
+            ]
         )
 
     def test_last_week_window_returns_monday_to_sunday(self):
@@ -201,11 +207,27 @@ class WeeklyLeadInsightTests(TestCase):
         )
         self.assertEqual(insight.common_intents[1]["intent"], "integrations")
         self.assertEqual(
-            insight.areas_of_improvement,
-            ["Document the Slack setup steps in the knowledge base."],
+            insight.metadata["model"], client.prompts[0]["model"]
         )
-        self.assertEqual(insight.metadata["model"], client.prompts[0]["model"])
-        self.assertEqual(insight.metadata["analyzed_message_count"], 2)
+        expected_cost = round(
+            (
+                1200 * settings.GEMINI_INPUT_COST_PER_MILLION
+                + 240 * settings.GEMINI_OUTPUT_COST_PER_MILLION
+            )
+            / 1_000_000,
+            8,
+        )
+        self.assertEqual(insight.metadata["cost"], expected_cost)
+        self.assertEqual(
+            insight.metadata["token_usage"],
+            {
+                "input_tokens": 1200,
+                "output_tokens": 240,
+                "thinking_tokens": 0,
+                "cached_input_tokens": 0,
+                "total_tokens": 1440,
+            },
+        )
 
         # Only visitor messages reach the model.
         prompt = client.prompts[0]["prompt"]
@@ -214,10 +236,10 @@ class WeeklyLeadInsightTests(TestCase):
 
         usage = AIUsage.objects.get(
             chatbot=self.chatbot,
-            usage_type=AIUsageType.CONTENT_GENERATION,
+            usage_type=AIUsageType.LEAD_INSIGHT_GENERATION,
         )
         self.assertEqual(usage.tokens, 1440)
-        self.assertEqual(usage.metadata["event"], "weekly_lead_insight")
+        self.assertEqual(float(usage.cost), expected_cost)
 
     def test_regenerating_the_same_week_updates_the_existing_row(self):
         mid_week = noon(self.week_start + timedelta(days=2))
@@ -287,19 +309,53 @@ class WeeklyLeadInsightTaskTests(TestCase):
             slug="insight-task-workspace",
             owner=self.owner,
         )
-        for name in ("Task Bot A", "Task Bot B", "Task Bot C"):
-            Chatbot.objects.create(
-                workspace=self.workspace,
-                chatbot_name=name,
-                slug=name.lower().replace(" ", "-"),
-                created_by=self.owner,
+        self.chatbots = []
+        for name in ("Task Bot A", "Task Bot B", "Task Bot C", "Task Bot D"):
+            self.chatbots.append(
+                Chatbot.objects.create(
+                    workspace=self.workspace,
+                    chatbot_name=name,
+                    slug=name.lower().replace(" ", "-"),
+                    created_by=self.owner,
+                )
             )
+        # A, B, and D subscribe to plans with lead insights; C does not.
+        for chatbot in (self.chatbots[0], self.chatbots[1], self.chatbots[3]):
+            self.subscribe(chatbot, features=[PlanFeature.LEAD_INSIGHTS])
+        self.subscribe(
+            self.chatbots[2],
+            features=[PlanFeature.LEAD_CAPTURE],
+        )
+
+    def subscribe(self, chatbot, *, features):
+        ChatbotConfig.objects.create(chatbot=chatbot)
+        plan = SubscriptionPlan.objects.create(
+            name=f"Insight Task Plan {chatbot.slug}",
+            ai_message_limit=100,
+            file_size_limit_mb=10,
+            knowledge_chunk_limit=30,
+            features=features,
+        )
+        price = PlanPrice.objects.create(
+            plan=plan,
+            provider=PaymentProvider.MANUAL,
+            billing_interval=BillingInterval.MONTHLY,
+            currency="USD",
+            amount=Decimal("0.00"),
+        )
+        return ChatbotSubscription.objects.create(
+            chatbot=chatbot,
+            plan_price=price,
+            selected_by=self.owner,
+            provider=PaymentProvider.MANUAL,
+            renewal_mode=RenewalMode.MANUAL,
+            status=SubscriptionStatus.ACTIVE,
+        )
 
     def test_task_buckets_chatbots_by_outcome(self):
         from unittest.mock import patch
 
         from lead_capture import tasks as lead_tasks
-        from lead_capture.models import LeadAIInsight
 
         chatbots = list(
             Chatbot.objects.order_by("chatbot_name")
@@ -318,7 +374,7 @@ class WeeklyLeadInsightTaskTests(TestCase):
             lead_tasks,
             "generate_weekly_lead_insight",
             side_effect=fake_generate,
-        ):
+        ) as generate:
             result = lead_tasks.generate_weekly_lead_ai_insights()
 
         self.assertEqual(
@@ -327,8 +383,35 @@ class WeeklyLeadInsightTaskTests(TestCase):
         self.assertEqual(
             result["skipped_no_messages"], [chatbots[1].slug]
         )
-        self.assertEqual(result["failed"], [chatbots[2].slug])
+        self.assertEqual(
+            result["failed"], [chatbots[3].slug]
+        )
+        # Bot C lacks the plan feature and never reaches generation.
+        self.assertEqual(result["skipped_no_feature"], [chatbots[2].slug])
+        self.assertEqual(generate.call_count, 3)
         self.assertEqual(
             date.fromisoformat(result["week_start"]).weekday(),
             0,
         )
+
+    def test_task_skips_chatbots_without_insights_feature(self):
+        from unittest.mock import patch
+
+        from lead_capture import tasks as lead_tasks
+
+        with patch.object(
+            lead_tasks,
+            "generate_weekly_lead_insight",
+            return_value=None,
+        ) as generate:
+            result = lead_tasks.generate_weekly_lead_ai_insights()
+
+        self.assertEqual(result["generated"], [])
+        self.assertEqual(result["failed"], [])
+        self.assertEqual(result["skipped_no_feature"], [])
+        self.assertEqual(
+            result["skipped_no_messages"],
+            [chatbot.slug for chatbot in self.chatbots[:2]]
+            + [self.chatbots[3].slug],
+        )
+        self.assertEqual(generate.call_count, 3)

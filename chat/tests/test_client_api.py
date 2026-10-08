@@ -31,7 +31,7 @@ from chat.utils.choices import (
 )
 from lead_capture.models import Lead
 from notification.models import Notification, NotificationType
-from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
+from workspace.models import Workspace
 
 
 User = get_user_model()
@@ -47,11 +47,6 @@ class ChatSessionClientAPITests(APITestCase):
             name="Chat Session API Workspace",
             slug="chat-session-api-workspace",
             owner=self.user,
-        )
-        WorkspaceUser.objects.create(
-            workspace=self.workspace,
-            user=self.user,
-            role=WorkspaceRole.ADMIN,
         )
         self.chatbot = Chatbot.objects.create(
             workspace=self.workspace,

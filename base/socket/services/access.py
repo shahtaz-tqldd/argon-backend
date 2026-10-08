@@ -4,25 +4,20 @@ from django.core.exceptions import ValidationError
 from chatbot.models import ChatbotUser
 from chatbot.utils.choices import ChatbotPermissionTypes
 from chat.models import ChatSession
-from workspace.models import WorkspaceUser
 from base.socket.services.groups import (
-    global_dashboard_group, user_dashboard_group,
-    workspace_dashboard_group, chatbot_dashboard_group,
+    global_dashboard_group, 
+    user_dashboard_group,
+    chatbot_dashboard_group,
 )
 
 
 def dashboard_access(user_id):
-    workspace_ids = list(WorkspaceUser.objects.filter(
-        user_id=user_id, user__is_active=True, is_active=True,
-        workspace__is_active=True,
-    ).values_list("workspace_id", flat=True))
     chatbot_memberships = dict(ChatbotUser.objects.filter(
         user_id=user_id, user__is_active=True, is_active=True,
         chatbot__is_deleted=False, chatbot__workspace__is_active=True,
     ).values_list("chatbot_id", "id"))
     groups = {
         global_dashboard_group(), user_dashboard_group(user_id),
-        *(workspace_dashboard_group(item) for item in workspace_ids),
         *(chatbot_dashboard_group(item) for item in chatbot_memberships),
     }
     return (

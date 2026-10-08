@@ -1,7 +1,7 @@
 import django.db.models.deletion
 import uuid
 
-import analytics.validators
+import analytics.utils.validators
 from django.db import migrations, models
 
 
@@ -28,7 +28,7 @@ class Migration(migrations.Migration):
                 ("thinking_tokens", models.PositiveIntegerField(default=0)),
                 ("cached_input_tokens", models.PositiveIntegerField(default=0)),
                 ("model", models.CharField(blank=True, db_index=True, default="", max_length=120)),
-                ("metadata", models.JSONField(blank=True, default=dict, validators=[analytics.validators.validate_ai_usage_metadata])),
+                ("metadata", models.JSONField(blank=True, default=dict, validators=[analytics.utils.validators.validate_ai_usage_metadata])),
                 ("chat_message", models.OneToOneField(blank=True, help_text="The generated message, when this usage produced one.", null=True, on_delete=django.db.models.deletion.SET_NULL, related_name="ai_usage", to="chat_session.chatmessage")),
                 ("chat_session", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="ai_usages", to="chat_session.chatsession")),
                 ("chatbot", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="ai_usages", to="chatbot.chatbot")),

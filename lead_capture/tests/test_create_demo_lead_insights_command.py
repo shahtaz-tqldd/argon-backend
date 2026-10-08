@@ -59,8 +59,11 @@ class CreateDemoLeadInsightsCommandTests(TestCase):
             self.assertTrue(insight.topics)
             self.assertTrue(insight.frequently_asked_questions)
             self.assertTrue(insight.common_intents)
-            self.assertTrue(insight.areas_of_improvement)
             self.assertEqual(insight.metadata["model"], "demo")
+            self.assertEqual(insight.metadata["cost"], 0.00096)
+            self.assertEqual(
+                insight.metadata["token_usage"]["total_tokens"], 1440
+            )
             self.assertGreaterEqual(insight.visitor_message_count, 5)
 
     def test_rerun_updates_the_same_rows(self):

@@ -7,18 +7,14 @@ from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase
 
 from notification.api.v1.client.serializers import NotificationSerializer
-from notification.models import (
-    Notification,
-    NotificationRecipientType,
-    NotificationType,
-)
+from notification.models import Notification
+from notification.utils.choices import NotificationRecipientType, NotificationType
 from notification.services import (
     chatbot_dashboard_group,
     chat_session_dashboard_group,
     emit_notification,
     global_dashboard_group,
     user_dashboard_group,
-    workspace_dashboard_group,
 )
 
 
@@ -85,10 +81,6 @@ class NotificationGroupTests(SimpleTestCase):
         self.assertEqual(
             user_dashboard_group(target_id),
             f"notifications.user.{target_id}",
-        )
-        self.assertEqual(
-            workspace_dashboard_group(target_id),
-            f"notifications.workspace.{target_id}",
         )
         self.assertEqual(
             chatbot_dashboard_group(target_id),

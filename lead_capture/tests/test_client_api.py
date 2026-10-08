@@ -16,8 +16,8 @@ from chat.utils.choices import ChatMessageSenderType
 from chatbot.models import Chatbot, ChatbotConfig, ChatbotUser, ChatbotVisitor
 from chatbot.utils.choices import ChatbotRoleTypes
 from lead_capture.models import Lead, LeadAIInsight, LeadCaptureConfig, LeadNote, LeadSignal
-from lead_capture.services.signals import record_lead_signal
-from subscription.choices import (
+from lead_capture.services.lead_signal import record_lead_signal
+from subscription.utils.choices import (
     BillingInterval,
     PaymentProvider,
     PlanFeature,
@@ -25,7 +25,7 @@ from subscription.choices import (
     SubscriptionStatus,
 )
 from subscription.models import ChatbotSubscription, PlanPrice, SubscriptionPlan
-from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
+from workspace.models import Workspace
 
 User = get_user_model()
 
@@ -40,11 +40,6 @@ class LeadCaptureClientAPITests(APITestCase):
             name="Lead API Workspace",
             slug="lead-api-workspace",
             owner=self.user,
-        )
-        WorkspaceUser.objects.create(
-            workspace=self.workspace,
-            user=self.user,
-            role=WorkspaceRole.ADMIN,
         )
         self.chatbot = Chatbot.objects.create(
             workspace=self.workspace,
@@ -633,13 +628,22 @@ class LeadCaptureClientAPITests(APITestCase):
                 session_count=weeks_ago,
                 visitor_message_count=10 * weeks_ago,
                 summary=f"Demo summary for week {weeks_ago}.",
-                topics=[{"topic": "Pricing", "mentions": 3, "note": ""}],
+                topics=[{"topic": "Pricing", "note": ""}],
                 frequently_asked_questions=[
                     {"question": "How much?", "times_asked": 2}
                 ],
-                common_intents=[{"intent": "pricing", "mentions": 4}],
-                areas_of_improvement=["Add pricing docs."],
-                metadata={"model": "demo"},
+                common_intents=[{"intent": "pricing"}],
+                metadata={
+                    "model": "demo",
+                    "cost": 0.00096,
+                    "token_usage": {
+                        "input_tokens": 1200,
+                        "output_tokens": 240,
+                        "thinking_tokens": 0,
+                        "cached_input_tokens": 0,
+                        "total_tokens": 1440,
+                    },
+                },
             )
 
         response = self.client.get(
@@ -659,7 +663,6 @@ class LeadCaptureClientAPITests(APITestCase):
         self.assertIn("topics", first)
         self.assertIn("frequently_asked_questions", first)
         self.assertIn("common_intents", first)
-        self.assertIn("areas_of_improvement", first)
 
     def test_notes_can_be_created_fetched_updated_listed_and_deleted(self):
         lead = Lead.objects.create(

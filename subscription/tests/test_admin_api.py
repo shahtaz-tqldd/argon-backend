@@ -5,7 +5,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from subscription.choices import BillingInterval, PaymentProvider
+from subscription.utils.choices import BillingInterval, PaymentProvider
 from subscription.models import Payment, PlanPrice, SubscriptionPlan
 
 

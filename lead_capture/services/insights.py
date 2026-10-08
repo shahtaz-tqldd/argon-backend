@@ -3,8 +3,8 @@
 Every Monday the scheduled task walks each active chatbot, gathers the
 previous week's visitor messages (AI/agent replies are never sent to the
 model), and asks Gemini for a structured analysis — topics visitors cared
-about, recurring questions, intents, and improvement areas — persisted as
-one LeadAIInsight row per chatbot per week.
+about, recurring questions, and intents — persisted as one LeadAIInsight
+row per chatbot per week.
 """
 
 from datetime import datetime, time, timedelta
@@ -17,7 +17,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from analytics.choices import AIUsageType
+from analytics.utils.choices import AIUsageType
 from analytics.services.ai_usage import record_ai_usage
 from chat.models import ChatMessage
 from chat.utils.choices import ChatMessageSenderType
@@ -31,7 +31,6 @@ MESSAGE_EXCERPT_LENGTH = 500
 
 class InsightTopic(BaseModel):
     topic: str = Field(description="Product, service, or subject visitors asked about.")
-    mentions: int = Field(default=1, ge=1, description="Approximate number of messages about it.")
     note: str = Field(default="", description="One short sentence of context.")
 
 
@@ -45,23 +44,16 @@ class InsightIntent(BaseModel):
         description="Visitor intent, e.g. pricing, demo request, integrations, "
         "support, booking, complaint, churn risk."
     )
-    mentions: int = Field(default=1, ge=1)
 
 
 class WeeklyLeadInsight(BaseModel):
     """Structured analysis contract returned by the model."""
-
     summary: str = Field(
         description="Three to five sentence recap of the week's visitor activity."
     )
     topics: list[InsightTopic] = Field(default_factory=list)
     frequently_asked_questions: list[InsightQuestion] = Field(default_factory=list)
     common_intents: list[InsightIntent] = Field(default_factory=list)
-    areas_of_improvement: list[str] = Field(
-        default_factory=list,
-        description="Actionable suggestions for the chatbot owner: knowledge "
-        "gaps, missing answers, unclear messaging, escalation patterns.",
-    )
 
 
 def last_week_window(*, today=None):
@@ -166,21 +158,26 @@ def _token_usage(response):
     }
 
 
-def _record_usage(chatbot, response):
-    token_usage = _token_usage(response)
+def _estimate_cost(token_usage):
+    """Estimated generation cost, or None when no usage was reported."""
     if not token_usage.get("total_tokens"):
-        return
+        return None
     cost = (
         token_usage["input_tokens"] * settings.GEMINI_INPUT_COST_PER_MILLION
         + token_usage["output_tokens"] * settings.GEMINI_OUTPUT_COST_PER_MILLION
     ) / 1_000_000
+    return round(cost, 8)
+
+
+def _record_usage(chatbot, *, token_usage, cost):
+    if not token_usage.get("total_tokens"):
+        return
     record_ai_usage(
         chatbot=chatbot,
-        usage_type=AIUsageType.CONTENT_GENERATION,
-        cost=round(cost, 10),
+        usage_type=AIUsageType.LEAD_INSIGHT_GENERATION,
+        cost=cost or 0,
         token_usage=token_usage,
-        model=settings.GEMINI_CHAT_MODEL,
-        metadata={"event": "weekly_lead_insight"},
+        model=settings.GEMINI_CHAT_MODEL
     )
 
 
@@ -227,6 +224,8 @@ def generate_weekly_lead_insight(
         ),
     )
     insight_data = _parse_insight(response)
+    token_usage = _token_usage(response)
+    cost = _estimate_cost(token_usage)
 
     insight, _created = LeadAIInsight.objects.update_or_create(
         chatbot=chatbot,
@@ -247,17 +246,14 @@ def generate_weekly_lead_insight(
                 item.model_dump(mode="json")
                 for item in insight_data.common_intents
             ],
-            "areas_of_improvement": list(insight_data.areas_of_improvement),
             "metadata": {
                 "model": settings.GEMINI_CHAT_MODEL,
-                "analyzed_message_count": len(messages),
-                "message_limit": VISITOR_MESSAGE_LIMIT,
-                "excerpt_length": MESSAGE_EXCERPT_LENGTH,
-                "token_usage": _token_usage(response),
+                "cost": cost,
+                "token_usage": token_usage,
             },
         },
     )
-    _record_usage(chatbot, response)
+    _record_usage(chatbot, token_usage=token_usage, cost=cost)
     return insight
 
 

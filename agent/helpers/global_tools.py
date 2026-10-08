@@ -5,12 +5,12 @@ from google.adk.tools import FunctionTool
 
 from chat.models import ChatSession
 from chat.services.messages import create_system_message
-from notification.models import NotificationRecipientType, NotificationType
+from notification.utils.choices import NotificationRecipientType, NotificationType
 from notification.services import create_notification
 
 # features
-from chatbot.services.capacity import chatbot_has_feature
-from subscription.choices import PlanFeature
+from chatbot.services.chatbot_config import chatbot_has_feature
+from subscription.utils.choices import PlanFeature
 
 
 MAX_LEAD_INTENT_LENGTH = 240

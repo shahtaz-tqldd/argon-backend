@@ -5,9 +5,9 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
-from chatbot.services.capacity import apply_active_subscription_to_chatbot_capacity
+from chatbot.services.chatbot_config import apply_active_subscription_to_chatbot_capacity
 from chatbot.services.membership import create_chatbot
-from subscription.choices import (
+from subscription.utils.choices import (
     BillingInterval,
     RenewalMode,
     SubscriptionStatus,
@@ -17,11 +17,7 @@ from subscription.services.subscriptions import (
     OPEN_SUBSCRIPTION_STATUSES,
     activate_free_subscription,
 )
-from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
-from workspace.services import ensure_personal_workspace
-
-
-
+from workspace.models import Workspace
 
 
 class Command(BaseCommand):
@@ -129,28 +125,26 @@ class Command(BaseCommand):
             )
         return owner
 
-    def get_workspace(self, *, owner, name=None):
+    def get_workspace(self, *, owner, name):
         existing = (
-            Workspace.objects.filter(owner=owner).order_by("created_at").first()
+            Workspace.objects.filter(owner=owner, name=name).order_by("created_at").first()
         )
         if existing is not None:
             return existing, False
 
-        if name:
-            workspace = Workspace.objects.create(
-                owner=owner,
-                name=name,
-                created_by=owner,
+        if not name:
+            raise CommandError(
+                "Workspace name is required when creating a new workspace."
             )
-            WorkspaceUser.objects.create(
-                workspace=workspace,
-                user=owner,
-                role=WorkspaceRole.ADMIN,
-                created_by=owner,
-            )
-            return workspace, True
+        
+        workspace = Workspace.objects.create(
+            owner=owner,
+            name=name,
+            created_by=owner,
+        )
 
-        return ensure_personal_workspace(owner), True
+        return workspace, True
+
 
     def get_plan(self, plan_reference):
         plan = SubscriptionPlan.objects.filter(

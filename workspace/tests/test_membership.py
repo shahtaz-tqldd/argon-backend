@@ -1,17 +1,18 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
-from workspace.services import ensure_personal_workspace, join_workspace_from_invitation
+from workspace.models import Workspace
+from workspace.services import ensure_personal_workspace
 
 User = get_user_model()
 
 
 class WorkspaceOnboardingTests(TestCase):
-    def test_direct_signup_provisioning_is_idempotent_and_makes_user_admin(self):
+    def test_personal_workspace_provisioning_is_idempotent(self):
         user = User.objects.create_user(
             email="owner@example.com",
             password="StrongPass123!",
+            name="Workspace Owner",
         )
 
         first_workspace = ensure_personal_workspace(user)
@@ -22,40 +23,14 @@ class WorkspaceOnboardingTests(TestCase):
             Workspace.objects.filter(owner=user).count(),
             1,
         )
-        membership = WorkspaceUser.objects.get(
-            workspace=first_workspace,
-            user=user,
-        )
-        self.assertEqual(membership.role, WorkspaceRole.ADMIN)
-        self.assertTrue(membership.is_active)
+        self.assertEqual(first_workspace.slug, "workspace-owners-workspace")
 
-    def test_existing_user_keeps_personal_workspace_when_joining_another(self):
-        inviter = User.objects.create_user(
-            email="admin@example.com",
+    def test_personal_workspace_falls_back_to_email_name(self):
+        user = User.objects.create_user(
+            email="nameless@example.com",
             password="StrongPass123!",
         )
-        workspace = ensure_personal_workspace(inviter)
 
-        invited_user = User.objects.create_user(
-            email="invited@example.com",
-            password="StrongPass123!",
-        )
-        personal_workspace = ensure_personal_workspace(invited_user)
-        membership = join_workspace_from_invitation(
-            workspace=workspace,
-            user=invited_user,
-            invited_by=inviter,
-        )
+        workspace = ensure_personal_workspace(user)
 
-        self.assertEqual(membership.workspace, workspace)
-        self.assertEqual(membership.user, invited_user)
-        self.assertEqual(membership.role, WorkspaceRole.MEMBER)
-        self.assertEqual(
-            set(
-                WorkspaceUser.objects.filter(
-                    user=invited_user,
-                    is_active=True,
-                ).values_list("workspace_id", flat=True)
-            ),
-            {personal_workspace.id, workspace.id},
-        )
+        self.assertEqual(workspace.name, "nameless's Workspace")

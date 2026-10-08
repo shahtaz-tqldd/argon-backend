@@ -5,10 +5,10 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from chatbot.models import Chatbot
-from coupon.choices import DiscountDuration
+from coupon.utils.choices import DiscountDuration
 from coupon.models import Coupon, CouponRedemption, Discount
 from coupon.services import pending_coupon_info
-from subscription.choices import (
+from subscription.utils.choices import (
     BillingInterval,
     PaymentProvider,
     RenewalMode,

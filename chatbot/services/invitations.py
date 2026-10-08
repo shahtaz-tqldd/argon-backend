@@ -13,7 +13,6 @@ from chatbot.models import ChatbotInvitation, ChatbotUser
 from chatbot.tasks import send_chatbot_invitation_email
 from chatbot.utils.choices import ChatbotRoleTypes
 from chatbot.utils.permissions import normalize_chatbot_permission_codes
-from workspace.models import WorkspaceRole, WorkspaceUser
 
 User = get_user_model()
 
@@ -29,20 +28,12 @@ def hash_invitation_token(token):
 def _is_chatbot_manager(chatbot, user):
     if not user or not user.is_active:
         return False
-    return (
-        ChatbotUser.objects.filter(
-            chatbot=chatbot,
-            user=user,
-            role=ChatbotRoleTypes.ADMIN,
-            is_active=True,
-        ).exists()
-        or WorkspaceUser.objects.filter(
-            workspace=chatbot.workspace,
-            user=user,
-            role=WorkspaceRole.ADMIN,
-            is_active=True,
-        ).exists()
-    )
+    return ChatbotUser.objects.filter(
+        chatbot=chatbot,
+        user=user,
+        role=ChatbotRoleTypes.ADMIN,
+        is_active=True,
+    ).exists()
 
 
 def get_valid_chatbot_invitation(token):
@@ -110,7 +101,7 @@ def _deliver_chatbot_invitation(*, invitation, token):
 def issue_chatbot_invitation(*, chatbot, email, permissions=None, invited_by):
     if not _is_chatbot_manager(chatbot, invited_by):
         raise InvalidChatbotInvitation(
-            "Only a workspace admin or chatbot admin can invite chatbot members."
+            "Only a chatbot admin can invite chatbot members."
         )
     if (
         not chatbot.is_active

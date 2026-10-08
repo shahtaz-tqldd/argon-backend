@@ -1,7 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
-from subscription.choices import EnterprisePlanRequestStatus, PlanFeature
+from subscription.utils.choices import EnterprisePlanRequestStatus, PlanFeature
 from subscription.models import SubscriptionPlan
 
 

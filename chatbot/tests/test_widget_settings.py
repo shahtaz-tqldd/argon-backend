@@ -8,7 +8,6 @@ from chatbot.utils.choices import (
     ChatbotWidgetLauncherPositionTypes,
     ChatbotWidgetThemeTypes,
 )
-from workspace.services import ensure_personal_workspace
 
 User = get_user_model()
 
@@ -19,7 +18,6 @@ class ChatbotWidgetSettingsTests(TestCase):
             email="widget-owner@example.com",
             password="StrongPass123!",
         )
-        self.workspace = ensure_personal_workspace(self.owner)
         self.chatbot = create_chatbot(
             workspace=self.workspace,
             chatbot_name="Widget Bot",

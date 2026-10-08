@@ -2,7 +2,7 @@
 
 import django.contrib.postgres.fields
 import django.db.models.deletion
-import subscription.validators
+import subscription.utils.validators
 import uuid
 from decimal import Decimal
 from django.conf import settings
@@ -25,7 +25,7 @@ class Migration(migrations.Migration):
                 ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
-                ('snapshot', models.JSONField(default=dict, editable=False, validators=[subscription.validators.validate_subscription_snapshot])),
+                ('snapshot', models.JSONField(default=dict, editable=False, validators=[subscription.utils.validators.validate_subscription_snapshot])),
                 ('provider', models.CharField(choices=[('stripe', 'Stripe'), ('bkash', 'bKash'), ('manual', 'Manual')], max_length=20)),
                 ('renewal_mode', models.CharField(choices=[('provider_managed', 'Provider managed'), ('app_managed', 'Application managed'), ('manual', 'Manual')], max_length=20)),
                 ('status', models.CharField(choices=[('incomplete', 'Incomplete'), ('active', 'Active'), ('past_due', 'Past due'), ('paused', 'Paused'), ('canceled', 'Canceled'), ('unpaid', 'Unpaid')], db_index=True, default='incomplete', max_length=20)),

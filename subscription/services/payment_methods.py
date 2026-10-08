@@ -1,6 +1,6 @@
 from django.db import transaction
 
-from subscription.choices import PaymentProvider
+from subscription.utils.choices import PaymentProvider
 from subscription.models import BillingPaymentMethod
 from subscription.services.stripe import stripe_expandable_id
 

@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from subscription.choices import (
+from subscription.utils.choices import (
     BillingInterval,
     PaymentProvider,
     RenewalMode,
@@ -30,7 +30,7 @@ OPEN_SUBSCRIPTION_STATUSES = (
 
 def _apply_subscription_capacity(subscription):
     # Imported lazily to avoid the chatbot/subscription service import cycle.
-    from chatbot.services.capacity import (
+    from chatbot.services.chatbot_config import (
         apply_active_subscription_to_chatbot_capacity,
     )
 

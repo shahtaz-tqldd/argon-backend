@@ -1,7 +1,7 @@
 from django.db import models as db_models
 from rest_framework import serializers
 
-from coupon.choices import DiscountDuration, DiscountType
+from coupon.utils.choices import DiscountDuration, DiscountType
 from coupon.models import Coupon, CouponRedemption, Discount
 from subscription.models import SubscriptionPlan
 

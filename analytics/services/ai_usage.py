@@ -23,8 +23,7 @@ def record_ai_usage(
     token_usage,
     chat_session=None,
     chat_message=None,
-    model="",
-    metadata=None,
+    model=""
 ):
     if (
         chat_session is not None
@@ -55,8 +54,7 @@ def record_ai_usage(
         output_tokens=token_usage.get("output_tokens", 0),
         thinking_tokens=token_usage.get("thinking_tokens", 0),
         cached_input_tokens=token_usage.get("cached_input_tokens", 0),
-        model=model,
-        metadata={} if metadata is None else metadata,
+        model=model
     )
     usage.full_clean(validate_unique=False, validate_constraints=False)
     usage.save()

@@ -2,7 +2,7 @@ from rest_framework.permissions import BasePermission
 
 from chatbot.models import Chatbot, ChatbotUser
 from chatbot.utils.choices import ChatbotRoleTypes
-from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
+from workspace.models import Workspace
 
 
 def _is_active_authenticated_user(user):
@@ -27,18 +27,6 @@ def _workspace_from_object(obj):
     return getattr(chatbot, "workspace", None)
 
 
-def _active_membership_role(model, *, user, **scope):
-    return (
-        model.objects.filter(
-            user=user,
-            is_active=True,
-            **scope,
-        )
-        .values_list("role", flat=True)
-        .first()
-    )
-
-
 class IsAdmin(BasePermission):
     message = "Only staff users can perform this action."
 
@@ -59,10 +47,10 @@ class IsSuperAdmin(BasePermission):
         )
 
 
-class IsWorkspaceUser(BasePermission):
-    """Allow active users who have an active membership in the workspace."""
+class IsWorkspaceOwner(BasePermission):
+    """Allow active users to act only on workspaces they own."""
 
-    message = "You are not an active member of this workspace."
+    message = "You are not the owner of this workspace."
 
     def has_permission(self, request, view):
         return _is_active_authenticated_user(request.user)
@@ -72,28 +60,14 @@ class IsWorkspaceUser(BasePermission):
         if workspace is None or not workspace.is_active:
             return False
 
-        role = _active_membership_role(
-            WorkspaceUser,
-            workspace=workspace,
-            user=request.user,
-        )
-        if role is None:
+        if workspace.owner != request.user:
             return False
-
-        if request.method == "DELETE" and role != WorkspaceRole.ADMIN:
-            self.message = "Only a workspace admin can delete a workspace."
-            return False
-
-        if getattr(view, "workspace_admin_only", False):
-            if role != WorkspaceRole.ADMIN:
-                self.message = "Only a workspace admin can perform this action."
-                return False
 
         return True
 
 
 class IsChatbotUser(BasePermission):
-    """Allow active chatbot members or authorized workspace administrators."""
+    """Allow active chatbot members or the owning workspace's owner."""
 
     message = "You are not an active member of this chatbot."
 
@@ -109,12 +83,6 @@ class IsChatbotUser(BasePermission):
         ):
             return False
 
-        workspace_role = _active_membership_role(
-            WorkspaceUser,
-            workspace=chatbot.workspace,
-            user=request.user,
-        )
-
         chatbot_membership = (
             ChatbotUser.objects.filter(
                 chatbot=chatbot,
@@ -128,39 +96,19 @@ class IsChatbotUser(BasePermission):
         )
 
         if getattr(view, "chatbot_admin_only", False):
-            if not (
-                workspace_role == WorkspaceRole.ADMIN
-                or chatbot_role == ChatbotRoleTypes.ADMIN
-            ):
-                self.message = (
-                    "Only a workspace admin or chatbot admin can perform "
-                    "this action."
-                )
+            if chatbot_role != ChatbotRoleTypes.ADMIN:
+                self.message = "Only a chatbot admin can perform this action."
                 return False
             return True
 
         if request.method == "DELETE":
-            if not (
-                workspace_role == WorkspaceRole.ADMIN
-                or chatbot_role == ChatbotRoleTypes.ADMIN
-            ):
+            if chatbot_role != ChatbotRoleTypes.ADMIN:
                 self.message = (
-                    "Only a workspace admin or chatbot admin can delete a chatbot."
+                    "Only a chatbot admin can delete a chatbot."
                 )
                 return False
             return True
 
-        if (
-            getattr(view, "allow_workspace_admin", False)
-            and workspace_role == WorkspaceRole.ADMIN
-        ):
-            return True
-
-        if (
-            getattr(view, "allow_workspace_member", False)
-            and workspace_role is not None
-        ):
-            return True
 
         if chatbot_membership is None:
             return False

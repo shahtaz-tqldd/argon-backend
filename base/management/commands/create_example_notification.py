@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
 from chatbot.models import Chatbot
-from notification.models import NotificationRecipientType, NotificationType
+from notification.utils.choices import NotificationRecipientType, NotificationType
 from notification.services import create_notification
 from workspace.models import Workspace
 

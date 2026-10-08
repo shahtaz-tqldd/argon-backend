@@ -200,7 +200,6 @@ class LeadAIInsightSerializer(serializers.ModelSerializer):
             "topics",
             "frequently_asked_questions",
             "common_intents",
-            "areas_of_improvement",
             "metadata",
             "created_at",
             "updated_at",

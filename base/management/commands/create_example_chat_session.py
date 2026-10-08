@@ -15,7 +15,7 @@ from chat.utils.choices import (
 )
 from chatbot.models import Chatbot, ChatbotUser, ChatbotVisitor
 from lead_capture.models import Lead, LeadCaptureConfig
-from lead_capture.services.signals import record_lead_signal
+from lead_capture.services.lead_signal import record_lead_signal
 from lead_capture.utils.choices import LeadStatusType
 
 

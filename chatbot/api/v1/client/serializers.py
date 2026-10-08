@@ -8,7 +8,7 @@ from django.db import IntegrityError, transaction
 from rest_framework import serializers
 
 from accounts.api.v1.client.serializers import build_auth_token_payload
-from accounts.choices import AccountProvider
+from accounts.utils.choices import AccountProvider
 from app.services.r2 import delete_image, schedule_delete_image, upload_image
 from app.utils.storage_fields import R2ImageField
 from chatbot.models import (
@@ -33,9 +33,9 @@ from chatbot.utils.permissions import (
     normalize_chatbot_permission_codes,
 )
 from chatbot.utils.validation import normalize_widget_origin
-from subscription.choices import PlanFeature
+from subscription.utils.choices import PlanFeature
 from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
-from workspace.models import Workspace, WorkspaceUser
+from workspace.models import Workspace
 
 User = get_user_model()
 
@@ -235,13 +235,9 @@ class ChatbotBaseSerializer(serializers.ModelSerializer):
                     )
                 workspace = referenced_workspace
             request = self.context["request"]
-            if not WorkspaceUser.objects.filter(
-                workspace=workspace,
-                user=request.user,
-                is_active=True,
-            ).exists():
+            if workspace.owner != request.user:
                 raise serializers.ValidationError(
-                    {"workspace": "You are not an active member of this workspace."}
+                    {"workspace": "You are not the owner of this workspace."}
                 )
             attrs["workspace"] = workspace
 
@@ -252,6 +248,22 @@ class ChatbotBaseSerializer(serializers.ModelSerializer):
                     {"chatbot_name": "This field is required."}
                 )
             attrs["chatbot_name"] = chatbot_name
+            name_conflicts = Chatbot.objects.filter(
+                workspace=workspace,
+                chatbot_name__iexact=chatbot_name,
+                is_deleted=False,
+            )
+            if self.instance is not None:
+                name_conflicts = name_conflicts.exclude(pk=self.instance.pk)
+            if name_conflicts.exists():
+                raise serializers.ValidationError(
+                    {
+                        "chatbot_name": (
+                            "A chatbot with this name already exists in this "
+                            "workspace."
+                        )
+                    }
+                )
         return attrs
 
     def create(self, validated_data):

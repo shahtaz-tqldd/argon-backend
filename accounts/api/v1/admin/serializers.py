@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from accounts.choices import AccountStatus
+from accounts.utils.choices import AccountStatus
 from accounts.models import UserProfile
 from app.services.r2 import delete_image, schedule_delete_image, upload_image
 

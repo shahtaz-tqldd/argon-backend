@@ -23,13 +23,7 @@ def workspace_admin_queryset():
             "owner",
             "created_by",
             "updated_by",
-        )
-        .annotate(
-            member_count=Count(
-                "memberships",
-                filter=Q(memberships__is_active=True),
-                distinct=True,
-            ),
+        ).annotate(
             chatbot_count=Count(
                 "chatbots",
                 filter=Q(chatbots__is_deleted=False),

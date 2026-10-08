@@ -11,20 +11,14 @@ from chatbot.models import (
     build_default_chatbot_welcome_message,
 )
 from chatbot.utils.choices import ChatbotRoleTypes, ChatbotStatusTypes
-from workspace.models import WorkspaceUser
 
 
-def _require_active_workspace_user(workspace, user):
+def _require_workspace_owner(workspace, user):
     if not user.is_active:
         raise PermissionDenied("Inactive users cannot access a workspace.")
-    membership = WorkspaceUser.objects.filter(
-        workspace=workspace,
-        user=user,
-        is_active=True,
-    ).first()
-    if membership is None:
-        raise PermissionDenied("User is not an active member of this workspace.")
-    return membership
+    if workspace.owner_id != user.id:
+        raise PermissionDenied("Only the workspace owner can perform this action.")
+    return workspace
 
 
 @transaction.atomic
@@ -49,13 +43,21 @@ def create_chatbot(
     logo="",
     status=ChatbotStatusTypes.DRAFT,
 ):
-    _require_active_workspace_user(workspace, created_by)
+    _require_workspace_owner(workspace, created_by)
     if not workspace.is_active:
         raise ValidationError("Cannot create a chatbot in an inactive workspace.")
 
     chatbot_name = chatbot_name.strip()
     if not chatbot_name:
         raise ValidationError("Chatbot name is required.")
+    if Chatbot.objects.filter(
+        workspace=workspace,
+        chatbot_name__iexact=chatbot_name,
+        is_deleted=False,
+    ).exists():
+        raise ValidationError(
+            "A chatbot with this name already exists in this workspace."
+        )
     if welcome_message is None:
         welcome_message = build_default_chatbot_welcome_message(
             chatbot_name,
@@ -104,15 +106,16 @@ def assign_user_to_chatbot(
     role=ChatbotRoleTypes.MEMBER,
 ):
     """
-    Assign a workspace member to a chatbot.
+    Assign a user to a chatbot as a direct team member.
 
-    Any active workspace member may perform the assignment for now; this can be
-    narrowed to admins later without changing the membership schema.
+    Only the workspace owner may perform the assignment; the target user
+    just needs an active account.
     """
     if not chatbot.is_active or not chatbot.workspace.is_active:
         raise ValidationError("Cannot assign users to an inactive chatbot.")
-    _require_active_workspace_user(chatbot.workspace, assigned_by)
-    _require_active_workspace_user(chatbot.workspace, user)
+    _require_workspace_owner(chatbot.workspace, assigned_by)
+    if not user.is_active:
+        raise PermissionDenied("Inactive users cannot be assigned to a chatbot.")
 
     role = ChatbotRoleTypes(role)
     membership, created = ChatbotUser.objects.get_or_create(

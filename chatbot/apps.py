@@ -7,4 +7,4 @@ class ChatbotConfig(AppConfig):
     verbose_name = "Chatbots"
 
     def ready(self):
-        from chatbot import cors  # noqa: F401
+        from chatbot.services import cors  # noqa: F401

@@ -22,11 +22,11 @@ from appointment.api.v1.client.serializers import (
 from appointment.models import Appointment, AppointmentBookingConfig
 from appointment.utils.choices import AppointmentStatus
 from chatbot.models import Chatbot, ChatbotConfig
-from chatbot.services.capacity import get_chatbot_capacity
+from chatbot.services.chatbot_config import get_chatbot_capacity
 from chatbot.services import record_chatbot_activity
 from chatbot.services.activity_logs import activity_serializer_snapshot, activity_update_metadata
 from chatbot.utils.choices import ChatbotPermissionTypes
-from subscription.choices import PlanFeature
+from subscription.utils.choices import PlanFeature
 
 
 class PaginatedAppointmentMixin:

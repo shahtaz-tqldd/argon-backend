@@ -11,7 +11,7 @@ class AdminWorkspaceQuerySerializer(serializers.Serializer):
     workspace = serializers.SlugField()
 
 
-class AdminWorkspaceUserSerializer(serializers.ModelSerializer):
+class AdminUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ("id", "name", "email")
@@ -19,8 +19,7 @@ class AdminWorkspaceUserSerializer(serializers.ModelSerializer):
 
 
 class AdminWorkspaceListSerializer(serializers.ModelSerializer):
-    owner = AdminWorkspaceUserSerializer(read_only=True)
-    member_count = serializers.IntegerField(read_only=True)
+    owner = AdminUserSerializer(read_only=True)
     chatbot_count = serializers.IntegerField(read_only=True)
 
     class Meta:
@@ -32,7 +31,6 @@ class AdminWorkspaceListSerializer(serializers.ModelSerializer):
             "logo",
             "industry",
             "owner",
-            "member_count",
             "chatbot_count",
             "is_active",
             "created_at",
@@ -42,10 +40,9 @@ class AdminWorkspaceListSerializer(serializers.ModelSerializer):
 
 
 class AdminWorkspaceDetailSerializer(serializers.ModelSerializer):
-    owner = AdminWorkspaceUserSerializer(read_only=True)
-    created_by = AdminWorkspaceUserSerializer(read_only=True)
-    updated_by = AdminWorkspaceUserSerializer(read_only=True)
-    member_count = serializers.IntegerField(read_only=True)
+    owner = AdminUserSerializer(read_only=True)
+    created_by = AdminUserSerializer(read_only=True)
+    updated_by = AdminUserSerializer(read_only=True)
     chatbot_count = serializers.IntegerField(read_only=True)
 
     class Meta:
@@ -57,7 +54,6 @@ class AdminWorkspaceDetailSerializer(serializers.ModelSerializer):
             "logo",
             "industry",
             "owner",
-            "member_count",
             "chatbot_count",
             "is_active",
             "created_by",

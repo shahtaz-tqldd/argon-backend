@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from subscription.choices import (
+from subscription.utils.choices import (
     BillingInterval,
     PaymentProvider,
     PlanFeature,
@@ -79,7 +79,7 @@ PLAN_CONFIGURATIONS = (
             {
                 "provider": PaymentProvider.STRIPE,
                 "billing_interval": BillingInterval.ANNUAL,
-                "amount": Decimal("590.00"),
+                "amount": Decimal("588.00"),
             },
         ],
     },
@@ -106,7 +106,7 @@ PLAN_CONFIGURATIONS = (
             {
                 "provider": PaymentProvider.STRIPE,
                 "billing_interval": BillingInterval.ANNUAL,
-                "amount": Decimal("1190.00"),
+                "amount": Decimal("1188.00"),
             },
         ],
     },
@@ -133,7 +133,7 @@ PLAN_CONFIGURATIONS = (
             {
                 "provider": PaymentProvider.STRIPE,
                 "billing_interval": BillingInterval.ANNUAL,
-                "amount": Decimal("2290.00"),
+                "amount": Decimal("2388.00"),
             },
         ],
     },

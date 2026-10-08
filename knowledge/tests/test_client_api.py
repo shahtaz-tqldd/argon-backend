@@ -19,7 +19,7 @@ from knowledge.utils.choices import (
     KnowledgeTrainingStageTypes,
     StatusTypes,
 )
-from subscription.choices import (
+from subscription.utils.choices import (
     BillingInterval,
     PaymentProvider,
     PlanFeature,

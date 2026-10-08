@@ -1,7 +1,7 @@
 from django.db.models import Sum
 
 from knowledge.models import KnowledgeBase
-from subscription.choices import PlanFeature, SubscriptionStatus
+from subscription.utils.choices import PlanFeature, SubscriptionStatus
 from subscription.models import ChatbotSubscription
 from vector_store.models import VectorDocument
 

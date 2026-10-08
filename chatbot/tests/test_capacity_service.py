@@ -6,7 +6,7 @@ from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase
 
 from chatbot.models import Chatbot, ChatbotConfig
-from chatbot.services.capacity import (
+from chatbot.services.chatbot_config import (
     get_chatbot_capacity,
     update_chatbot_capacity,
 )

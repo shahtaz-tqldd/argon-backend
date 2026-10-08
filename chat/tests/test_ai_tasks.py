@@ -4,17 +4,18 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 
-from analytics.choices import AIUsageType
+from analytics.utils.choices import AIUsageType
 from analytics.models import AIUsage
 from analytics.services.ai_usage import record_ai_usage
 from agent.client import AgentClient
 from chatbot.models import Chatbot, ChatbotVisitor
-from chat.models import ChatMessage, ChatSession
+from chat.models import ChatMessage, ChatMessageAttachment, ChatSession
 from chat.tasks import generate_ai_reply_task
 from chat.utils.choices import ChatMessageSenderType
 from knowledge.models import KnowledgeBase
 from knowledge.utils.choices import KnowledgeSourceTypes
 from lead_capture.models import Lead, LeadSignal
+from notification.models import Notification
 from workspace.models import Workspace
 
 
@@ -75,10 +76,117 @@ class GenerateAIReplyTaskTests(TestCase):
         )
 
         self.assertEqual(result.result, public_reply)
-        agent_client.assert_called_once_with(self.chatbot, self.session)
+        agent_client.assert_called_once_with(
+            self.chatbot,
+            self.session,
+            has_attachments=False,
+            attachment_types=[],
+        )
         agent_client.return_value.generate_reply_sync.assert_called_once_with(
             visitor_message=self.visitor_message,
             user_id=str(self.visitor.id),
+        )
+
+    def _attach(self, message, attachment_type, *, sort_order=1):
+        return ChatMessageAttachment.objects.create(
+            chat_message=message,
+            attachment_type=attachment_type,
+            file_url=f"https://files.example.com/{attachment_type}.bin",
+            sort_order=sort_order,
+        )
+
+    @patch("chat.tasks.AgentClient")
+    def test_attachment_only_message_gets_notice_and_escalation(
+        self,
+        agent_client,
+    ):
+        message = ChatMessage.objects.create(
+            chat_session=self.session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="",
+        )
+        self._attach(message, "image", sort_order=1)
+        self._attach(message, "document", sort_order=2)
+
+        result = generate_ai_reply_task.apply(
+            args=[str(message.id)],
+            throw=True,
+        )
+
+        self.assertIn("can't access the attachments", result.result["content"])
+        self.assertIn("(received: image, document)", result.result["content"])
+        self.assertIn("notified our customer support", result.result["content"])
+        reply = ChatMessage.objects.get(external_id=f"ai:{message.id}")
+        self.assertEqual(reply.sender_type, ChatMessageSenderType.AI)
+        self.assertEqual(
+            reply.metadata["attachments_notice"],
+            {"types": ["image", "document"]},
+        )
+        self.assertEqual(
+            reply.metadata["escalation"]["reason"],
+            "Visitor sent attachment(s) the assistant cannot access: "
+            "image, document.",
+        )
+        self.session.refresh_from_db()
+        self.assertTrue(self.session.requires_attention)
+        self.assertTrue(
+            Notification.objects.filter(chatbot=self.chatbot).exists()
+        )
+        agent_client.assert_not_called()
+        self.assertFalse(AIUsage.objects.exists())
+
+    @patch("chat.tasks.AgentClient")
+    def test_attachment_only_notice_is_idempotent(self, agent_client):
+        message = ChatMessage.objects.create(
+            chat_session=self.session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="   ",
+        )
+        self._attach(message, "image")
+
+        first = generate_ai_reply_task.apply(
+            args=[str(message.id)],
+            throw=True,
+        )
+        second = generate_ai_reply_task.apply(
+            args=[str(message.id)],
+            throw=True,
+        )
+
+        self.assertEqual(first.result["content"], second.result["content"])
+        self.assertEqual(
+            ChatMessage.objects.filter(
+                chat_session=self.session,
+                sender_type=ChatMessageSenderType.AI,
+            ).count(),
+            1,
+        )
+        agent_client.assert_not_called()
+
+    @patch("chat.tasks.AgentClient")
+    def test_attachment_with_text_still_goes_to_agent(self, agent_client):
+        agent_client.return_value.generate_reply_sync.return_value = {
+            "content": "Here is your answer.",
+            "metadata": {},
+        }
+        message = ChatMessage.objects.create(
+            chat_session=self.session,
+            sender_type=ChatMessageSenderType.VISITOR,
+            content="What pricing plan fits a team of 20? See the sheet.",
+        )
+        self._attach(message, "document")
+
+        result = generate_ai_reply_task.apply(
+            args=[str(message.id)],
+            throw=True,
+        )
+
+        self.assertEqual(result.result["content"], "Here is your answer.")
+        agent_client.assert_called_once_with(
+            self.chatbot,
+            self.session,
+            has_attachments=True,
+            attachment_types=["document"],
         )
 
     @patch("chat.tasks.AgentClient")
@@ -181,7 +289,7 @@ class GenerateAIReplyTaskTests(TestCase):
         self.assertEqual(usage.chatbot_id_snapshot, self.chatbot.id)
         self.assertIsNone(usage.chat_session_id_snapshot)
 
-    def test_appointment_confirmation_usage_accepts_context_metadata(self):
+    def test_appointment_confirmation_usage_binds_to_the_reply(self):
         ai_message = ChatMessage.objects.create(
             chat_session=self.session,
             sender_type=ChatMessageSenderType.AI,
@@ -199,20 +307,11 @@ class GenerateAIReplyTaskTests(TestCase):
                 "input_tokens": 40,
                 "output_tokens": 10,
                 "total_tokens": 50,
-            },
-            metadata={
-                "event": "appointment_confirmation",
-                "appointment_id": "6c3667b3-9fee-45a9-8976-60b8a9b20032",
-            },
+            }
         )
 
-        self.assertEqual(
-            usage.metadata,
-            {
-                "event": "appointment_confirmation",
-                "appointment_id": "6c3667b3-9fee-45a9-8976-60b8a9b20032",
-            },
-        )
+        self.assertEqual(usage.chat_message_id, ai_message.id)
+        self.assertEqual(usage.tokens, 50)
 
     def test_agent_client_persists_public_metadata_and_usage(self):
         source = KnowledgeBase.objects.create(

@@ -9,11 +9,8 @@ from django.utils import timezone
 
 from accounts.models import EmailVerificationOTP, User
 from accounts.tasks import send_email_verification_otp
-from notification.models import (
-    Notification,
-    NotificationRecipientType,
-    NotificationType,
-)
+from notification.models import Notification
+from notification.utils.choices import NotificationRecipientType, NotificationType
 
 
 class InvalidVerificationOTP(ValueError):

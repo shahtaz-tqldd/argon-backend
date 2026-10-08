@@ -12,7 +12,7 @@ from chat.utils.choices import ChatMessageSenderType
 from chatbot.models import Chatbot, ChatbotUser
 from chatbot.utils.choices import ChatbotRoleTypes
 from lead_capture.models import Lead, LeadCaptureConfig, LeadNote, LeadSignal
-from lead_capture.services.signals import record_lead_signal, refresh_lead_avg_score
+from lead_capture.services.lead_signal import record_lead_signal, refresh_lead_avg_score
 from lead_capture.utils.choices import LeadCaptureFieldMode
 from workspace.models import Workspace
 

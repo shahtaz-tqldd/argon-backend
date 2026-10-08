@@ -1,6 +1,5 @@
 import asyncio
 import json
-from datetime import datetime, time, timezone
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, Mock, patch
@@ -14,7 +13,7 @@ from pydantic import Field
 from agent.client import AgentClient
 from agent.schema import AppointmentAgentResponseSchema
 from agent.sub_agents.appointment import tools as booking
-from subscription.choices import PlanFeature
+from subscription.utils.choices import PlanFeature
 
 
 class ScriptedModel(BaseLlm):
@@ -293,6 +292,48 @@ class ClientTests(IsolatedAsyncioTestCase):
             "If asked who or what you are, state only the business-facing identity",
             instruction,
         )
+
+    def test_attachment_policy_rendered_when_attachments_present(self):
+        client = AgentClient(
+            self.bot,
+            self.conversation,
+            session_service=self.service,
+            has_attachments=True,
+            attachment_types=["image", "document"],
+        )
+
+        instruction = client.app.plugins[0].global_instruction(None)
+
+        self.assertIn("attachments (image, document)", instruction)
+        self.assertIn("that you cannot open, read, or view", instruction)
+        self.assertIn("Call request_human_escalation", instruction)
+        self.assertIn("a human has been notified", instruction)
+        self.assertIn(
+            "The message text may still contain an answerable question",
+            instruction,
+        )
+
+    def test_attachment_policy_absent_without_attachments(self):
+        instruction = self.client.app.plugins[0].global_instruction(None)
+
+        self.assertNotIn("Attachments:", instruction)
+        self.assertNotIn("that you cannot open, read, or view", instruction)
+
+    def test_attachment_policy_without_handoff_omits_escalation(self):
+        self.bot.human_handoff_enabled = False
+        client = AgentClient(
+            self.bot,
+            self.conversation,
+            session_service=self.service,
+            has_attachments=True,
+            attachment_types=["audio"],
+        )
+
+        instruction = client.app.plugins[0].global_instruction(None)
+
+        self.assertIn("attachments (audio)", instruction)
+        self.assertIn("that you cannot open, read, or view", instruction)
+        self.assertNotIn("request_human_escalation", instruction)
 
     def test_lead_score_tool_and_instruction_hidden_when_feature_disabled(self):
         self.bot.capacity.active_features = []

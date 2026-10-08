@@ -8,7 +8,7 @@ from django.db.migrations.operations.models import RenameModel
 from django.test import SimpleTestCase
 
 from chatbot.models import Chatbot, ChatbotConfig
-from subscription.choices import RenewalMode, SubscriptionStatus
+from subscription.utils.choices import RenewalMode, SubscriptionStatus
 from subscription.models import ChatbotSubscription
 from subscription.services.subscriptions import OPEN_SUBSCRIPTION_STATUSES
 

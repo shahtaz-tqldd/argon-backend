@@ -174,7 +174,6 @@ class LeadAIInsightAdmin(admin.ModelAdmin):
         "topics",
         "frequently_asked_questions",
         "common_intents",
-        "areas_of_improvement",
         "metadata",
         "created_at",
         "updated_at",

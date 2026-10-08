@@ -7,10 +7,6 @@ from django.utils import timezone
 
 from chatbot.models import Chatbot
 from lead_capture.models import LeadAIInsight
-from lead_capture.services.insights import (
-    MESSAGE_EXCERPT_LENGTH,
-    VISITOR_MESSAGE_LIMIT,
-)
 
 
 TOPIC_POOL = (
@@ -32,19 +28,11 @@ QUESTION_POOL = (
 )
 
 INTENT_POOL = (
-    ("pricing", 5),
-    ("demo request", 3),
-    ("integrations", 4),
-    ("support", 2),
-    ("booking", 1),
-)
-
-IMPROVEMENT_POOL = (
-    "Document the Slack setup steps in the knowledge base.",
-    "Add a pricing comparison table to the welcome message.",
-    "Publish rate-limit details per plan in the docs.",
-    "Prepare an onboarding checklist reply for new workspaces.",
-    "Clarify annual billing options earlier in the conversation.",
+    "pricing",
+    "demo request",
+    "integrations",
+    "support",
+    "booking",
 )
 
 SUMMARY_TEMPLATES = (
@@ -163,7 +151,6 @@ class Command(BaseCommand):
         topics = randomizer.sample(TOPIC_POOL, 3)
         questions = randomizer.sample(QUESTION_POOL, 3)
         intents = randomizer.sample(INTENT_POOL, 3)
-        improvements = randomizer.sample(IMPROVEMENT_POOL, 2)
 
         summary = randomizer.choice(SUMMARY_TEMPLATES).format(
             primary=topics[0][0].lower(),
@@ -175,18 +162,8 @@ class Command(BaseCommand):
             "visitor_message_count": visitor_message_count,
             "summary": summary,
             "topics": [
-                {
-                    "topic": name,
-                    "mentions": max(
-                        1,
-                        min(
-                            visitor_message_count // (index + 2),
-                            visitor_message_count,
-                        ),
-                    ),
-                    "note": note,
-                }
-                for index, (name, note) in enumerate(topics)
+                {"topic": name, "note": note}
+                for name, note in topics
             ],
             "frequently_asked_questions": [
                 {
@@ -198,21 +175,16 @@ class Command(BaseCommand):
                 }
                 for question, base in questions
             ],
-            "common_intents": [
-                {
-                    "intent": intent,
-                    "mentions": min(
-                        max(1, base + randomizer.randint(0, 2)),
-                        visitor_message_count,
-                    ),
-                }
-                for intent, base in intents
-            ],
-            "areas_of_improvement": list(improvements),
+            "common_intents": [{"intent": intent} for intent in intents],
             "metadata": {
                 "model": "demo",
-                "analyzed_message_count": visitor_message_count,
-                "message_limit": VISITOR_MESSAGE_LIMIT,
-                "excerpt_length": MESSAGE_EXCERPT_LENGTH,
+                "cost": 0.00096,
+                "token_usage": {
+                    "input_tokens": 1200,
+                    "output_tokens": 240,
+                    "thinking_tokens": 0,
+                    "cached_input_tokens": 0,
+                    "total_tokens": 1440,
+                },
             },
         }

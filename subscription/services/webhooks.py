@@ -7,7 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from coupon.services import record_coupon_redemption_for_payment
-from subscription.choices import (
+from subscription.utils.choices import (
     PaymentProvider,
     PaymentStatus,
     PaymentType,
@@ -28,7 +28,7 @@ from subscription.services.stripe import StripeBillingService
 
 def _apply_subscription_capacity(subscription):
     # Imported lazily to avoid the chatbot/subscription service import cycle.
-    from chatbot.services.capacity import (
+    from chatbot.services.chatbot_config import (
         apply_active_subscription_to_chatbot_capacity,
     )
 

@@ -3,7 +3,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from chatbot.models import Chatbot
-from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
+from workspace.models import Workspace
 
 User = get_user_model()
 
@@ -27,12 +27,6 @@ class AdminWorkspaceAPITests(APITestCase):
             name="Managed Workspace",
             industry="Technology",
             owner=self.owner,
-            created_by=self.owner,
-        )
-        WorkspaceUser.objects.create(
-            workspace=self.workspace,
-            user=self.owner,
-            role=WorkspaceRole.ADMIN,
             created_by=self.owner,
         )
         Chatbot.objects.create(
@@ -83,7 +77,6 @@ class AdminWorkspaceAPITests(APITestCase):
             for item in full_response.data["data"]
             if item["slug"] == self.workspace.slug
         )
-        self.assertEqual(managed_workspace["member_count"], 1)
         self.assertEqual(managed_workspace["chatbot_count"], 1)
 
     def test_superadmin_can_fetch_workspace_details(self):
@@ -98,7 +91,6 @@ class AdminWorkspaceAPITests(APITestCase):
             response.data["data"]["owner"]["email"],
             self.owner.email,
         )
-        self.assertEqual(response.data["data"]["member_count"], 1)
         self.assertEqual(response.data["data"]["chatbot_count"], 1)
 
     def test_superadmin_can_update_workspace(self):

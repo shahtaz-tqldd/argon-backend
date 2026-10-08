@@ -13,8 +13,8 @@ from appointment.models import (
 )
 from appointment.utils.choices import Weekday
 from chatbot.models import Chatbot, ChatbotConfig
-from chatbot.services.capacity import get_chatbot_capacity
-from subscription.choices import PlanFeature
+from chatbot.services.chatbot_config import get_chatbot_capacity
+from subscription.utils.choices import PlanFeature
 
 
 DEFAULT_WEEKDAYS = "mon-fri"
@@ -27,11 +27,11 @@ class Command(BaseCommand):
         "schedule, time slots, and closed dates."
     )
 
-    # python manage.py activate_appointment_booking --chatbot support-bot
-    # python manage.py activate_appointment_booking --chatbot support-bot \
+    # python manage.py create_example_appointment_config --chatbot support-bot
+    # python manage.py create_example_appointment_config --chatbot support-bot \
     #     --weekdays mon-sat --hours "09:00-12:00,13:00-17:00" \
     #     --duration-minutes 45 --advance-days 60 --max-per-day 20
-    # python manage.py activate_appointment_booking --chatbot support-bot \
+    # python manage.py create_example_appointment_config --chatbot support-bot \
     #     --slot sat:10:00-14:00 --slot sun:11:00-13:00 \
     #     --closed-date 2026-10-05="Eid holiday" --force
 

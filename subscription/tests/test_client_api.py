@@ -11,7 +11,7 @@ from rest_framework.test import APITestCase
 from chatbot.models import Chatbot, ChatbotConfig, ChatbotUser
 from chatbot.utils.choices import ChatbotRoleTypes
 from lead_capture.models import LeadCaptureConfig
-from subscription.choices import (
+from subscription.utils.choices import (
     BillingInterval,
     PaymentProvider,
     PlanFeature,
@@ -24,7 +24,7 @@ from subscription.models import (
     PlanPrice,
     SubscriptionPlan,
 )
-from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
+from workspace.models import Workspace
 
 
 class SubscriptionClientAPITests(APITestCase):
@@ -36,13 +36,6 @@ class SubscriptionClientAPITests(APITestCase):
         self.workspace = Workspace.objects.create(
             name="Example Workspace",
             owner=self.user,
-            created_by=self.user,
-            updated_by=self.user,
-        )
-        WorkspaceUser.objects.create(
-            workspace=self.workspace,
-            user=self.user,
-            role=WorkspaceRole.ADMIN,
             created_by=self.user,
             updated_by=self.user,
         )
@@ -710,11 +703,6 @@ class SubscriptionClientAPITests(APITestCase):
         member = get_user_model().objects.create_user(
             email="member@example.com",
             password="strong-password",
-        )
-        WorkspaceUser.objects.create(
-            workspace=self.workspace,
-            user=member,
-            role=WorkspaceRole.MEMBER,
         )
         ChatbotUser.objects.create(
             chatbot=self.chatbot,

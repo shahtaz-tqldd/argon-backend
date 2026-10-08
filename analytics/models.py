@@ -1,8 +1,7 @@
 from django.db import models
 
 from app.core.models import BaseMinModel
-from analytics.choices import AIUsageType
-from analytics.validators import validate_ai_usage_metadata
+from analytics.utils.choices import AIUsageType
 
 
 class AIUsage(BaseMinModel):
@@ -69,11 +68,6 @@ class AIUsage(BaseMinModel):
     thinking_tokens = models.PositiveIntegerField(default=0)
     cached_input_tokens = models.PositiveIntegerField(default=0)
     model = models.CharField(max_length=120, blank=True, default="", db_index=True)
-    metadata = models.JSONField(
-        default=dict,
-        blank=True,
-        validators=[validate_ai_usage_metadata],
-    )
 
     class Meta:
         ordering = ["-created_at"]

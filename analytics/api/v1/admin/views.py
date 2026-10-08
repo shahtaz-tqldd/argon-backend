@@ -14,7 +14,7 @@ from analytics.api.v1.admin.serializers import (
     AIUsageQuerySerializer,
     UserGrowthQuerySerializer,
 )
-from analytics.choices import AIUsageType
+from analytics.utils.choices import AIUsageType
 from analytics.models import AIUsage
 from app.utils.response import APIResponse
 

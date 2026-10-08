@@ -1,13 +1,12 @@
 """Stable Channels group names shared by all realtime publishers."""
 from django.core.exceptions import ValidationError
-from notification.models import NotificationRecipientType
+from notification.utils.choices import NotificationRecipientType
 
 
 def notification_group(recipient_type, target_id=None):
     """
     Return the Channels group for a notification audience.
-
-    Workspace, chatbot, and chat-session subscriptions are membership-aware.
+    chatbot, and chat-session subscriptions are membership-aware.
     """
     try:
         recipient_type = NotificationRecipientType(recipient_type)
@@ -32,10 +31,6 @@ def global_dashboard_group():
 
 def user_dashboard_group(user_id):
     return notification_group(NotificationRecipientType.USER, user_id)
-
-
-def workspace_dashboard_group(workspace_id):
-    return notification_group(NotificationRecipientType.WORKSPACE, workspace_id)
 
 
 def chatbot_dashboard_group(chatbot_id):

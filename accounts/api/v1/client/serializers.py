@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from accounts.choices import AccountProvider, AccountStatus
+from accounts.utils.choices import AccountProvider, AccountStatus
 from accounts.models import UserProfile, phone_regex
 from accounts.services.firebase import (
     FirebaseVerificationError,

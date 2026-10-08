@@ -2,7 +2,7 @@ from rest_framework import serializers
 
 from coupon.api.v1.client.serializers import CouponRedemptionClientSerializer
 from coupon.models import Coupon
-from subscription.choices import BillingInterval, PaymentProvider, PlanFeature
+from subscription.utils.choices import BillingInterval, PaymentProvider, PlanFeature
 from subscription.models import (
     BillingPaymentMethod,
     ChatbotSubscription,

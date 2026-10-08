@@ -6,13 +6,13 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from analytics.choices import AIUsageType
+from analytics.utils.choices import AIUsageType
 from analytics.models import AIUsage
 from chatbot.models import Chatbot, ChatbotUser, ChatbotVisitor
 from chatbot.utils.choices import ChatbotRoleTypes
 from chat.models import ChatMessage, ChatSession
 from chat.utils.choices import ChatMessageSenderType
-from workspace.models import Workspace, WorkspaceRole, WorkspaceUser
+from workspace.models import Workspace
 
 User = get_user_model()
 
@@ -33,12 +33,6 @@ class AdminAnalyticsAPITests(APITestCase):
             owner=self.owner,
             created_by=self.owner,
         )
-        WorkspaceUser.objects.create(
-            workspace=self.workspace,
-            user=self.owner,
-            role=WorkspaceRole.ADMIN,
-            created_by=self.owner,
-        )
         self.chatbot = Chatbot.objects.create(
             workspace=self.workspace,
             chatbot_name="Analytics Bot",
@@ -57,12 +51,6 @@ class AdminAnalyticsAPITests(APITestCase):
         self.other_workspace = Workspace.objects.create(
             name="Other Analytics Workspace",
             owner=other_owner,
-            created_by=other_owner,
-        )
-        WorkspaceUser.objects.create(
-            workspace=self.other_workspace,
-            user=other_owner,
-            role=WorkspaceRole.ADMIN,
             created_by=other_owner,
         )
         self.other_chatbot = Chatbot.objects.create(

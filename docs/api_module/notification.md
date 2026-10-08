@@ -24,13 +24,12 @@ All REST endpoints require an authenticated bearer token.
 - `notify`
 - `new_message`
 - `session_started`
-- `session_ended`
 - `ai_notification`
 - `training_complete`
 
 Global notifications normally use `update`, `maintenance`, or `notify`.
 Chat-session notifications normally use `new_message`, `session_started`,
-`session_ended`, or `ai_notification`. These pairings are conventions rather
+or `ai_notification`. These pairings are conventions rather
 than database constraints, so other valid event types are not rejected.
 
 Workspace and chatbot recipients are foreign keys. Only chat-session references

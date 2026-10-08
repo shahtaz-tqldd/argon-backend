@@ -29,7 +29,7 @@ from subscription.api.v1.client.serializers import (
     SubscriptionPlanClientSerializer,
     SubscriptionPlanQuerySerializer,
 )
-from subscription.choices import PaymentProvider, SubscriptionStatus
+from subscription.utils.choices import PaymentProvider, SubscriptionStatus
 from subscription.models import ChatbotSubscription, Payment, PlanPrice, SubscriptionPlan
 from subscription.services.payment_methods import (
     sync_payment_method,

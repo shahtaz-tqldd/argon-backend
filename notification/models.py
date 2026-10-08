@@ -3,30 +3,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 
 from app.core.models import BaseModel
-
-
-class NotificationRecipientType(models.TextChoices):
-    """The kind of audience a notification is addressed to."""
-
-    GLOBAL = "global", "Global"
-    WORKSPACE = "workspace", "Workspace"
-    CHATBOT = "chatbot", "Chatbot"
-    USER = "user", "User"
-    CHAT_SESSION = "chat_session", "Chat session"
-
-
-class NotificationType(models.TextChoices):
-    """The event represented by a notification."""
-
-    GENERAL = "general", "General"
-    UPDATE = "update", "Update"
-    MAINTENANCE = "maintenance", "Maintenance"
-    NOTIFY = "notify", "Notify"
-    NEW_MESSAGE = "new_message", "New message"
-    SESSION_ENDED = "session_ended", "Session ended"
-    SESSION_STARTED = "session_started", "Session started"
-    AI_NOTIFICATION = "ai_notification", "AI notification"
-    TRAINING_COMPLETE = "training_complete", "Training complete"
+from notification.utils.choices import NotificationRecipientType, NotificationType
 
 
 class Notification(BaseModel):

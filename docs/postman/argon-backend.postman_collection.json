@@ -3778,7 +3778,7 @@
           "name": "List Notifications",
           "request": {
             "method": "GET",
-            "description": "Paginated notifications with optional filters.\n\n**Query**: `recipient_type` (`global|workspace|chatbot|user|chat_session`), `notification_type` or `type` (`general|update|maintenance|notify|new_message|session_ended|session_started|ai_notification|training_complete`), `workspace_id` (uuid), `chatbot_id` (uuid), `unread_only` (`1|true|yes`), `page`, `page_size`.\n\n**200** → `data`: `{id, recipient_type, notification_type, title, message, metadata, workspace_id, chatbot_id, target_id, is_read, read_at, created_at}`; `meta` adds `unread_count`.",
+            "description": "Paginated notifications with optional filters.\n\n**Query**: `recipient_type` (`global|workspace|chatbot|user|chat_session`), `notification_type` or `type` (`general|update|maintenance|notify|new_message|session_started|ai_notification|training_complete`), `workspace_id` (uuid), `chatbot_id` (uuid), `unread_only` (`1|true|yes`), `page`, `page_size`.\n\n**200** → `data`: `{id, recipient_type, notification_type, title, message, metadata, workspace_id, chatbot_id, target_id, is_read, read_at, created_at}`; `meta` adds `unread_count`.",
             "url": {
               "raw": "{{base_url}}/api/v1/notifications/?unread_only=true&page=1&page_size=20",
               "host": [

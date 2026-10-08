@@ -38,7 +38,7 @@ from chat.utils.choices import (
     ChatSessionChannel,
 )
 from lead_capture.models import Lead, LeadCaptureConfig
-from subscription.choices import (
+from subscription.utils.choices import (
     BillingInterval,
     PaymentProvider,
     PlanFeature,
@@ -48,7 +48,7 @@ from subscription.choices import (
 from subscription.models import ChatbotSubscription, PlanPrice, SubscriptionPlan
 from subscription.services.subscriptions import activate_free_subscription
 from workspace.models import Workspace
-from workspace.services import add_workspace_user, ensure_personal_workspace
+from workspace.services import ensure_personal_workspace
 
 User = get_user_model()
 
@@ -64,11 +64,6 @@ class ChatbotClientAPITests(APITestCase):
             password="StrongPass123!",
         )
         self.workspace = ensure_personal_workspace(self.owner)
-        add_workspace_user(
-            workspace=self.workspace,
-            user=self.member,
-            added_by=self.owner,
-        )
         self.chatbot = create_chatbot(
             workspace=self.workspace,
             chatbot_name="Support Bot",
@@ -1360,6 +1355,67 @@ class ChatbotClientAPITests(APITestCase):
             data["never_answer"],
             "Never answer about payment, outside scope and all.",
         )
+
+    def test_chatbot_create_rejects_duplicate_name_in_workspace(self):
+        response = self.client.post(
+            reverse("chatbot-create"),
+            {
+                "workspace": self.workspace.slug,
+                "chatbot_name": self.chatbot.chatbot_name,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("already exists in this workspace", str(response.data))
+        self.assertEqual(
+            Chatbot.objects.filter(
+                workspace=self.workspace,
+                chatbot_name=self.chatbot.chatbot_name,
+            ).count(),
+            1,
+        )
+
+    def test_chatbot_create_rejects_duplicate_name_with_different_case(self):
+        response = self.client.post(
+            reverse("chatbot-create"),
+            {
+                "workspace": self.workspace.slug,
+                "chatbot_name": self.chatbot.chatbot_name.upper(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_chatbot_update_rejects_another_chatbots_name(self):
+        create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Sales Bot",
+            created_by=self.owner,
+        )
+
+        response = self.client.patch(
+            reverse("chatbot-update"),
+            {"chatbot_name": "Sales Bot"},
+            format="json",
+            QUERY_STRING=urlencode({"chatbot": self.chatbot.slug}),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("already exists in this workspace", str(response.data))
+        self.chatbot.refresh_from_db()
+        self.assertEqual(self.chatbot.chatbot_name, "Support Bot")
+
+    def test_chatbot_update_allows_keeping_its_own_name(self):
+        response = self.client.patch(
+            reverse("chatbot-update"),
+            {"chatbot_name": self.chatbot.chatbot_name},
+            format="json",
+            QUERY_STRING=urlencode({"chatbot": self.chatbot.slug}),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     def test_chatbot_list_returns_page_metadata(self):
         create_chatbot(

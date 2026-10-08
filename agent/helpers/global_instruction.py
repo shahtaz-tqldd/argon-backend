@@ -2,12 +2,18 @@
 
 import json
 
-from chatbot.services.capacity import chatbot_has_feature
-from subscription.choices import PlanFeature
+from chatbot.services.chatbot_config import chatbot_has_feature
+from subscription.utils.choices import PlanFeature
 
 
-def global_instruction(chatbot):
-    """Build the single source of truth for identity and business policy."""
+def global_instruction(chatbot, *, has_attachments=False, attachment_types=None):
+    """Build the single source of truth for identity and business policy.
+
+    ``has_attachments`` marks that the visitor's current message carries
+    attachments (with ``attachment_types`` listing their types). The agent
+    cannot open attachments, so the policy tells it to say so, escalate to a
+    human, and still answer any answerable text in the message.
+    """
 
     name = chatbot.chatbot_name.strip()
     business = chatbot.business_name.strip() or "this business"
@@ -72,5 +78,31 @@ def global_instruction(chatbot):
         )
         if chatbot.escalation_rule:
             parts.append(f"Escalation triggers:\n{chatbot.escalation_rule.strip()}")
+
+    if has_attachments:
+        types = ", ".join(
+            attachment_type
+            for attachment_type in dict.fromkeys(attachment_types or [])
+            if attachment_type
+        ) or "unknown type"
+        attachment_parts = [
+            "Attachments:",
+            f"- The visitor's latest message includes attachments ({types}) "
+            "that you cannot open, read, or view.",
+            "- Tell the visitor you cannot access the attachments.",
+        ]
+        if getattr(chatbot, "human_handoff_enabled", True):
+            attachment_parts.extend(
+                [
+                    "- Call request_human_escalation so our customer support "
+                    "reviews the attachments, and tell the visitor a human "
+                    "has been notified — but only after the tool succeeds.",
+                ]
+            )
+        attachment_parts.append(
+            "- The message text may still contain an answerable question: "
+            "answer it normally with your available tools as well."
+        )
+        parts.append("\n".join(attachment_parts))
 
     return "\n".join(parts)

@@ -4,7 +4,7 @@ from io import StringIO
 from django.core.management import call_command
 from django.test import TestCase
 
-from subscription.choices import (
+from subscription.utils.choices import (
     BillingInterval,
     PaymentProvider,
     PlanFeature,
