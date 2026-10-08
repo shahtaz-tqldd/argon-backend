@@ -19,6 +19,7 @@ class CreateSubscriptionPlanCommandTests(TestCase):
             "ai_message_limit": 100,
             "file_size_limit_mb": 10,
             "knowledge_chunk_limit": 25,
+            "team_members_limit": 1,
             "monthly_amount": Decimal("0.00"),
             "annual_amount": None,
             "provider": PaymentProvider.MANUAL,
@@ -33,6 +34,7 @@ class CreateSubscriptionPlanCommandTests(TestCase):
             "ai_message_limit": 1000,
             "file_size_limit_mb": 25,
             "knowledge_chunk_limit": 625,
+            "team_members_limit": 5,
             "monthly_amount": Decimal("59.00"),
             "annual_amount": Decimal("590.00"),
             "provider": PaymentProvider.STRIPE,
@@ -48,6 +50,7 @@ class CreateSubscriptionPlanCommandTests(TestCase):
             "ai_message_limit": 2500,
             "file_size_limit_mb": 50,
             "knowledge_chunk_limit": 1250,
+            "team_members_limit": 10,
             "monthly_amount": Decimal("119.00"),
             "annual_amount": Decimal("1190.00"),
             "provider": PaymentProvider.STRIPE,
@@ -65,6 +68,7 @@ class CreateSubscriptionPlanCommandTests(TestCase):
             "ai_message_limit": 5000,
             "file_size_limit_mb": 100,
             "knowledge_chunk_limit": 2500,
+            "team_members_limit": 15,
             "monthly_amount": Decimal("229.00"),
             "annual_amount": Decimal("2290.00"),
             "provider": PaymentProvider.STRIPE,
@@ -97,6 +101,10 @@ class CreateSubscriptionPlanCommandTests(TestCase):
                 self.assertEqual(
                     plan.knowledge_chunk_limit,
                     expected["knowledge_chunk_limit"],
+                )
+                self.assertEqual(
+                    plan.team_members_limit,
+                    expected["team_members_limit"],
                 )
                 self.assertEqual(plan.features, expected["features"])
                 self.assertEqual(
@@ -137,6 +145,7 @@ class CreateSubscriptionPlanCommandTests(TestCase):
         self.assertIsNone(enterprise.ai_message_limit)
         self.assertIsNone(enterprise.file_size_limit_mb)
         self.assertIsNone(enterprise.knowledge_chunk_limit)
+        self.assertIsNone(enterprise.team_members_limit)
         self.assertTrue(enterprise.requires_sales_contact)
         self.assertFalse(enterprise.ai_message_overage_enabled)
         self.assertEqual(

@@ -18,6 +18,7 @@ class SubscriptionPlanSerializer(serializers.ModelSerializer):
             "ai_message_limit",
             "file_size_limit_mb",
             "knowledge_chunk_limit",
+            "team_members_limit",
             "ai_message_overage_enabled",
             "features",
             "details_html",

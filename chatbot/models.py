@@ -331,6 +331,12 @@ class ChatbotConfig(BaseMinModel):
         return subscription.get_knowledge_chunk_limit() if subscription else None
 
     @property
+    def team_members_limit(self):
+        """Maximum active team members; None means unlimited."""
+        subscription = self.active_subscription()
+        return subscription.get_team_members_limit() if subscription else None
+
+    @property
     def active_features(self):
         """Plan features enabled by the current subscription."""
         subscription = self.active_subscription()
@@ -723,6 +729,46 @@ class ChatbotUser(BaseMinModel):
                     )
                 }
             )
+
+    def _adds_active_team_member(self):
+        if self._state.adding:
+            return True
+        previous = (
+            type(self).objects.filter(pk=self.pk)
+            .values_list("is_active", flat=True)
+            .first()
+        )
+        return previous is not None and not previous and self.is_active
+
+    def _validate_team_members_limit(self):
+        config = ChatbotConfig.objects.filter(chatbot_id=self.chatbot_id).first()
+        if config is None:
+            return
+        limit = config.team_members_limit
+        if limit is None:
+            return
+        current_members = ChatbotUser.objects.filter(
+            chatbot_id=self.chatbot_id,
+            is_active=True,
+        ).count()
+        if current_members >= limit:
+            raise ValidationError(
+                (
+                    f"This chatbot's plan allows at most {limit} team "
+                    f"member{'s' if limit != 1 else ''}."
+                )
+            )
+
+    def save(self, *args, **kwargs):
+        if self._adds_active_team_member():
+            # Serialize member additions per chatbot so concurrent requests
+            # cannot both pass the team size limit check.
+            with transaction.atomic():
+                Chatbot.objects.select_for_update().get(pk=self.chatbot_id)
+                self._validate_team_members_limit()
+                super().save(*args, **kwargs)
+            return
+        super().save(*args, **kwargs)
 
     def effective_permissions(self):
         if not self.is_active:

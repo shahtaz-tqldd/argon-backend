@@ -147,6 +147,7 @@ class ChatbotClientAPITests(APITestCase):
                     "current_knowledge_chunk_count": (
                         capacity.current_knowledge_chunk_count
                     ),
+                    "team_members_limit": capacity.team_members_limit,
                     "active_features": capacity.active_features,
                 },
                 "current_subscription_plan": {

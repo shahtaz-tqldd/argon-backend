@@ -98,7 +98,12 @@ def validate_subscription_snapshot(value):
     if not isinstance(pricing["currency"], str) or len(pricing["currency"]) != 3:
         raise ValidationError({"pricing.currency": "Use a three-letter currency code."})
 
-    for field_name in ("ai_message_limit", "file_size_limit_mb", "knowledge_chunk_limit"):
+    for field_name in (
+        "ai_message_limit",
+        "file_size_limit_mb",
+        "knowledge_chunk_limit",
+        "team_members_limit",
+    ):
         if field_name not in limits:
             raise ValidationError({"limits": f"Missing field: {field_name}."})
         _validate_limit(limits[field_name], f"limits.{field_name}")

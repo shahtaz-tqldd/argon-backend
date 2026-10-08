@@ -83,6 +83,7 @@ class ChatbotConfigTests(SimpleTestCase):
                 "ai_message_limit": 2500,
                 "file_size_limit_mb": 50,
                 "knowledge_chunk_limit": 1250,
+                "team_members_limit": 10,
             },
         }
         with patch.object(ChatbotSubscription.objects, "filter") as query:
@@ -94,6 +95,7 @@ class ChatbotConfigTests(SimpleTestCase):
                 50 * 1024 * 1024,
             )
             self.assertEqual(self.config.knowledge_chunk_limit, 1250)
+            self.assertEqual(self.config.team_members_limit, 10)
             self.assertEqual(
                 self.config.active_features,
                 ["knowledge_base", "lead_capture"],
@@ -114,6 +116,7 @@ class ChatbotConfigTests(SimpleTestCase):
                 "ai_message_limit": None,
                 "file_size_limit_mb": None,
                 "knowledge_chunk_limit": None,
+                "team_members_limit": None,
             },
         }
         with patch.object(ChatbotSubscription.objects, "filter") as query:
@@ -122,6 +125,7 @@ class ChatbotConfigTests(SimpleTestCase):
             self.assertIsNone(self.config.ai_message_limit)
             self.assertIsNone(self.config.file_size_limit_bytes)
             self.assertIsNone(self.config.knowledge_chunk_limit)
+            self.assertIsNone(self.config.team_members_limit)
             self.assertEqual(self.config.active_features, [])
             self.assertFalse(self.config.has_feature("knowledge_base"))
 
@@ -132,6 +136,7 @@ class ChatbotConfigTests(SimpleTestCase):
             self.assertIsNone(self.config.ai_message_limit)
             self.assertIsNone(self.config.file_size_limit_bytes)
             self.assertIsNone(self.config.knowledge_chunk_limit)
+            self.assertIsNone(self.config.team_members_limit)
             self.assertEqual(self.config.active_features, [])
 
     def test_test_ai_message_limit_is_a_fixed_free_allowance(self):

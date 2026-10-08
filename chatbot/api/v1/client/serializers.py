@@ -460,6 +460,9 @@ class ChatbotConfigSerializer(serializers.Serializer):
         read_only=True, allow_null=True,
     )
     current_knowledge_chunk_count = serializers.IntegerField(read_only=True)
+    team_members_limit = serializers.IntegerField(
+        read_only=True, allow_null=True,
+    )
     active_features = serializers.ListField(
         child=serializers.CharField(),
         read_only=True,

@@ -50,6 +50,11 @@ class SubscriptionPlan(BaseModel):
     )
     file_size_limit_mb = models.PositiveIntegerField(null=True, blank=True)
     knowledge_chunk_limit = models.PositiveIntegerField(null=True, blank=True)
+    team_members_limit = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Active team members allowed on one chatbot; null means unlimited.",
+    )
     ai_message_overage_enabled = models.BooleanField(
         default=False,
         help_text="Allow pay-per-use AI messages after the included limit is used.",
@@ -436,6 +441,7 @@ class ChatbotSubscription(BaseModel):
                 "ai_message_limit": ai_message_limit,
                 "file_size_limit_mb": plan.file_size_limit_mb,
                 "knowledge_chunk_limit": plan.knowledge_chunk_limit,
+                "team_members_limit": plan.team_members_limit,
             },
             "overage": {
                 "enabled": overage_enabled,
@@ -534,6 +540,9 @@ class ChatbotSubscription(BaseModel):
 
     def get_knowledge_chunk_limit(self):
         return self._snapshot_section("limits").get("knowledge_chunk_limit")
+
+    def get_team_members_limit(self):
+        return self._snapshot_section("limits").get("team_members_limit")
 
     def is_ai_message_overage_enabled(self):
         return bool(self._snapshot_section("overage").get("enabled", False))

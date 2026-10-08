@@ -1,5 +1,5 @@
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.test import TestCase
 
 from chatbot.models import (
@@ -150,3 +150,109 @@ class ChatbotMembershipTests(TestCase):
                 user=self.outsider,
                 assigned_by=self.owner,
             )
+
+    def _set_team_members_limit(self, chatbot, limit):
+        subscription = ChatbotSubscription.objects.get(
+            chatbot=chatbot,
+            status=SubscriptionStatus.ACTIVE,
+        )
+        snapshot = dict(subscription.snapshot)
+        snapshot["limits"] = {
+            **snapshot["limits"],
+            "team_members_limit": limit,
+        }
+        # Snapshots are immutable from application code; tests adjust the
+        # stored contract directly to exercise different plan limits.
+        ChatbotSubscription.objects.filter(pk=subscription.pk).update(
+            snapshot=snapshot,
+        )
+
+    def test_assignment_blocked_when_team_members_limit_reached(self):
+        chatbot = create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Support Bot",
+            created_by=self.owner,
+        )
+        self._set_team_members_limit(chatbot, 1)
+
+        with self.assertRaises(ValidationError):
+            assign_user_to_chatbot(
+                chatbot=chatbot,
+                user=self.other_member,
+                assigned_by=self.owner,
+            )
+        self.assertFalse(
+            ChatbotUser.objects.filter(
+                chatbot=chatbot,
+                user=self.other_member,
+            ).exists()
+        )
+
+    def test_assignment_allowed_within_team_members_limit(self):
+        chatbot = create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Support Bot",
+            created_by=self.owner,
+        )
+        self._set_team_members_limit(chatbot, 2)
+
+        membership = assign_user_to_chatbot(
+            chatbot=chatbot,
+            user=self.other_member,
+            assigned_by=self.owner,
+        )
+
+        self.assertTrue(membership.is_active)
+        self.assertEqual(
+            ChatbotUser.objects.filter(
+                chatbot=chatbot,
+                is_active=True,
+            ).count(),
+            2,
+        )
+
+    def test_reactivating_member_beyond_limit_is_blocked(self):
+        chatbot = create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Support Bot",
+            created_by=self.owner,
+        )
+        self._set_team_members_limit(chatbot, 2)
+        assign_user_to_chatbot(
+            chatbot=chatbot,
+            user=self.other_member,
+            assigned_by=self.owner,
+        )
+        ChatbotUser.objects.filter(
+            chatbot=chatbot,
+            user=self.other_member,
+        ).update(is_active=False)
+        self._set_team_members_limit(chatbot, 1)
+
+        with self.assertRaises(ValidationError):
+            assign_user_to_chatbot(
+                chatbot=chatbot,
+                user=self.other_member,
+                assigned_by=self.owner,
+            )
+
+    def test_unlimited_team_members_plan_allows_assignment(self):
+        chatbot = create_chatbot(
+            workspace=self.workspace,
+            chatbot_name="Support Bot",
+            created_by=self.owner,
+        )
+        self._set_team_members_limit(chatbot, None)
+        assign_user_to_chatbot(
+            chatbot=chatbot,
+            user=self.member,
+            assigned_by=self.owner,
+        )
+
+        membership = assign_user_to_chatbot(
+            chatbot=chatbot,
+            user=self.other_member,
+            assigned_by=self.owner,
+        )
+
+        self.assertTrue(membership.is_active)
